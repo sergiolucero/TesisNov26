@@ -30,6 +30,7 @@ uncertainty.
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
+| `SCRIPTS/` | Helper and run scripts, including `gh_setup.sh` |
 | `TEX/` | LaTeX formulation and plans |
 | `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |
 | `optimization_plan.md` | Stochastic optimization execution plan |
@@ -66,3 +67,34 @@ instructions.
 4. Run the full stochastic benchmark with out-of-sample reliability/cost
    certificates and CVaR/cleanup-time reporting.
 5. Compile the LaTeX write-up and archive reproducible run manifests.
+
+## Acknowledgements
+
+This project was developed with assistance from the following AI tools.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://gemini.google.com/">
+        <img src="assets/logos/gemini.svg" alt="Google Gemini" width="64" height="64">
+      </a>
+      <br>
+      <a href="https://gemini.google.com/"><strong>Google Gemini</strong></a>
+      <br>
+      Research assistance, code review, and documentation support.
+    </td>
+    <td align="center" width="50%">
+      <a href="https://pi.dev/">
+        <img src="assets/logos/pi.svg" alt="Pi coding agent" width="64" height="64">
+      </a>
+      <br>
+      <a href="https://pi.dev/"><strong>Pi</strong></a>
+      (<a href="https://github.com/earendil-works/pi">source</a>)
+      <br>
+      Implementation, testing, and repository maintenance.
+    </td>
+  </tr>
+</table>
+
+Gemini and Pi are trademarks of their respective owners; their logos are
+used here for identification only.

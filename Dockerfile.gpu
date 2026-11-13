@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# GPU image for the TESIS 1D ADE PINN/FNO sandbox.
+# Build: docker build -f Dockerfile.gpu -t tesis:1d-gpu .
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MPLBACKEND=Agg \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt "flask>=3.0" "pyyaml>=6.0"
+
+COPY . .
+
+RUN useradd -m tesis && chown -R tesis:tesis /app
+USER tesis
+
+VOLUME ["/app/out", "/app/figs"]
+
+ENTRYPOINT ["python", "-u"]
+CMD ["solve_1d_pinn.py", "--config", "runs/best_hardbc.json", "--device", "cuda"]

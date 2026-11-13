@@ -1,0 +1,14 @@
+# Out-of-sample certificate (stage O-6).  Uses the benchmark grid and a large
+# independent test archive; the policy itself is read from policy.json.
+saa:
+  M_train: 40
+  M_test: 500
+
+optim:
+  method: pattern
+  n_starts: 3
+  max_iter: 60
+  max_evals: 1500
+  rho_g: 1.0e6
+  rho_h: 1.0e6
+  chance: cvar

@@ -1,0 +1,13 @@
+# TESIS / Colab dependencies
+#
+# Google Colab normally includes a CUDA-enabled PyTorch build. If it does not,
+# install the wheel recommended by https://pytorch.org/get-started/locally/ for
+# the current Colab CUDA version, then run `pip install -r requirements.txt`.
+
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8
+PyYAML>=6.0
+Flask>=3.0
+
+torch>=2.2

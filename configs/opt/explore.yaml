@@ -1,0 +1,14 @@
+# Coarse-SAA exploration run (stage O-2/O-3): fewer scenarios, pattern
+# search, common random numbers.  Overrides on top of benchmark.yaml.
+saa:
+  M_train: 12
+  M_test: 40
+
+optim:
+  method: pattern
+  n_starts: 2
+  max_iter: 15
+  max_evals: 100
+  rho_g: 1.0e6
+  rho_h: 1.0e6
+  chance: cvar

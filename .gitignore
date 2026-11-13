@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated data and run artifacts
+out/
+figs/
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.pyz
+*.zip
+runs/*.pt
+
+# LaTeX build products (keep .tex sources)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.pdf
+# Keep compiled write-ups readable on GitHub
+!TEX/*.pdf
+
+# Local scratch / duplicated packaging
+Untitled.ipynb
+sessions.txt
+ziprun1/
+
+# Runtime / local files
+*.pid
+*.log
+app.log
+app.pid
+.env
+*.key
+*.pem
+.DS_Store

@@ -1,0 +1,1018 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[round,numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---------------------------------------------------------------- shortcuts
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\pdd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\pddt}[2]{\frac{\partial^{2} #1}{\partial #2^{2}}}
+\newcommand{\erfc}{\operatorname{erfc}}
+\newcommand{\Pe}{\mathrm{Pe}}
+\newcommand{\LL}{\mathcal{L}}
+\newcommand{\RR}{\mathcal{R}}
+\newcommand{\DD}{\mathbf{D}}
+\newcommand{\vv}{\mathbf{v}}
+\newcommand{\xx}{\mathbf{x}}
+\newcommand{\nn}{\mathbf{n}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\intO}{\int_{\Omega}}
+\newcommand{\intG}{\int_{\Gamma_{\mathrm{out}}}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\T}{\mathsf{T}}
+\newcommand{\tabhead}[1]{\textbf{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{From One to Three Dimensions\\[2pt]
+\large A staged plan for groundwater contaminant transport\\
+with PINNs and Fourier neural operators}
+\author{Groundwater Remediation Models}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Phase~1 of the debugging plan established a trusted one-dimensional
+advection--dispersion sandbox: the physics-informed neural network (PINN)
+matches the Ogata--Banks solution to a relative $L^{2}$ error of
+$1.35\times10^{-2}$ on the full grid and $8.0\times10^{-3}$ in the interior,
+with the remaining error confined to the measure-zero inlet corner.  This note
+explains the companion documents \texttt{2D\_plan.md} and
+\texttt{3D\_plan.md}: how the governing equations, reference solutions,
+network architectures, operator-learning strategies, metrics, and compute
+budgets change as the model is extended to two and three spatial dimensions.
+The central principle is gate-driven development: each stage adds one physical
+ingredient, is checked against a closed-form, manufactured, or
+grid-converged reference, and must pass an explicit accuracy threshold before
+the next stage begins.  Two dimensions are required for transverse dispersion,
+well capture, and heterogeneous conductivity; three dimensions are justified
+only by vertical flow, partially penetrating wells, vertical heterogeneity, or
+density effects, and are approached through a 2.5D axisymmetric model first.
+\end{abstract}
+
+\tableofcontents
+
+\section{Context and scope}
+\label{sec:context}
+
+The project evolves in four logical layers:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item a \emph{physical model} of flow and contaminant transport;
+  \item \emph{reference solutions} against which every learned model is judged;
+  \item \emph{learned solvers}: PINNs for a single scenario and Fourier neural
+        operators (FNOs) for a family of scenarios;
+  \item a \emph{verification and acceptance protocol} that prevents a
+        plausible-looking but wrong result from advancing.
+\end{enumerate}
+The one-dimensional Phase~1 sandbox already exercised all four layers in the
+simplest setting.  The 2D and 3D plans keep the same layers and add one new
+physical ingredient at a time.
+
+\paragraph{Lessons carried forward from Phase~1.}
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Non-dimensionalize first.}  The dimensionless ADE keeps the
+        residual and every loss term $\mathcal{O}(1)$.
+  \item \textbf{Report the interior metric.}  The step-inlet problem is
+        discontinuous at $(\xi,\tau)=(0,0)$; the full-grid error is dominated
+        by a measure-zero corner.  Two and three dimensions introduce
+        additional inlet/wall and well singularities, so an interior or
+        singularity-excluded metric must always accompany the full-grid one.
+  \item \textbf{Verify the graph before the physics.}  An extruded 1D test is
+        the cheapest way to prove that a 2D or 3D implementation has not
+        broken the trusted result.
+  \item \textbf{Decouple flow and transport first.}  Freezing the velocity
+        field removes the second derivatives of the head from the transport
+        residual and makes loss balancing tractable.  A monolithic
+        flow--transport PINN is a later experiment.
+  \item \textbf{One gate at a time.}  A stage is ``done'' only when its
+        reference comparison passes a stated threshold; see
+        Sections~\ref{sec:gates}--\ref{sec:3d}.
+\end{itemize}
+
+\paragraph{Relationship of the two plans.}
+The 2D plan is the primary path.  The 3D plan is conditional: it is entered
+only after the corresponding 2D gates pass, and its first stage is a 2.5D
+axisymmetric or vertical-slice model.  If a 2.5D model answers the site
+question, the full 3D model is unnecessary; the justification for using 3D
+must be written down before the first full 3D run.
+
+\section{Mathematical model}
+\label{sec:model}
+
+\subsection{Flow}
+
+For a confined, constant-density aquifer, the steady flow problem is
+\begin{equation}
+\label{eq:flow}
+-\nabla\cdot(K\nabla h)=W,
+\qquad
+\mathbf{q}=-K\nabla h,
+\qquad
+\vv=\frac{\mathbf{q}}{\phi},
+\end{equation}
+where $h$ is hydraulic head, $K$ hydraulic conductivity, $\mathbf{q}$ specific
+discharge, $\phi$ porosity, $\vv$ seepage (pore) velocity, and $W$ a
+source/sink term (extraction negative, injection positive).  In 2D one usually
+works with the transmissivity $T=Kb$, where $b$ is the aquifer thickness; in 3D
+$K$ may be the anisotropic tensor
+\begin{equation}
+\label{eq:Kaniso}
+K=\operatorname{diag}(K_h,K_h,K_v),
+\end{equation}
+with horizontal isotropy and vertical anisotropy ratio $\kappa=K_v/K_h$.
+
+On a Dirichlet boundary $\Gamma_D$, $h=h_D$; on a no-flow boundary
+$\Gamma_N$, $\mathbf{q}\cdot\nn=0$.  A well screened over an interval is
+represented by distributing its rate over the screened cells rather than by a
+point source; this avoids the logarithmic well singularity in the discrete
+problem.
+
+\subsection{Transport}
+
+The conservative advection--dispersion equation (ADE) with linear equilibrium
+sorption and first-order decay is
+\begin{equation}
+\label{eq:ade}
+R\pdd{C}{t}+\nabla\cdot(\vv C)-\nabla\cdot(\DD\nabla C)+\lambda R C=S,
+\end{equation}
+with retardation factor $R=1+\rho_bK_d/\phi$, decay rate $\lambda\ge0$, and
+source/sink $S$.  For constant $\phi$ and a divergence-free velocity field,
+$\nabla\cdot(\vv C)=\vv\cdot\nabla C$.  In two dimensions the dispersion
+tensor is
+\begin{equation}
+\label{eq:D2}
+\DD=\alpha_T\abs{\vv}\mathbf{I}
++(\alpha_L-\alpha_T)\frac{\vv\vv^{\T}}{\abs{\vv}}
++D_m\tau\mathbf{I},
+\end{equation}
+with longitudinal dispersivity $\alpha_L$, transverse dispersivity $\alpha_T$,
+molecular diffusion $D_m$, and tortuosity $\tau$.  In components, with
+$\vv=(v_x,v_y)$,
+\begin{equation}
+\label{eq:D2comp}
+\begin{aligned}
+D_{xx}&=\alpha_L\abs{\vv}\frac{v_x^2}{\abs{\vv}^2}
+       +\alpha_T\abs{\vv}\frac{v_y^2}{\abs{\vv}^2}+D_m\tau,\\
+D_{yy}&=\alpha_L\abs{\vv}\frac{v_y^2}{\abs{\vv}^2}
+       +\alpha_T\abs{\vv}\frac{v_x^2}{\abs{\vv}^2}+D_m\tau,\\
+D_{xy}&=(\alpha_L-\alpha_T)\abs{\vv}\frac{v_xv_y}{\abs{\vv}^2}.
+\end{aligned}
+\end{equation}
+In three dimensions the same construction uses a longitudinal dispersivity
+$\alpha_L$, a horizontal transverse dispersivity $\alpha_{TH}$, and a vertical
+transverse dispersivity $\alpha_{TV}$; the 2D form \eqref{eq:D2} is the
+special case $\alpha_{TH}=\alpha_{TV}=\alpha_T$ \citep{bear1972}.
+
+\subsection{Boundary and initial conditions}
+
+The 1D sandbox used a step inlet and a clean initial aquifer:
+\begin{equation}
+\label{eq:icbc1d}
+C(x,0)=0,\qquad C(0,t)=C_0,\qquad C(L,t)=0.
+\end{equation}
+The 2D and 3D tests keep the same structure but add lateral and vertical
+boundaries:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item inlet $\xi=0$: Dirichlet $C=C_0$ (or a specified source function);
+  \item outlet $\xi=1$: Dirichlet $C=0$ for the semi-infinite verification
+        problems, or a zero-diffusive-flux/advective outflow condition for
+        finite domains;
+  \item lateral and bottom/top boundaries: no-flux,
+        $\DD\nabla C\cdot\nn=0$ (or $\vv\cdot\nn=0$ when advection dominates);
+  \item initial condition: $C(\xx,0)=C_0(\xx)$, usually zero or a source-zone
+        blob.
+\end{itemize}
+For a point source, the source term is
+$S=\dot M\,\delta(\xx-\xx_s)$ in \eqref{eq:ade}, with $\dot M$ the mass release
+rate; for a finite source zone, $S$ is distributed over the zone.
+
+\subsection{Non-dimensionalization}
+
+Introduce
+\begin{equation}
+\label{eq:nondim}
+\xi=\frac{x}{L},\quad \eta=\frac{y}{L},\quad \zeta=\frac{z}{H},\quad
+\tau=\frac{tU}{L},\quad u=\frac{C}{C_0},\quad
+\tilde h=\frac{h}{H_0},\quad \tilde K=\frac{K}{K_0},
+\end{equation}
+and the dimensionless groups
+\begin{equation}
+\label{eq:groups}
+\Pe_L=\frac{UL}{D_L},\qquad
+\Pe_T=\frac{UL}{D_T},\qquad
+\Pe_{TH}=\frac{UL}{D_{TH}},\qquad
+\Pe_{TV}=\frac{UH}{D_{TV}},\qquad
+\kappa=\frac{K_v}{K_h},\qquad
+\varepsilon=\frac{H}{L}.
+\end{equation}
+The transport equation becomes
+\begin{equation}
+\label{eq:adend}
+R\pdd{u}{\tau}+\tilde{\vv}\cdot\nabla_{\xi}u
+-\frac{1}{\Pe_L}\nabla_{\xi}\cdot(\tilde{\DD}\nabla_{\xi}u)
++\tilde\lambda R u=\tilde S,
+\end{equation}
+with $\tilde{\DD}=\DD/D_L$, $\tilde\lambda=\lambda L/U$, and
+$\tilde S=SL/(C_0U)$.  The flow equation becomes
+\begin{equation}
+\label{eq:flownd}
+-\nabla_{\xi}\cdot(\tilde K\nabla_{\xi}\tilde h)=\tilde W,
+\qquad
+\tilde W=\frac{WL^2}{K_0H_0}.
+\end{equation}
+Every quantity in \eqref{eq:adend}--\eqref{eq:flownd} is $\mathcal{O}(1)$,
+which is essential for PINN training at high P\'eclet numbers.
+
+\section{Reference solutions and the verification hierarchy}
+\label{sec:references}
+
+No learned model should be trusted without a reference.  The 2D/3D plans use
+four kinds of references, in increasing order of physical realism.
+
+\subsection{Extruded one-dimensional solution}
+
+For uniform flow $\vv=(U,0)$ (or $(U,0,0)$), an inlet and initial condition
+independent of the transverse coordinates, and no-flux lateral boundaries, the
+exact solution is the Ogata--Banks solution extruded in the transverse
+directions:
+\begin{equation}
+\label{eq:extruded}
+u_{\mathrm{ref}}(\xi,\eta,\zeta,\tau)=u_{\mathrm{OB}}(\xi,\tau)
+=\frac12\left[
+\erfc\!\left(\frac{(\xi-\tau)\sqrt{\Pe_L}}{2\sqrt{\tau}}\right)
++e^{\Pe_L\xi}\erfc\!\left(\frac{(\xi+\tau)\sqrt{\Pe_L}}{2\sqrt{\tau}}\right)
+\right].
+\end{equation}
+This is the first test of any 2D or 3D implementation: if the code cannot
+reproduce \eqref{eq:extruded}, the new dimensions, masks, or autodiff graph are
+wrong.
+
+\subsection{Green's functions for point and line sources}
+
+For a continuous point source in an infinite uniform-flow aquifer, the steady
+two-dimensional solution is
+\begin{equation}
+\label{eq:green2d}
+C_{\mathrm{ss}}(x,y)=\frac{Q}{2\pi b\sqrt{D_LD_T}}
+\exp\!\left(\frac{Ux}{2D_L}\right)
+K_0\!\left(\frac{U}{2D_L}\sqrt{x^2+\frac{D_L}{D_T}y^2}\right),
+\end{equation}
+where $Q$ is the mass release rate, $b$ the aquifer thickness, and $K_0$ the
+modified Bessel function of the second kind.  The transient continuous-source
+solution is the convolution of the instantaneous Green's function:
+\begin{equation}
+\label{eq:green2dt}
+C(x,y,t)=\int_0^t
+\frac{\dot M}{4\pi\phi b s\sqrt{D_LD_T}}
+\exp\!\left[-\frac{(x-Us)^2}{4D_Ls}-\frac{y^2}{4D_Ts}\right]\dd s.
+\end{equation}
+In three dimensions, the steady point-source solution is
+\begin{equation}
+\label{eq:green3d}
+C_{\mathrm{ss}}(x,y,z)=\frac{Q}{4\pi\sqrt{D_LD_TD_V}}
+\exp\!\left(\frac{Ux}{2D_L}\right)\frac{e^{-mR}}{R},
+\end{equation}
+with
+\begin{equation}
+\label{eq:green3dR}
+R=\sqrt{\frac{x^2}{D_L}+\frac{y^2}{D_T}+\frac{z^2}{D_V}},
+\qquad
+m=\frac{U}{2\sqrt{D_L}},
+\end{equation}
+and the transient continuous-source solution is
+\begin{equation}
+\label{eq:green3dt}
+C=\int_0^t
+\frac{\dot M}{\phi(4\pi s)^{3/2}\sqrt{D_LD_TD_V}}
+\exp\!\left[-\frac{(x-Us)^2}{4D_Ls}
+-\frac{y^2}{4D_Ts}-\frac{z^2}{4D_Vs}\right]\dd s.
+\end{equation}
+Equations \eqref{eq:green2d}--\eqref{eq:green3dt} are implemented in
+\texttt{physics/references.py} and \texttt{physics/references3d.py}.  They are
+used for the source/transverse-dispersion stages and for checking plume
+moments and mass balance.
+
+\subsection{Method of images for no-flux boundaries}
+
+For a no-flux wall at $y=0$, add an image source at $-y_s$; for a wall at
+$y=L_y$, add an image at $2L_y-y_s$.  For two parallel walls, the solution is
+an infinite sum of images.  The same construction applies in $z$ for a
+confined aquifer.  In practice, truncate the image series when the contribution
+is below the target tolerance, or use a finite-volume reference solver for the
+bounded domain.  Image solutions are especially useful for testing whether the
+PINN's no-flux condition is actually satisfied.
+
+\subsection{Method of manufactured solutions}
+
+For heterogeneous conductivity, layered media, and arbitrary boundary
+conditions, no simple closed form exists.  The method of manufactured solutions
+(MMS) supplies an exact solution by construction.  Choose a smooth function
+$u^*(\xi,\eta,\tau)$, substitute it into the PDE, and define the source
+\begin{equation}
+\label{eq:mms}
+S^*=R\pdd{u^*}{\tau}+\vv\cdot\nabla u^*
+-\nabla\cdot(\DD\nabla u^*)+\lambda R u^*.
+\end{equation}
+Then $u^*$ is the exact solution of \eqref{eq:ade} with source $S^*$.  Impose
+$u^*$ as the initial and Dirichlet data, and require the learned model to
+recover it.  The same construction verifies the flow solver: choose
+$h^*(x,y,z)$ and $K(x,y,z)$, and set
+\begin{equation}
+\label{eq:mmsflow}
+W^*=-\nabla\cdot(K\nabla h^*).
+\end{equation}
+A useful MMS family is
+\begin{equation}
+\label{eq:mmsfamily}
+u^*(\xi,\eta,\zeta,\tau)=e^{-\gamma\tau}
+\sin(\pi\xi)\sin(\pi\eta)\sin(\pi\zeta),
+\end{equation}
+which vanishes on a box and exercises all second derivatives.  A localized
+Gaussian plume is a better test of a sharp front.
+
+\subsection{Numerical reference and grid convergence}
+
+For random conductivity fields and realistic remediation scenarios, the
+reference is a mass-conservative finite-volume (FV) solver:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item cell-centered FV with two-point flux approximation for Darcy flow and
+        harmonic-mean face conductivities;
+  \item upwind or flux-limited advection, implicit diffusion, and operator
+        splitting or an implicit--explicit time integrator;
+  \item positivity-preserving limiting at high $\Pe_L$;
+  \item wells distributed over screened cells;
+  \item a grid-convergence study on $64^2$, $128^2$, $256^2$ in 2D and
+        $32^3$, $64^3$, $128^3$ in 3D.
+\end{itemize}
+The FV solution is the ground truth for FNO training and for the heterogeneous
+PINN tests.  It must itself pass MMS and mass-balance tests before it is used
+as a reference.
+
+\section{PINN formulation in two and three dimensions}
+\label{sec:pinn}
+
+\subsection{Residual and loss}
+
+The network $u_\theta$ approximates the dimensionless concentration.  The PDE
+residual is
+\begin{equation}
+\label{eq:res}
+\RR_\theta(\xx,\tau)=
+R\pdd{u_\theta}{\tau}+\tilde{\vv}\cdot\nabla u_\theta
+-\frac{1}{\Pe_L}\nabla\cdot(\tilde{\DD}\nabla u_\theta)
++\tilde\lambda R u_\theta-\tilde S,
+\end{equation}
+computed by automatic differentiation.  The composite loss is
+\begin{equation}
+\label{eq:loss}
+\LL(\theta)=\lambda_r\LL_{\mathrm{res}}
++\lambda_b\LL_{\mathrm{bc}}
++\lambda_0\LL_{\mathrm{ic}}
++\lambda_d\LL_{\mathrm{data}}
++\lambda_{\mathrm{div}}\LL_{\mathrm{div}}
++\lambda_{\mathrm{flux}}\LL_{\mathrm{flux}},
+\end{equation}
+with, for example,
+\begin{equation}
+\label{eq:lossres}
+\LL_{\mathrm{res}}=\frac1{N_r}\sum_{i=1}^{N_r}
+\abs{\RR_\theta(\xx_i,\tau_i)}^2,
+\end{equation}
+and analogous mean-squared penalties for the boundary, initial, and data
+mismatches.  For coupled flow--transport, add the flow residual
+$\abs{-\nabla\cdot(K\nabla h_\theta)-W}^2$ and a divergence penalty
+$\abs{\nabla\cdot\vv_\theta}^2$.  All residuals are non-dimensional.
+
+\subsection{Hard constraints on a box}
+
+Soft penalties are easy but can be violated.  A hard ansatz has the form
+\begin{equation}
+\label{eq:hard}
+u_\theta(\xx,\tau)=P(\xx,\tau)+B(\xx,\tau)N_\theta(\xx,\tau),
+\end{equation}
+where the lift $P$ satisfies the Dirichlet data and the mask $B$ vanishes on
+the Dirichlet boundaries and at $\tau=0$.  For the unit square with inlet at
+$\xi=0$, outlet at $\xi=1$, and no-flux walls at $\eta=0,1$, choose
+\begin{equation}
+\label{eq:hard2d}
+s(\tau)=1-e^{-\tau/\varepsilon},\qquad
+P(\xi,\eta,\tau)=(1-\xi)g(\eta,\tau)s(\tau),
+\end{equation}
+\begin{equation}
+\label{eq:hard2dB}
+B(\xi,\eta,\tau)=\xi(1-\xi)\left[1+\gamma\eta^2(1-\eta)^2\right]s(\tau).
+\end{equation}
+Then $u(\xi,\eta,0)=0$ exactly, $u(0,\eta,\tau)=g(\eta,\tau)s(\tau)\to g$
+exponentially fast, $u(1,\eta,\tau)=0$, and
+$\partial B/\partial\eta=0$ at $\eta=0,1$.  The mask respects the no-flux
+walls without forcing $u=0$ there.  The three-dimensional box is the obvious
+product extension:
+\begin{equation}
+\label{eq:hard3dB}
+B=\xi(1-\xi)\left[1+\gamma\eta^2(1-\eta)^2\right]
+\left[1+\gamma\zeta^2(1-\zeta)^2\right]s(\tau).
+\end{equation}
+For a general site geometry, replace the product mask by a signed-distance
+function or an R-function; for flux boundaries, either use a mask with zero
+normal derivative or enforce the flux softly and monitor the boundary residual.
+
+\subsection{Sampling, curriculum, and optimization}
+
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item Sample collocation points with Sobol or Latin-hypercube sequences in
+        $(\xi,\eta,\tau)$ or $(\xi,\eta,\zeta,\tau)$.
+  \item Oversample near the inlet, the source, the plume front, layer
+        interfaces, and wells.
+  \item Use residual-based adaptive refinement (RAR): every $N$ steps, add
+        points where $\abs{\RR_\theta}$ is largest.
+  \item For high $\Pe_L$, use a causal time weighting or train in time
+        windows; a single global time interval often stalls.
+  \item Optimize with Adam first (resampled collocation), then L-BFGS on a
+        fixed set.  Use a P\'eclet-number curriculum: start at a moderate
+        $\Pe_L$, then ramp to the target.
+  \item Log per-term losses, residual percentiles, boundary/initial errors,
+        gradient norms, mass balance, and wall-clock per $10^3$ steps.
+\end{itemize}
+
+\subsection{Decoupled versus monolithic flow--transport}
+
+In the decoupled approach, the flow problem is solved once (analytically or by
+FV), the velocity is evaluated on the transport collocation points, and only
+the transport network is trained.  This is the recommended path for the first
+2D and 3D stages.  In the monolithic approach, a shared trunk produces $h$ and
+$C$, and the loss contains both residuals.  The transport residual then
+contains second derivatives of $h$ through $\vv=-K\nabla h/\phi$ and through
+the dispersion tensor, which makes the graph deeper and the loss balance
+harder.  Attempt the monolithic version only after the decoupled version
+passes its gate.
+
+\subsection{Domain decomposition}
+
+For layered media and large domains, split the domain into subdomains
+(by layer, by vertical column, or by time window) and train one network per
+subdomain with interface conditions:
+\begin{equation}
+\label{eq:interface}
+h^{(1)}=h^{(2)},\qquad
+C^{(1)}=C^{(2)},\qquad
+\mathbf{q}^{(1)}\cdot\nn=\mathbf{q}^{(2)}\cdot\nn,\qquad
+\DD^{(1)}\nabla C^{(1)}\cdot\nn=\DD^{(2)}\nabla C^{(2)}\cdot\nn .
+\end{equation}
+This is the extended PINN (XPINN) idea \citep{jagtap2020xpinn}.  It reduces the
+width needed per network and localizes the difficult interfaces.  In 3D it is
+also a memory strategy: each subdomain network sees a smaller batch.
+
+\section{Fourier neural operator formulation}
+\label{sec:fno}
+
+\subsection{Operator learning}
+
+A PINN learns one solution; an FNO learns the solution operator
+\begin{equation}
+\label{eq:operator}
+\mathcal{G}_\theta:\;a\;\longmapsto\;u,
+\end{equation}
+where $a$ collects the input functions and parameters: conductivity $K$, source
+location and strength, well rates and screens, and boundary data.  The output
+is the concentration field $u(\xx,\tau)$, or a time sequence of fields.  The FNO
+is a composition of a lifting multilayer perceptron (MLP), $L$ Fourier layers,
+and a projection MLP \citep{li2021fno,kovachki2023neural}.
+
+\subsection{Spectral convolution}
+
+A Fourier layer applies a linear operator in frequency space:
+\begin{equation}
+\label{eq:spectral}
+(\mathcal{K}v)(\xx)=\mathcal{F}^{-1}\!\left[
+R\odot\mathcal{F}(v)\right](\xx),
+\end{equation}
+where $R$ is a learnable complex weight tensor truncated to $k_{\max}$ modes in
+each dimension.  In 2D, $R\in\mathbb{C}^{k_x\times k_y\times c_{\mathrm{in}}
+\times c_{\mathrm{out}}}$; in 3D,
+$R\in\mathbb{C}^{k_x\times k_y\times k_z\times c_{\mathrm{in}}\times
+c_{\mathrm{out}}}$.  The parameter count per layer is
+\begin{equation}
+\label{eq:params}
+N_{\mathrm{spec}}=
+\begin{cases}
+k_xk_y\,c_{\mathrm{in}}c_{\mathrm{out}}, & \text{2D},\\[2pt]
+k_xk_yk_z\,c_{\mathrm{in}}c_{\mathrm{out}}, & \text{3D}.
+\end{cases}
+\end{equation}
+For example, $8^3$ modes with 32 channels give $5.2\times10^5$ parameters per
+layer, while $16^3$ modes with 64 channels give $1.7\times10^7$ per layer.
+This is why 3D FNOs start with 8--12 modes and 32 channels, and why factorized
+or low-rank spectral convolutions are useful at $128^3$.
+
+\subsection{Autoregressive rollout and loss}
+
+For long remediation horizons, use a 2D or 3D FNO in space and roll it out in
+time:
+\begin{equation}
+\label{eq:rollout}
+C^{n+1}=\mathcal{G}_\theta(C^n,K,S;\Delta\tau),
+\qquad n=0,\dots,N_t-1,
+\end{equation}
+with the rollout loss
+\begin{equation}
+\label{eq:rollloss}
+\LL_{\mathrm{roll}}=\sum_{n=1}^{N_t}\omega_n
+\norm{C^n-C^n_{\mathrm{ref}}}_2^2
++\lambda_{\mathrm{one}}\norm{C^1-C^1_{\mathrm{ref}}}_2^2 .
+\end{equation}
+The one-step term stabilizes early training; the rollout term controls error
+growth.  Use pushforward or temporal bundling to avoid the optimizer exploiting
+a single-step shortcut.  Always evaluate on a horizon longer than the training
+horizon.
+
+\subsection{Physics-informed FNO}
+
+If data are scarce, add a residual penalty computed on the output grid by
+finite differences or by spectral derivatives:
+\begin{equation}
+\label{eq:fnopde}
+\LL_{\mathrm{pde}}=\sum_{n}\norm{\RR[C^n]}_2^2 .
+\end{equation}
+This is cheaper than autodiff through the FNO and is a useful regularizer.
+It does not replace the reference data for verification.
+
+\section{Metrics and acceptance gates}
+\label{sec:gates}
+
+\subsection{Field errors}
+
+The primary metric is the relative $L^2$ error
+\begin{equation}
+\label{eq:relL2}
+E_{\mathrm{rel}}=\frac{\norm{u_\theta-u_{\mathrm{ref}}}_2}
+{\norm{u_{\mathrm{ref}}}_2},
+\qquad
+\norm{f}_2^2=\frac1{N}\sum_{i=1}^{N}f(\xx_i)^2,
+\end{equation}
+evaluated on a fixed grid independent of the training points.  Always report a
+second, singularity-excluded metric
+\begin{equation}
+\label{eq:relL2int}
+E_{\mathrm{rel}}^{\mathrm{int}}
+=\frac{\norm{u_\theta-u_{\mathrm{ref}}}_{2,\Omega_{\mathrm{int}}}}
+{\norm{u_{\mathrm{ref}}}_{2,\Omega_{\mathrm{int}}}},
+\end{equation}
+where $\Omega_{\mathrm{int}}$ excludes the inlet corner, inlet/wall edges, and
+well neighborhoods.  In 2D and 3D the singular sets are larger than in 1D, so
+this is not optional.
+
+\subsection{Mass balance}
+
+For a conservative model, define
+\begin{equation}
+\label{eq:mass}
+M(t)=\intO\phi R C\dd V,
+\end{equation}
+and the relative balance residual
+\begin{equation}
+\label{eq:massbal}
+\mathcal{B}(t)=
+\frac{\left|M(t)-M(0)-\int_0^t\left[
+\intO S\dd V-\intG\phi\vv\cdot\nn C\dd A
+-\intO\lambda R\phi C\dd V\right]\dd t'\right|}
+{\max\{M(t),M_{\mathrm{ref}}\}}.
+\end{equation}
+A model that fits the field but violates \eqref{eq:massbal} is not a valid
+transport model.  Report $\max_t\mathcal{B}(t)$ and the time-averaged value.
+
+\subsection{Breakthrough, cleanup time, and plume moments}
+
+At a monitoring well $w$, let $C_w(t)$ be the breakthrough curve.  Report
+\begin{equation}
+\label{eq:btc}
+E_{\mathrm{BTC}}=\frac{\norm{C_w-C_{w,\mathrm{ref}}}_2}
+{\norm{C_{w,\mathrm{ref}}}_2},
+\qquad
+t_a=\inf\{t:C_w(t)\ge C_{\mathrm{thr}}\},
+\qquad
+t_c=\inf\{t:C_w(t)\le C_{\mathrm{lim}}\},
+\end{equation}
+where $t_a$ is the arrival time and $t_c$ the cleanup time.  Plume moments are
+\begin{equation}
+\label{eq:moments}
+M_0=\intO\phi R C\dd V,\qquad
+\xx_c=\frac1{M_0}\intO\xx\,\phi R C\dd V,
+\end{equation}
+\begin{equation}
+\label{eq:cov}
+\boldsymbol{\Sigma}=\frac1{M_0}\intO
+(\xx-\xx_c)(\xx-\xx_c)^{\T}\phi R C\dd V .
+\end{equation}
+Compare the total mass, centroid, and covariance (spread) to the reference;
+these catch errors that a pointwise $L^2$ metric can miss.
+
+\subsection{FNO-specific metrics}
+
+For an FNO, report:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item one-step error and the error at $10$, $50$, and $100$ rollout steps;
+  \item error versus horizon (growth rate and stability);
+  \item spectral error (energy in the wrong modes);
+  \item resolution-transfer error: train on a coarse grid, evaluate on a fine
+        grid;
+  \item conservation and positivity violations;
+  \item inference cost and speedup relative to the FV reference.
+\end{enumerate}
+
+\subsection{Gate tables}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+\tabhead{Gate} & \tabhead{Check} & \tabhead{Threshold}\\
+\midrule
+G2.1 & Extruded 1D, interior rel-$L^2$ & $\le 1.5\times10^{-2}$\\
+G2.1 & Wall-normal gradient $\norm{\partial u/\partial\eta}$ & $\le 10^{-3}$\\
+G2.2 & Plume-core rel-$L^2$ & $\le 5\%$\\
+G2.2 & Mass-balance residual & $\le 1\%$\\
+G2.3 & Head / velocity rel-$L^2$ (away from wells) & $\le 10^{-3}$ / $\le 10^{-2}$\\
+G2.4 & FV observed order / PINN MMS / FNO held-out $K$ & $\ge 1.8$ / $\le 2\times10^{-2}$ / $\le 5\%$\\
+G2.5 & Cleanup-time error / FNO rollout / speedup & $\le 10\%$ / $\le 5\%$ / $\ge 100\times$\\
+\bottomrule
+\end{tabularx}
+\caption{Two-dimensional acceptance gates.  A gate is a go/no-go condition,
+not a suggestion.}
+\label{tab:gates2d}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+\tabhead{Gate} & \tabhead{Check} & \tabhead{Threshold}\\
+\midrule
+G3.1 & Extruded 1D/2D, interior rel-$L^2$ & $\le 1.5\times10^{-2}$\\
+G3.1 & $\norm{\partial u/\partial\eta}$, $\norm{\partial u/\partial\zeta}$ & $\le 10^{-3}$\\
+G3.2 & 3D Green's function, plume core & $\le 5\%$\\
+G3.2 & Mass-balance residual & $\le 1\%$\\
+G3.3 & 3D vs axisymmetric head / velocity & $\le 2\%$ / $\le 5\%$\\
+G3.4 & FV observed order / PINN MMS / FNO held-out $K$ & $\ge 1.8$ / $\le 2\times10^{-2}$ / $\le 10\%$\\
+G3.5 & FNO one-step / 100-step rollout & $\le 2\%$ / $\le 10\%$\\
+G3.5 & Resolution transfer / conservation & $\le 15\%$ / $\le 2\%$\\
+G3.6 & Cleanup time / extracted mass / speedup & $\le 10\%$ / $\le 10\%$ / $\ge 100\times$\\
+\bottomrule
+\end{tabularx}
+\caption{Three-dimensional acceptance gates.  G3.3 is the first gate that
+requires a real 3D flow field; everything before it can be checked with
+axisymmetric or extruded references.}
+\label{tab:gates3d}
+\end{table}
+
+\section{Two-dimensional roadmap}
+\label{sec:2d}
+
+The 2D plan is organized so that each stage isolates one new effect.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+\tabhead{Phase} & \tabhead{Work} & \tabhead{Gate}\\
+\midrule
+2D-0 & Refactor into \texttt{physics/}; port config, manifest, checkpoint
+       helpers; add 2D MMS unit tests. & tests pass\\
+2D-1 & Uniform flow, extruded 1D verification. & G2.1\\
+2D-2 & Point/line source, transverse dispersion, anisotropy
+       $\alpha_L/\alpha_T=1,10,100$. & G2.2\\
+2D-3 & Darcy flow, extraction/injection wells; decoupled velocity first. & G2.3\\
+2D-4 & Layered and random log-normal $K$; MMS; FV reference and grid
+       convergence. & G2.4\\
+2D-5 & Pump-and-treat/PRB scenario; FNO2d; rollout; surrogate. & G2.5\\
+2D-6 & Report, figures, update \texttt{Actions.md} and \texttt{HUMAN.md}. & all gates\\
+\bottomrule
+\end{tabularx}
+\caption{Two-dimensional work breakdown.  Do not start 2D-4 before G2.2, and do
+not start 2D-5 before G2.3 and the FV solver are trusted.}
+\label{tab:2d}
+\end{table}
+
+\paragraph{Why this order?}
+Stage 2D-1 proves the implementation.  Stage 2D-2 introduces the first genuinely
+two-dimensional physics (transverse spreading) and has a closed-form reference.
+Stage 2D-3 introduces wells and a spatially varying velocity; decoupling keeps
+the transport graph manageable.  Stage 2D-4 introduces heterogeneity, which
+requires MMS and a numerical reference.  Stage 2D-5 is the application stage,
+where the FNO surrogate becomes useful because many scenarios are needed for
+uncertainty quantification and optimization.
+
+\paragraph{Expected 2D result.}
+For the extruded case, the interior error should be statistically
+indistinguishable from the 1D result, $E_{\mathrm{rel}}^{\mathrm{int}}
+\approx 8\times10^{-3}$.  For the point-source case, the plume-core error
+should be a few percent at $\Pe_L=20$ and degrade gracefully as $\Pe_L$
+increases.  For random $K$, the PINN is expected to be less accurate than the
+FV reference; the FNO is the appropriate tool for many-query problems.
+
+\section{Three-dimensional roadmap}
+\label{sec:3d}
+
+The 3D plan is conditional and starts with the cheapest model that contains
+vertical physics.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+\tabhead{Phase} & \tabhead{Work} & \tabhead{Gate}\\
+\midrule
+3D-0 & 2.5D axisymmetric $(r,z,t)$ and vertical-slice models; shared 3D
+       physics; Thiem/MMS checks. & axisymmetric OK\\
+3D-1 & Extruded 3D verification. & G3.1\\
+3D-2 & 3D Green's functions, steady and transient. & G3.2\\
+3D-3 & 3D Darcy flow, partially penetrating wells; compare to axisymmetric. & G3.3\\
+3D-4 & Layered and random 3D $K$; FV reference; MMS; grid convergence. & G3.4\\
+3D-5 & Autoregressive FNO3d; rollout; resolution transfer. & G3.5\\
+3D-6 & Surrogate-based uncertainty and remediation application. & G3.6\\
+\bottomrule
+\end{tabularx}
+\caption{Three-dimensional work breakdown.  If 3D-0 answers the site question,
+stop there and document why full 3D was not needed.}
+\label{tab:3d}
+\end{table}
+
+\paragraph{The 2.5D bridge.}
+The axisymmetric model uses inputs $(r,z,\tau)$ and the operators
+\begin{equation}
+\label{eq:rz}
+\nabla\cdot\vv=\frac1r\pdd{(rv_r)}{r}+\pdd{v_z}{z},
+\end{equation}
+with a well at $r=r_w>0$.  The residual is weighted by $r$ in the loss to avoid
+the coordinate singularity at $r=0$.  The vertical-slice model uses
+$(x,z,\tau)$ with uniform $y$ and no-flux conditions at $y=0,L_y$.  Both are
+genuine subsets of the 3D equations and much cheaper to train.
+
+\paragraph{When to stop at 2.5D.}
+If the question is a single well in a layered aquifer with radial symmetry,
+the axisymmetric model is exact and the full 3D model adds cost without adding
+information.  Full 3D is justified by lateral heterogeneity, multiple
+non-aligned wells, a non-axisymmetric source, or a site geometry that breaks
+the symmetry.
+
+\paragraph{3D FNO.}
+Start with an autoregressive FNO3d on a $64^3$ grid, 8--12 modes, and 32
+channels.  Use a rollout loss and a held-out set of conductivity fields.  Only
+after G3.5 passes at $64^3$ should the grid be refined to $128^3$; at that
+point use factorized spectral convolutions, mixed precision, gradient
+checkpointing, and possibly multiple GPUs.  Storage is the other bottleneck:
+one $128^3$ float32 snapshot is about \SI{8.4}{\mega\byte}, so a 100-snapshot
+scenario is about \SI{840}{\mega\byte}, and 500 scenarios are about
+\SI{420}{\giga\byte}.  Save every $k$-th step, compress, and use Zarr or HDF5.
+
+\section{Computational scaling}
+\label{sec:compute}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYYYY@{}}
+\toprule
+\tabhead{Model} & \tabhead{Inputs} & \tabhead{Typical points} &
+\tabhead{Hardware} & \tabhead{Wall-clock}\\
+\midrule
+1D PINN & 2 & $1.5\times10^3$ per step & CPU & minutes--hours\\
+2D PINN & 3 & $2\times10^4$--$2\times10^5$ & CPU or 8--16 GB GPU & hours--days\\
+3D PINN & 4 & $2\times10^5$--$10^6$ & 40--80 GB GPU & days--weeks\\
+2D FNO & 2D fields & $128^2$, 500--1000 scenarios & 16--24 GB GPU & 12--48 h\\
+3D FNO & 3D fields & $64^3$, 200--500 scenarios & 24--40 GB GPU & 2--7 days\\
+\bottomrule
+\end{tabularx}
+\caption{Order-of-magnitude compute budget.  The 3D PINN and FNO numbers assume
+chunked residual evaluation, gradient accumulation, and mixed precision where
+possible.}
+\label{tab:compute}
+\end{table}
+
+The dominant cost in a PINN is the second derivative of the network with
+respect to the inputs, evaluated on every collocation point.  The cost scales
+linearly with $N_r$ and with the number of network parameters, and the memory
+scales with the batch size times the graph depth.  Chunking the residual and
+accumulating gradients keeps the memory bounded and is mandatory in 3D.  The
+dominant cost in a 3D FNO is the spectral convolution: the FFT is
+$\mathcal{O}(N^3\log N)$ per channel, and the weight tensor grows as
+$k_xk_yk_zc_{\mathrm{in}}c_{\mathrm{out}}$.  Reducing the number of modes is the
+first lever; reducing the number of channels or factorizing the spectral
+convolution is the second.
+
+\section{Risks and mitigations}
+\label{sec:risks}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}YXX@{}}
+\toprule
+\tabhead{Risk} & \tabhead{Why it happens} & \tabhead{Mitigation}\\
+\midrule
+Inlet/wall corner singularities & Dirichlet inlet meets a no-flux wall &
+report interior metrics; round or exclude the corner; local refinement\\
+No-flux hard constraints are difficult & flux conditions are not point values &
+zero-normal-derivative mask or soft penalty; monitor $\partial u/\partial n$\\
+Coupled flow--transport instability & transport residual contains
+$\nabla^2h$ and $\nabla h$ & decouple first; freeze the velocity; try
+monolithic later\\
+Heterogeneity is high-frequency & FNO truncates modes & more modes; U-NO or
+multi-resolution; local PINN refinement\\
+High-$\Pe$ fronts are under-resolved & sharp gradients & Fourier features;
+causal weighting; time marching; RAR near the front\\
+FV reference is not conservative & naive advection/dispersion & TPFA, upwind,
+implicit diffusion; mass-balance test every run\\
+FNO rollout diverges & autoregressive error growth & pushforward; multi-step
+loss; spectral normalization; conservative correction\\
+3D memory blow-up & autograd on $10^6$ points & chunking; gradient
+accumulation; checkpointing; mixed precision\\
+3D FNO parameter explosion & $k^3c_{\mathrm{in}}c_{\mathrm{out}}$ &
+8--12 modes; 32 channels; factorized or low-rank spectral convolution\\
+Unnecessary 3D & 2.5D would answer the question & written justification before
+3D-3; stop at 3D-0 if possible\\
+\bottomrule
+\end{tabularx}
+\caption{Principal risks and the planned mitigations.  The first and last rows
+are the ones most likely to waste time.}
+\label{tab:risks}
+\end{table}
+
+\section{Deliverables and repository layout}
+\label{sec:deliverables}
+
+The two plans share a common core.  The expected layout is:
+\begin{verbatim}
+TESIS/
+  physics/
+    transport.py       # ADE residual, 2D/3D dispersion tensor
+    flow.py            # Darcy residual, wells, K-field generators
+    references.py      # OB, Green's functions, MMS (2D)
+    references3d.py    # 3D Green's functions, axisymmetric limits, MMS
+    fv2d.py            # 2D finite-volume reference solver
+    fv3d.py            # 3D finite-volume reference solver
+    rz.py              # axisymmetric (r,z) operators
+    metrics.py         # rel-L2, mass balance, BTC, plume moments
+  solve_2d_pinn.py
+  solve_2d_fno.py
+  solve_rz_pinn.py
+  solve_3d_pinn.py
+  solve_3d_fno.py
+  configs/2d/*.yaml
+  configs/3d/*.yaml
+  out/2d/<run_id>/     # config, metrics, model, figures
+  out/3d/<run_id>/
+  data/3d/*.zarr
+  tests/
+    2D_plan.md
+    3D_plan.md
+    2D_results.md
+    3D_results.md
+\end{verbatim}
+The existing \texttt{hydrology.py} and \texttt{solve\_1d\_pinn.py} remain the
+trusted regression baseline.  Every run writes a \texttt{run\_config.json}
+with the effective configuration, git SHA, device, dtype, and seed, following
+the conventions in \texttt{GROWTH.md}.
+
+\section{Summary}
+\label{sec:summary}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYYY@{}}
+\toprule
+\tabhead{Aspect} & \tabhead{1D (done)} & \tabhead{2D (next)} & \tabhead{3D (conditional)}\\
+\midrule
+Physics & ADE, uniform flow & ADE + $D_T$, wells, layered $K$ &
+3D flow, partial penetration, vertical anisotropy\\
+Reference & Ogata--Banks & extruded OB; Green's function; MMS; FV &
+extruded OB; 3D Green's function; 2.5D; MMS; FV\\
+PINN inputs & $(\xi,\tau)$ & $(\xi,\eta,\tau)$ & $(\xi,\eta,\zeta,\tau)$\\
+Hard BC & inlet/outlet/IC & box mask, no-flux walls & 3D box mask, layers\\
+FNO & 1D operator & FNO2d, rollout & FNO3d, factorized, rollout\\
+Main metric & rel-$L^2$ + interior & + mass balance, BTC, cleanup &
++ vertical profiles, layer BTC\\
+Cost & minutes & hours--days & days--weeks\\
+\bottomrule
+\end{tabularx}
+\caption{Summary of the three modelling tiers.  Each tier reuses the previous
+tier's verification discipline.}
+\label{tab:summary}
+\end{table}
+
+The path from one to three dimensions is not a single leap.  It is a sequence
+of small, falsifiable steps:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item prove the 2D/3D implementation on an extruded 1D problem;
+  \item add transverse dispersion and verify against a Green's function;
+  \item add Darcy flow and wells, decoupled first;
+  \item add heterogeneity and verify with MMS and a grid-converged FV solver;
+  \item only then train the operator-learning surrogate;
+  \item enter 3D only after the 2D gates pass, and start with 2.5D.
+\end{enumerate}
+This is slower than jumping to a full 3D coupled model, but it is the only way
+to know \emph{which} ingredient is responsible when the error is large.  The
+1D sandbox already demonstrated the payoff: a $1.35\times10^{-2}$ full-grid
+error that looked like a bug turned out to be a measure-zero corner
+singularity, a diagnosis that was only possible because the reference and the
+interior metric were in place.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem[Bear(1972)]{bear1972}
+J.~Bear.
+\textit{Dynamics of Fluids in Porous Media}.
+American Elsevier, New York, 1972.
+
+\bibitem[Jagtap et~al.(2020)]{jagtap2020xpinn}
+A.~D. Jagtap, E.~Kharazmi, and G.~E. Karniadakis.
+Conservative physics-informed neural networks on discrete domains for
+conservation laws: Applications to forward and inverse problems.
+\textit{Computer Methods in Applied Mechanics and Engineering},
+365:113028, 2020.
+
+\bibitem[Karniadakis et~al.(2021)]{karniadakis2021piml}
+G.~E. Karniadakis, I.~G. Kevrekidis, L.~Lu, P.~Perdikaris, S.~Wang, and L.~Yang.
+Physics-informed machine learning.
+\textit{Nature Reviews Physics}, 3:422--440, 2021.
+
+\bibitem[Kovachki et~al.(2023)]{kovachki2023neural}
+N.~Kovachki, Z.~Li, B.~Liu, K.~Azizzadenesheli, K.~Bhattacharya, A.~Stuart,
+and A.~Anandkumar.
+Neural operator: Learning maps between function spaces with applications to
+PDEs.
+\textit{Journal of Machine Learning Research}, 24(89):1--97, 2023.
+
+\bibitem[Krishnapriyan et~al.(2021)]{krishnapriyan2021failure}
+A.~S. Krishnapriyan, A.~Gholami, S.~Zhe, R.~Kirby, and M.~W. Mahoney.
+Characterizing possible failure modes in physics-informed neural networks.
+\textit{Advances in Neural Information Processing Systems}, 34, 2021.
+
+\bibitem[LeVeque(2002)]{leveque2002finite}
+R.~J. LeVeque.
+\textit{Finite Volume Methods for Hyperbolic Problems}.
+Cambridge University Press, 2002.
+
+\bibitem[Li et~al.(2021)]{li2021fno}
+Z.~Li, N.~Kovachki, K.~Azizzadenesheli, B.~Liu, K.~Bhattacharya, A.~Stuart,
+and A.~Anandkumar.
+Fourier neural operator for parametric partial differential equations.
+\textit{International Conference on Learning Representations (ICLR)}, 2021.
+
+\bibitem[Lu et~al.(2021)]{lu2021deeponet}
+L.~Lu, P.~Jin, G.~Pang, Z.~Zhang, and G.~E. Karniadakis.
+Learning nonlinear operators via DeepONet based on the universal approximation
+theorem of operators.
+\textit{Nature Machine Intelligence}, 3:218--229, 2021.
+
+\bibitem[Ogata and Banks(1961)]{ogata1961solution}
+A.~Ogata and R.~B. Banks.
+\textit{A Solution of the Differential Equation of Longitudinal Dispersion in
+Porous Media}.
+U.S. Geological Survey Professional Paper 411-A, 1961.
+
+\bibitem[Raissi et~al.(2019)]{raissi2019pinn}
+M.~Raissi, P.~Perdikaris, and G.~E. Karniadakis.
+Physics-informed neural networks: A deep learning framework for solving forward
+and inverse problems involving nonlinear partial differential equations.
+\textit{Journal of Computational Physics}, 378:686--707, 2019.
+
+\bibitem[Thiem(1906)]{thiem1906}
+G.~Thiem.
+\textit{Hydrologische Methoden}.
+Gebhardt, Leipzig, 1906.
+
+\bibitem[Wang et~al.(2021)]{wang2021gradient}
+S.~Wang, Y.~Teng, and P.~Perdikaris.
+Understanding and mitigating gradient flow pathologies in physics-informed
+neural networks.
+\textit{SIAM Journal on Scientific Computing}, 43(5):A3055--A3081, 2021.
+
+\bibitem[Zheng and Bennett(2002)]{zheng2002applied}
+C.~Zheng and G.~D. Bennett.
+\textit{Applied Contaminant Transport Modeling}.
+Wiley, New York, 2nd edition, 2002.
+
+\end{thebibliography}
+
+\end{document}

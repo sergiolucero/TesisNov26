@@ -1,0 +1,91 @@
+# Benchmark configuration for the stochastic pump-and-treat optimization.
+# Values follow Appendix D of optimization.tex.  They are illustrative, not
+# site data.  Any change must be recorded in the run manifest.
+
+domain:
+  lx: 200.0        # m
+  ly: 100.0        # m
+  nx: 32           # cells (80 implies dx = 2.5 m)
+  ny: 32
+
+aquifer:
+  k0: 10.0         # m/d geometric mean
+  b: 10.0          # m thickness
+  phi: 0.30
+  R: 1.0
+  alpha_l: 5.0     # m
+  alpha_t: 0.5     # m
+  decay: 0.0       # 1/d
+
+flow:
+  grad: 1.0e-3     # regional hydraulic gradient
+
+random_field:
+  sigma: 0.5       # sigma_G
+  ell_x: 20.0      # m
+  ell_y: 20.0      # m
+  n_kl: 0          # 0 = auto-select the smallest N_KL with target_variance
+  target_variance: 0.95
+  random_source: false
+  random_gradient: false
+
+wells:
+  n: 9
+  method: hex      # hex | cvt
+  q_max: 50.0      # m^3/d per well
+  Q_max: 200.0     # m^3/d plant capacity
+  eps: 1.5         # well regularisation, grid cells
+  plume_threshold: 0.05   # mg/L contour for the design plume
+
+source:
+  x: 30.0
+  y: 50.0
+  q: 10.0          # m^3/d release rate
+  c: 100.0         # mg/L source concentration
+  days: 365.0
+
+compliance:
+  x: [185.0]
+  y: [50.0]
+  creg: 1.0        # mg/L
+  window_start: 0.8
+
+observation:
+  x: [100.0]
+  y: [50.0]
+  h_min: -10.0     # m drawdown limit
+
+time:
+  dt: 36.5         # d
+  nsteps: 100      # T = 3650 d
+
+saa:
+  M_train: 40
+  M_test: 80
+  alpha: 0.05      # 95% reliability
+  alpha_h: 0.01
+
+cost:
+  c_e: 1.0
+  c_w: 1.0
+  c_m: 1.0
+  c_tau: 1.0
+  c_fail: 10.0
+  eps_time: 0.05
+  time_mode: soft
+
+optim:
+  method: pattern  # pattern | slsqp
+  n_starts: 3
+  max_iter: 60
+  max_evals: 1500
+  rho_g: 1000000.0
+  rho_h: 1000000.0
+  chance: cvar    # cvar | exact
+  seed: 0
+
+seed:
+  train: 1000
+  test: 500000
+
+plot: true

@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# CPU image for the TESIS 1D ADE PINN/FNO sandbox.
+# Build: docker build -f Dockerfile.cpu -t tesis:1d-cpu .
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MPLBACKEND=Agg
+
+WORKDIR /app
+
+COPY requirements.txt ./
+
+# Install CPU-only PyTorch first, then the project/runtime dependencies.
+RUN pip install --upgrade pip \
+ && pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2" \
+ && pip install -r requirements.txt "flask>=3.0" "pyyaml>=6.0"
+
+COPY . .
+
+RUN useradd -m tesis && chown -R tesis:tesis /app
+USER tesis
+
+VOLUME ["/app/out", "/app/figs"]
+
+ENTRYPOINT ["python", "-u"]
+CMD ["solve_1d_pinn.py", "--config", "runs/best_hardbc.json"]

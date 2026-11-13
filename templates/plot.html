@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ rel }} — TESIS plot viewer</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --border: #e3e6ea;
+      --text: #1f2430;
+      --muted: #5b6472;
+      --accent: #0f6f9f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    header {
+      background: #10212e;
+      color: #fff;
+      padding: 1.2rem 1.5rem;
+    }
+    header h1 { margin: 0; font-size: 1.1rem; word-break: break-all; }
+    header h1 code { color: #7fdcff; }
+    header p { margin: .2rem 0 0; color: #c9d4dd; font-size: .85rem; }
+    header a { color: #7fdcff; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-bottom: 1rem;
+    }
+    .nav { display: flex; gap: .5rem; }
+    .nav a, .nav span {
+      padding: .45rem .85rem;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      text-decoration: none;
+      color: var(--accent);
+      font-size: .9rem;
+    }
+    .nav span { color: var(--muted); background: transparent; }
+    .counter { color: var(--muted); font-size: .9rem; }
+    .figure {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .figure img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+    }
+    .meta { margin-top: .8rem; font-size: .85rem; color: var(--muted); }
+    .meta a { color: var(--accent); }
+    kbd {
+      background: #eef1f4;
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 0 .3rem;
+      font-size: .8rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><code>out/{{ rel }}</code></h1>
+    <p><a href="{{ url_for('plots') }}">← All plots</a>
+       &nbsp;·&nbsp; <a href="{{ url_for('index') }}">Homepage</a></p>
+  </header>
+
+  <div class="wrap">
+    <div class="toolbar">
+      <div class="nav">
+        {% if prev %}
+        <a href="{{ url_for('plot_view', relpath=prev) }}"
+           title="{{ prev }}">← Previous</a>
+        {% else %}
+        <span>← Previous</span>
+        {% endif %}
+        {% if next %}
+        <a href="{{ url_for('plot_view', relpath=next) }}"
+           title="{{ next }}">Next →</a>
+        {% else %}
+        <span>Next →</span>
+        {% endif %}
+      </div>
+      <div class="counter">Plot {{ index }} of {{ total }}</div>
+    </div>
+
+    <div class="figure">
+      <img src="{{ src }}" alt="{{ rel }}">
+      <div class="meta">
+        <a href="{{ src }}" target="_blank" rel="noopener">Open raw file</a>
+        &nbsp;·&nbsp; navigate with <kbd>←</kbd> <kbd>→</kbd>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const prev = {{ (url_for('plot_view', relpath=prev) if prev else None)|tojson }};
+      const next = {{ (url_for('plot_view', relpath=next) if next else None)|tojson }};
+      if (event.key === "ArrowLeft" && prev) window.location.href = prev;
+      if (event.key === "ArrowRight" && next) window.location.href = next;
+    });
+  </script>
+</body>
+</html>

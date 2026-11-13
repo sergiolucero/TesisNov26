@@ -1,0 +1,1727 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\numberwithin{equation}{section}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage[round,numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---------------------------------------------------------------- shortcuts
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\pdd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\pddt}[2]{\frac{\partial^{2} #1}{\partial #2^{2}}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\xx}{\mathbf{x}}
+\newcommand{\qq}{\mathbf{q}}
+\newcommand{\ww}{\mathbf{w}}
+\newcommand{\vv}{\mathbf{v}}
+\newcommand{\DD}{\mathbf{D}}
+\newcommand{\T}{\mathsf{T}}
+\newcommand{\CVaR}{\operatorname{CVaR}}
+\newcommand{\VaR}{\operatorname{VaR}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\me}{\mathrm{e}}
+\newcommand{\Proj}{\operatorname{Proj}}
+\newcommand{\tabhead}[1]{\textbf{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+\newtheorem{assumption}{Assumption}
+
+\title{Algorithms for the Stochastic Pump-and-Treat Remediation Problem\\[2pt]
+\large Sample-average approximation, Rockafellar--Wets progressive hedging,
+stochastic gradients, decomposition, and surrogate methods}
+\author{Groundwater Remediation Models}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document surveys and compares algorithms for the PDE-constrained,
+chance-constrained stochastic optimization problem formulated in
+\texttt{optimization.tex}.  The decision is a here-and-now vector of extraction
+rates; the uncertainty is a random conductivity field and, optionally, random
+source, boundary, and transport parameters; the objective is an expected
+life-cycle cost; and the constraints include probabilistic compliance and
+drawdown requirements.  We describe the sample-average approximation (SAA)
+baseline, the Rockafellar--Wets progressive hedging algorithm (PHA) and its
+use with chance constraints, the L-shaped/Benders family, stochastic-gradient
+and stochastic-approximation methods, derivative-free and global search,
+surrogate and reduced-order optimization, and chance-constraint-specific
+reformulations.  The emphasis is on \emph{which algorithm to use when}, on the
+information each method requires (gradients, scenario decomposability,
+parallelism), and on the verification checks that keep a stochastic
+optimization run honest.  A hybrid roadmap is given at the end: coarse
+derivative-free exploration, adjoint-based SAA refinement, PHA or a surrogate
+for large scenario sets, and an independent out-of-sample certificate.
+\end{abstract}
+
+\tableofcontents
+
+% ======================================================================
+\section{Purpose and scope}
+\label{sec:purpose}
+
+The forward-model chain (one-, two-, and three-dimensional flow and transport,
+the Ogata--Banks reference, and the Fourier neural operator) is documented in
+\texttt{formulation.tex}, \texttt{2D\_plan.md}, \texttt{3D\_plan.md}, and
+\texttt{optimization.tex}.  This document is the algorithm layer: it assumes
+that a trustworthy scenario generator and a forward map
+$(\mathbf{h},\mathbf{C})=\mathcal{S}(\qq,\omega)$ exist, and it asks how to
+solve the resulting stochastic program.
+
+The problem has four features that determine the algorithm choice:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{PDE constraints.}  Every objective and constraint evaluation
+        requires a flow and transport solve.  The state is high-dimensional,
+        but the decision $\qq$ is low- or moderate-dimensional
+        ($N_q=N_wN_p$, typically $10$--$100$).
+  \item \textbf{Random fields.}  The conductivity is a log-normal random field
+        with a Karhunen--Lo\`eve expansion.  The scenario space is high-
+        dimensional, but the cost and constraints depend on it through a
+        relatively small number of decision-relevant functionals.
+  \item \textbf{Chance constraints.}  The compliance and drawdown
+        requirements are probabilistic.  Their empirical counterparts are
+        step functions of $\qq$, hence nonsmooth and nonconvex.
+  \item \textbf{Expensive scenarios.}  A single high-fidelity scenario solve
+        can take seconds to minutes; the final reliability certificate may
+        need thousands of scenarios.  Parallelism over scenarios is available
+        and should be exploited.
+\end{enumerate}
+
+The algorithms below differ mainly in how they handle these four features.
+No single method is best for all regimes; the practical answer is a hybrid,
+with each stage chosen to match the information and budget available.
+
+% ======================================================================
+\section{The stochastic program in compact form}
+\label{sec:problem}
+
+\subsection{Random inputs and scenarios}
+
+Let $(\Omega,\mathcal{F},\Prob)$ be a probability space and let
+$\omega\in\Omega$ index a scenario.  The baseline random field is
+\begin{equation}
+\label{eq:lognormal}
+K(\xx,\omega)=K_0\exp\bigl(G(\xx,\omega)\bigr),
+\qquad
+G(\xx,\omega)=\sum_{j=1}^{N_{KL}}\sqrt{\lambda_j}\,\phi_j(\xx)\,\xi_j(\omega),
+\end{equation}
+with $\xi_j\sim\mathcal{N}(0,1)$ i.i.d., and $(\lambda_j,\phi_j)$ the
+eigenpairs of the covariance operator.  The truncation $N_{KL}$ is chosen to
+retain $95$--$99\%$ of the variance.  Optional random inputs (porosity, source
+strength and location, boundary head, inlet concentration, dispersivities) are
+appended to $\omega$ in the same way.  A scenario is the vector of all random
+variables needed to run one forward solve; it is stored as coefficients, not
+only as a realized field.
+
+\subsection{Decision variables and feasible set}
+
+For a steady policy the decision is
+\begin{equation}
+\label{eq:qsteady}
+\qq=(q_1,\dots,q_{N_w})\in\R^{N_w},
+\qquad q_i\ge 0,
+\end{equation}
+and for a pumping schedule it is
+\begin{equation}
+\label{eq:qpiecewise}
+\qq=(q_{ik})_{i=1,\dots,N_w}^{k=1,\dots,N_p}\in\R^{N_wN_p},
+\end{equation}
+with $q_i(t)=\sum_k q_{ik}\ind_{[t_{k-1},t_k)}(t)$.  The admissible set is the
+convex polytope
+\begin{equation}
+\label{eq:Qad}
+\mathcal{Q}_{\mathrm{ad}}
+=\left\{\qq:\
+\begin{aligned}
+&0\le q_{ik}\le q_i^{\max},\\
+&\sum_{i=1}^{N_w}q_{ik}\le Q_{\max}, && k=1,\dots,N_p,\\
+&\sum_{i=1}^{N_w}\sum_{k=1}^{N_p}q_{ik}\Delta t_k\le V_{\max},
+\end{aligned}
+\right\}.
+\end{equation}
+The difficulty is not the rate bounds; it is the PDE state map and the
+probability constraints.  We write $N_q=N_wN_p$ for the number of decision
+variables.
+
+\subsection{Cost, violations, and the full program}
+
+For a scenario $\omega$ and a policy $\qq$, over a horizon of $T$ years the
+objective is the sum of pumping costs and terminal remediation penalties:
+\begin{equation}
+\label{eq:cost}
+J(\qq,\omega)=
+\underbrace{\sum_{i=1}^{N_w}\sum_{k=1}^{N_p}
+\bigl(c_e+c_w\,C(\xx_i,t_k;\qq,\omega)\bigr)q_{ik}\Delta t_k}
+_{\text{pumping and treatment cost}}
++
+\underbrace{c_m\int_\Omega\phi\,C(\xx,T;\qq,\omega)\dd\xx
++c_\tau\min(\tau_c,T)
++c_{\mathrm{fail}}\ind\{\tau_c>T\}}
+_{\text{remediation penalty after }T}.
+\end{equation}
+Here $c_e$ is the energy cost per unit pumped volume, $c_w$ the treatment cost
+per unit extracted concentration, $c_m$ the terminal residual-mass penalty,
+$c_\tau$ the cleanup-time penalty, and $c_{\mathrm{fail}}$ the penalty for
+missing the cleanup target.  The compliance and drawdown violations are
+\begin{align}
+G(\qq,\omega)
+&=\max_{\xx_c\in\mathcal{M}_c}\ \max_{t\in[T_c,T]}
+\bigl(C(\xx_c,t;\qq,\omega)-C_{\mathrm{reg}}\bigr),
+\label{eq:G}\\
+H(\qq,\omega)
+&=\min_{\xx_o\in\mathcal{O}_h}\ \min_{t\in(0,T]}
+\bigl(h(\xx_o,t;\qq,\omega)-h_{\min}(\xx_o)\bigr),
+\label{eq:H}
+\end{align}
+so $G\le0$ means compliance and $H\ge0$ means acceptable drawdown.  The full
+stochastic program is
+\begin{equation}
+\label{eq:stochprogram}
+\boxed{
+\begin{aligned}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\quad
+& \E\bigl[J(\qq,\omega)\bigr]\\
+\text{s.t.}\quad
+& \Prob\bigl(G(\qq,\omega)\le0\bigr)\ge1-\alpha,\\
+& \Prob\bigl(H(\qq,\omega)\ge0\bigr)\ge1-\alpha_h,\\
+& (\mathbf{h},\mathbf{C})(\cdot,\cdot;\qq,\omega)
+  =\mathcal{S}(\qq,\omega)
+  \quad\text{a.s. }\omega\in\Omega.
+\end{aligned}}
+\end{equation}
+The decision is here-and-now: it is chosen before $\omega$ is observed and is
+not adapted to the realized conductivity field.
+
+\subsection{Sample-average approximation}
+
+Draw $M$ independent scenarios $\omega^1,\dots,\omega^M$.  The SAA program is
+\begin{equation}
+\label{eq:saa}
+\begin{aligned}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\quad
+& J_M(\qq)=\frac{1}{M}\sum_{m=1}^{M}J(\qq,\omega^m)\\
+\text{s.t.}\quad
+& \frac{1}{M}\sum_{m=1}^{M}\ind\{G(\qq,\omega^m)\le0\}\ge1-\alpha,\\
+& \frac{1}{M}\sum_{m=1}^{M}\ind\{H(\qq,\omega^m)\ge0\}\ge1-\alpha_h.
+\end{aligned}
+\end{equation}
+The empirical probabilities are step functions, so \eqref{eq:saa} is a
+nonsmooth, nonconvex program.  Three tractable reformulations are used below:
+the exact mixed-integer form, the CVaR surrogate, and the sigmoid smoothing.
+The SAA is not the only possible approximation (scenario reduction,
+importance sampling, and multilevel Monte Carlo also apply), but it is the
+reference because it separates the statistical error from the optimization
+error and supports out-of-sample validation.
+
+\subsection{Structural properties that drive the algorithm choice}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lY@{}}
+\toprule
+\tabhead{Property} & \tabhead{Consequence for algorithms}\\
+\midrule
+$N_q=N_wN_p\approx10$--$100$ & Reduced-space methods (adjoint, derivative-free,
+surrogate) are natural; full-space Newton methods are possible but larger.\\
+$M\approx10^2$--$10^4$ scenarios & Scenario decomposition and parallel evaluation
+matter; deterministic-equivalent NLP is practical only for moderate $M$.\\
+PDE state is high-dimensional & Adjoint gradients cost about one forward solve;
+automatic differentiation through the solver is an alternative.\\
+Cost is smooth in $\qq$ (if the indicator is removed) & L-BFGS-B, SQP, trust
+region, and stochastic gradient apply.\\
+Chance constraint is nonsmooth & Use MINLP, CVaR, sigmoid smoothing, or
+derivative-free search; do not feed a raw indicator to a gradient method.\\
+Objective and PDE are scenario-separable & PHA, dual decomposition, and
+scenario-parallel SAA apply.\\
+Chance constraint couples scenarios & Needs a dual/penalty layer, CVaR with an
+auxiliary variable, or a global (non-decomposed) solve.\\
+Forward solve is expensive & Surrogate, multi-fidelity, Bayesian optimization,
+and active learning become attractive.\\
+\bottomrule
+\end{tabularx}
+\caption{Structural properties of the remediation problem and their algorithmic
+consequences.}
+\label{tab:structure}
+\end{table}
+
+% ======================================================================
+\section{Algorithm selection criteria}
+\label{sec:selection}
+
+Table~\ref{tab:methods} is the one-page summary.  The columns are the
+information the method needs, the structure it exploits, and the regime in
+which it is the recommended choice.
+
+\begin{table}[htbp]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.9cm}cccc>{\raggedright\arraybackslash}X@{}}
+\toprule
+\tabhead{Method} & \tabhead{Grad.} & \tabhead{Decomp.} &
+\tabhead{Chance} & \tabhead{Par.} & \tabhead{Use / caveat}\\
+\midrule
+SAA + adjoint + L-BFGS-B/SQP & exact & no & CVaR/sigmoid & evals & Baseline for
+smooth $N_q\lesssim100$, moderate $M$; local.\\
+Rockafellar--Wets PHA & subproblem & yes & CVaR/Lagrangian & strong & Large
+$M$, separable subproblems; convex guarantee, heuristic otherwise.\\
+L-shaped / Benders & cuts & master--sub & limited & yes & Linear/quadratic
+recourse; generalized Benders for smooth nonlinear.\\
+Stochastic gradient / Adam & stochastic & mini-batch & sigmoid/CVaR & strong &
+Many scenarios, online; noisy, step-size tuning.\\
+Pattern search / MADS & none & no & exact empirical & yes & Small $N_q$,
+nonsmooth; local.\\
+CMA-ES / differential evolution & none & no & exact empirical & yes & Small
+$N_q$, rugged; expensive, no guarantee.\\
+Bayesian optimization & none & no & constrained EI & no & Very expensive FV,
+$N_q\lesssim10$; hard for many constraints.\\
+FNO/POD surrogate + trust region & surrogate & yes & smooth & training &
+Many scenarios; surrogate bias must be validated.\\
+Robust / DRO & subgradient & no & robust & limited & Distribution shift;
+conservative; needs an ambiguity set.\\
+\bottomrule
+\end{tabularx}
+\caption{Outer optimization methods for the stochastic remediation problem.}
+\label{tab:methods}
+\end{table}
+
+The rest of the document discusses each family in more detail.  Section~\ref{sec:saa-nlp}
+covers the SAA/NLP baseline, Section~\ref{sec:pha} the Rockafellar--Wets PHA,
+Section~\ref{sec:decomp} other decompositions, Section~\ref{sec:sg} stochastic
+gradients, Section~\ref{sec:df} derivative-free methods, Section~\ref{sec:surrogate}
+surrogates, and Section~\ref{sec:chance} chance-constraint-specific algorithms.
+Section~\ref{sec:hybrid} gives the recommended hybrid.
+
+% ======================================================================
+\section{Sample-average approximation with a deterministic NLP solver}
+\label{sec:saa-nlp}
+
+\subsection{Reduced-space formulation}
+
+For a fixed scenario $\omega^m$, let $J_m(\qq)=J(\qq,\omega^m)$ and
+$G_m(\qq)=G(\qq,\omega^m)$.  After choosing a smooth reformulation of the
+chance constraint, the SAA problem has the form
+\begin{equation}
+\label{eq:saa-nlp}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\quad
+J_M(\qq)=\frac{1}{M}\sum_{m=1}^{M}J_m(\qq)
+\quad\text{s.t.}\quad
+c_M(\qq)\le0,
+\end{equation}
+where $c_M$ is, for example, the CVaR constraint
+\begin{equation}
+\label{eq:cvar-constraint}
+c_M(\qq)=\min_{\eta\in\R}\left\{
+\eta+\frac{1}{\alpha M}\sum_{m=1}^{M}
+\bigl(G_m(\qq)-\eta\bigr)_+
+\right\}\le0,
+\end{equation}
+or the sigmoid constraint
+\begin{equation}
+\label{eq:sigmoid-constraint}
+c_M(\qq)=1-\alpha-\frac{1}{M}\sum_{m=1}^{M}
+\sigma\!\left(-\frac{G_m(\qq)}{\varepsilon_s}\right)\le0,
+\qquad
+\sigma(z)=\frac{1}{1+\me^{-z}}.
+\end{equation}
+The decision dimension is only $N_q$, so a reduced-space NLP solver is the
+natural baseline.  The state variables are eliminated by the forward solve;
+the solver sees only $\qq$ and the aggregated cost and constraint.
+
+\subsection{Adjoint gradients}
+
+For a smooth cost $J_m$ and no chance constraint, the reduced gradient is
+computed by the discrete adjoint.  Write the discretized transport residual as
+$\mathbf{F}_h(\mathbf{C}_h,\qq)=0$, form the Lagrangian
+\begin{equation}
+\label{eq:discreteL}
+\mathcal{L}_h(\mathbf{C}_h,\qq,\bm{\psi}_h)
+=J_h(\mathbf{C}_h,\qq)
+-\bm{\psi}_h^{\T}\mathbf{F}_h(\mathbf{C}_h,\qq),
+\end{equation}
+and solve
+\begin{equation}
+\label{eq:discreteadj}
+\left(\frac{\partial\mathbf{F}_h}{\partial\mathbf{C}_h}\right)^{\T}
+\bm{\psi}_h
+=\left(\frac{\partial J_h}{\partial\mathbf{C}_h}\right)^{\T},
+\qquad
+\frac{\dd J_h}{\dd\qq}
+=\frac{\partial J_h}{\partial\qq}
+-\left(\frac{\partial\mathbf{F}_h}{\partial\qq}\right)^{\T}
+\bm{\psi}_h.
+\end{equation}
+The adjoint system is linear, has the sparsity of the linearized transport
+operator, and is solved backward in time.  Its cost is comparable to one
+forward solve and is independent of $N_q$.  This is why the adjoint is the
+recommended gradient for $N_w\gg1$.
+
+For the CVaR constraint \eqref{eq:cvar-constraint}, the gradient with respect
+to $\qq$ is
+\begin{equation}
+\label{eq:cvar-grad}
+\nabla_{\qq} c_M(\qq)
+=\frac{1}{\alpha M}\sum_{m\in\mathcal{A}(\qq)}
+\nabla_{\qq}G_m(\qq),
+\end{equation}
+where $\mathcal{A}(\qq)=\{m:G_m(\qq)>\eta^\star(\qq)\}$ is the active tail
+set and $\eta^\star$ is a minimizer in \eqref{eq:cvar-constraint}.  The
+gradient of $G_m$ is again obtained by an adjoint of the transport equation
+with the max-over-monitoring-points and max-over-time resolved (or smoothed).
+For the sigmoid constraint,
+\begin{equation}
+\label{eq:sigmoid-grad}
+\nabla_{\qq} c_M(\qq)
+=\frac{1}{M\varepsilon_s}\sum_{m=1}^{M}
+\sigma\!\left(-\frac{G_m}{\varepsilon_s}\right)
+\left[1-\sigma\!\left(-\frac{G_m}{\varepsilon_s}\right)\right]
+\nabla_{\qq}G_m(\qq).
+\end{equation}
+Small $\varepsilon_s$ makes the sigmoid close to the indicator but also makes
+the gradient small when all scenarios are far from the boundary.  Use a
+continuation: start with $\varepsilon_s=10^{-1}$, then $10^{-2}$, then
+$10^{-3}$, warm-starting each stage.
+
+\subsection{Solvers and constraint handling}
+
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{L-BFGS-B} for box constraints and a smooth penalized objective.
+        It is the simplest baseline and scales well to $N_q\approx100$.
+        Penalize the chance constraint with an augmented Lagrangian or a
+        quadratic penalty and increase the penalty if the constraint is
+        violated at the candidate solution.
+  \item \textbf{SQP or interior-point} for the NLP \eqref{eq:saa-nlp} when
+        accurate constraint gradients are available and $N_q$ is small
+        (tens).  These methods handle the CVaR epigraph variable $\eta$ and
+        the smooth sigmoid constraint directly.
+  \item \textbf{Trust-region} methods when the objective is noisy (finite-
+        difference gradients, surrogate, or Monte Carlo).  The trust region
+        limits the step to the region where the model is reliable.
+  \item \textbf{Multi-start} from a space-filling design (Latin hypercube or
+        Sobol) because the SAA problem is nonconvex.  Keep the best few
+        candidates and refine them.
+\end{itemize}
+
+\subsection{Algorithm}
+
+\begin{algorithm}[htbp]
+\caption{SAA with adjoint gradients and a smooth chance constraint}
+\label{alg:saa}
+\begin{algorithmic}[1]
+\Require scenario archive $\{\omega^m\}_{m=1}^{M}$, test archive, initial
+         $\qq^0$, smoothing schedule $\varepsilon_s$, tolerances
+\Ensure candidate policy $\qq^\star$, SAA objective, constraint value
+\State Generate and store the training and test archives with independent
+       seeds; record $N_{KL}$ and all random coefficients
+\State Precompute unit-rate flow responses and store the well operators
+\For{each $\varepsilon_s$ in the continuation schedule}
+  \State Warm-start from the previous stage (or $\qq^0$ for the first stage)
+  \Repeat
+    \State For each scenario $m$, solve the forward PDE at $\qq$ and compute
+           $J_m$, $G_m$, $H_m$
+    \State Compute $\nabla J_M$ and $\nabla c_M$ by the discrete adjoint
+           (or by automatic differentiation through the solver)
+    \State Take an L-BFGS-B/SQP step on the augmented Lagrangian
+           $J_M+\rho\,[c_M]_+^2$ (or on the CVaR epigraph)
+    \State Update the penalty $\rho$ if the constraint violation did not
+           decrease
+  \Until{stationarity and constraint tolerance are met}
+\EndFor
+\State Evaluate $\qq^\star$ on the test archive; report
+       $\hat J_{\mathrm{test}}$, $\hat p_{\mathrm{test}}$,
+       $\widehat{\CVaR}_{\mathrm{test}}$
+\State Repeat with $K$ independent SAA replications; report the best
+       candidate and the spread
+\State \Return $\qq^\star$ and the out-of-sample certificate
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Strengths.}  Exact gradients, mature solvers, good local convergence,
+and a clear path to a reliability certificate.  This is the baseline against
+which every other method should be compared.
+
+\paragraph{Weaknesses.}  The SAA NLP is nonconvex; the raw chance constraint is
+nonsmooth; and the method evaluates all $M$ scenarios at every iteration.  For
+$M$ in the thousands and an expensive forward solve, the cost is dominated by
+the scenario sweeps.
+
+% ======================================================================
+\section{Rockafellar--Wets progressive hedging algorithm}
+\label{sec:pha}
+
+\subsection{Scenario decomposition and nonanticipativity}
+
+The SAA objective and the PDE state equations are separable across scenarios;
+the only coupling is that the same here-and-now decision $\qq$ must be used in
+every scenario.  Introduce one copy $\qq^m$ per scenario and the
+nonanticipativity (consensus) constraints
+\begin{equation}
+\label{eq:consensus}
+\qq^m=\qq,\qquad m=1,\dots,M.
+\end{equation}
+Then \eqref{eq:saa} is equivalent to
+\begin{equation}
+\label{eq:consensus-program}
+\min_{\qq,\{\qq^m\}}\ \sum_{m=1}^{M}\pi_m f_m(\qq^m)
+\quad\text{s.t.}\quad
+\qq^m=\qq,\ \ \qq^m\in\mathcal{Q}_{\mathrm{ad}},
+\end{equation}
+where $\pi_m=1/M$ (or the scenario probabilities) and $f_m$ is the
+scenario-$m$ objective including its local constraints.  Without a chance
+constraint, $f_m(\qq^m)=J_m(\qq^m)$.  The chance constraint is handled in
+Section~\ref{sec:pha-chance}.
+
+The progressive hedging algorithm of Rockafellar and Wets
+\citep{rockafellar1991} is an augmented Lagrangian method for
+\eqref{eq:consensus-program}.  It does not solve the deterministic equivalent
+as one large NLP.  Instead, it solves $M$ independent scenario subproblems per
+iteration, aggregates their solutions, and updates multipliers that penalize
+disagreement.  The name ``progressive hedging'' reflects the fact that each
+scenario is progressively hedged toward the consensus policy.
+
+\subsection{Augmented Lagrangian derivation}
+
+For a penalty parameter $r>0$ and multiplier vectors $\ww^m\in\R^{N_q}$,
+define the augmented Lagrangian
+\begin{equation}
+\label{eq:pha-L}
+L_r(\qq,\{\qq^m\},\{\ww^m\})
+=\sum_{m=1}^{M}\pi_m\left[
+f_m(\qq^m)
++(\ww^m)^{\T}(\qq^m-\qq)
++\frac{r}{2}\norm{\qq^m-\qq}^2
+\right],
+\end{equation}
+with $\qq\in\mathcal{Q}_{\mathrm{ad}}$ and $\qq^m\in\mathcal{Q}_{\mathrm{ad}}$.
+The PHA iteration is
+\begin{align}
+\qq^{k+1}
+&=\argmin_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\ L_r(\qq,\{\qq^{k,m}\},\{\ww^{k,m}\}),
+\label{eq:pha-q}\\
+\qq^{k+1,m}
+&=\argmin_{\qq^m\in\mathcal{Q}_{\mathrm{ad}}}\
+\pi_m f_m(\qq^m)+(\ww^{k,m})^{\T}\qq^m
++\frac{r}{2}\norm{\qq^m-\qq^{k+1}}^2,
+\label{eq:pha-sub}\\
+\ww^{k+1,m}
+&=\ww^{k,m}+r\bigl(\qq^{k+1,m}-\qq^{k+1}\bigr).
+\label{eq:pha-w}
+\end{align}
+The aggregate step \eqref{eq:pha-q} has the closed form
+\begin{equation}
+\label{eq:pha-aggregate}
+\qq^{k+1}
+=\Proj_{\mathcal{Q}_{\mathrm{ad}}}
+\left(
+\sum_{m=1}^{M}\pi_m\qq^{k,m}
++\frac{1}{r}\sum_{m=1}^{M}\pi_m\ww^{k,m}
+\right).
+\end{equation}
+If $\ww^{0,m}=0$ for all $m$, the weighted multiplier sum remains zero, and
+when $\mathcal{Q}_{\mathrm{ad}}$ is convex and the scenario solutions are
+feasible, \eqref{eq:pha-aggregate} reduces to the weighted average
+\begin{equation}
+\label{eq:pha-average}
+\qq^{k+1}=\sum_{m=1}^{M}\pi_m\qq^{k+1,m}.
+\end{equation}
+This average is the policy actually reported; the individual $\qq^{k,m}$ are
+auxiliary scenario policies.
+
+\begin{remark}[Why the proximal term matters]
+The quadratic term $(r/2)\norm{\qq^m-\qq}^2$ makes the scenario subproblem
+strongly convex near the aggregate and prevents a scenario from moving too far
+from the consensus in one iteration.  It also makes the subproblem
+differentiable even when $f_m$ is not.  A pure linear penalty (without the
+quadratic term) is not a valid augmented Lagrangian for this consensus
+problem and can fail to converge.
+\end{remark}
+
+\subsection{The PHA algorithm}
+
+\begin{algorithm}[htbp]
+\caption{Rockafellar--Wets progressive hedging for the SAA problem}
+\label{alg:pha}
+\begin{algorithmic}[1]
+\Require scenarios $\{\omega^m\}_{m=1}^{M}$, weights $\pi_m$, penalty $r>0$,
+         initial policy $\qq^0$, tolerances $\varepsilon_{\mathrm{prim}},
+         \varepsilon_{\mathrm{step}}$, max iterations $K_{\max}$
+\Ensure consensus policy $\qq^\star$ and scenario multipliers
+\State Initialize $\qq^{0,m}=\qq^0$, $\ww^{0,m}=0$ for all $m$
+\For{$k=0,1,\dots,K_{\max}-1$}
+  \State \textbf{(scenario subproblems, in parallel)} for each $m$:
+         \Statex \hspace{1.2em} solve
+         $\displaystyle \qq^{k+1,m}=\argmin_{\qq^m\in\mathcal{Q}_{\mathrm{ad}}}
+         \ \pi_m f_m(\qq^m)+(\ww^{k,m})^{\T}\qq^m
+         +\frac{r}{2}\norm{\qq^m-\qq^{k,m}}^2$
+         \Statex \hspace{1.2em} (warm-start from $\qq^{k,m}$; use an adjoint
+         gradient and a few L-BFGS-B/trust-region iterations)
+  \State \textbf{(aggregation)} compute
+         $\displaystyle \qq^{k+1}
+         =\Proj_{\mathcal{Q}_{\mathrm{ad}}}
+         \Bigl(\sum_m\pi_m\qq^{k+1,m}
+         +\frac{1}{r}\sum_m\pi_m\ww^{k,m}\Bigr)$
+  \State \textbf{(multiplier update)} for each $m$:
+         $\ww^{k+1,m}=\ww^{k,m}+r(\qq^{k+1,m}-\qq^{k+1})$
+  \State \textbf{(stopping)} stop if
+         $\max_m\norm{\qq^{k+1,m}-\qq^{k+1}}\le\varepsilon_{\mathrm{prim}}$
+         and $\norm{\qq^{k+1}-\qq^{k}}\le\varepsilon_{\mathrm{step}}$
+         \State Optionally adapt $r$: increase it if the consensus residual
+         stalls; decrease it if the multipliers oscillate
+\EndFor
+\State \Return $\qq^\star=\qq^{K}$, $\{\ww^{K,m}\}$, and the scenario
+       objectives $\{f_m(\qq^{K,m})\}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Convergence and practical behavior}
+
+\begin{proposition}[Convex case]
+\label{prop:pha-convex}
+If the scenario objectives $f_m$ are convex, $\mathcal{Q}_{\mathrm{ad}}$ is
+convex and closed, the Slater condition holds, and the augmented Lagrangian
+subproblems are solved exactly, then PHA converges to an optimal solution of
+\eqref{eq:consensus-program}; the multipliers converge to optimal
+nonanticipativity prices \citep{rockafellar1991}.
+\end{proposition}
+
+The nonconvex case is different.  The PDE-constrained cost is not convex in
+$\qq$ in general, and the chance constraint is not convex even when the
+dynamics are linear.  There is no general global-convergence guarantee.  In
+practice PHA is used as a scenario-decomposition heuristic:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item It often finds good solutions for stochastic mixed-integer and
+        nonconvex problems, especially when the scenario subproblems are
+        easy and the coupling is weak \citep{watson2011}.
+  \item It can stall at a non-consensus fixed point if $r$ is poorly chosen or
+        the scenario subproblems are solved too loosely.
+  \item Different initial policies and different penalty schedules can lead to
+        different local solutions; use multi-start and compare the aggregated
+        objective.
+  \item Always validate the final consensus policy on the full SAA objective
+        and on an independent test archive; do not trust the PHA objective
+        alone.
+\end{itemize}
+
+\paragraph{Penalty selection.}
+The penalty $r$ controls the trade-off between scenario freedom and consensus.
+A small $r$ lets scenarios drift, so the consensus residual decays slowly; a
+large $r$ forces consensus but makes the subproblems stiff and can slow the
+inner solver.  Practical rules:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item start with $r$ of the order of the curvature of $J$ with respect to
+        $\qq$ (estimate it by a finite-difference Hessian-vector product on a
+        few scenarios);
+  \item increase $r$ by a factor of $2$--$10$ if the consensus residual has
+        not decreased by a fixed factor over several iterations;
+  \item decrease $r$ if the multipliers grow without bound or the subproblem
+        solver fails;
+  \item use scenario-dependent penalties $r_m$ when the scenario costs have
+        very different scales, but keep the aggregation formula consistent.
+\end{enumerate}
+
+\paragraph{Inner-solver accuracy.}
+Early PHA iterations do not need an accurate scenario solution.  Use a loose
+inner tolerance (e.g.\ $10^{-2}$ relative) for the first few iterations and
+tighten it as the consensus residual decreases.  Warm-start each subproblem
+from the previous scenario policy.  This ``inexact PHA'' is much cheaper than
+solving every subproblem to high accuracy.
+
+\paragraph{Parallelism.}
+The $M$ scenario subproblems in \eqref{eq:pha-sub} are independent.  This is
+PHA's main advantage: on a cluster, the wall-clock cost per iteration is the
+cost of one (or a few) scenario solves, not $M$ sequential solves.  The
+aggregation and multiplier update are negligible.  If $M$ is larger than the
+number of workers, use scenario bundling: group scenarios into bundles, solve
+one subproblem per bundle with the bundle average objective, and treat the
+bundle as one scenario in PHA.  This reduces communication and can improve
+stability.
+
+\subsection{PHA with chance constraints}
+\label{sec:pha-chance}
+
+The chance constraint couples scenarios, so it does not fit the separable form
+\eqref{eq:consensus-program} directly.  There are four practical ways to
+combine PHA with the reliability requirement.  They differ in how much
+conservatism they introduce and in whether the resulting subproblems remain
+scenario-separable.
+
+\subsubsection{CVaR surrogate with an auxiliary variable}
+
+Replace the chance constraint by the sufficient CVaR condition
+\begin{equation}
+\label{eq:pha-cvar}
+\CVaR_{1-\alpha}(G(\qq,\omega))
+=\min_{\eta\in\R}\left\{
+\eta+\frac{1}{\alpha}\E\bigl[(G(\qq,\omega)-\eta)_+\bigr]
+\right\}\le0.
+\end{equation}
+For the SAA, introduce the common variable $\eta$ and write
+\begin{equation}
+\label{eq:pha-cvar-saa}
+\min_{\qq,\eta}\ \sum_{m=1}^{M}\pi_m J_m(\qq)
+\quad\text{s.t.}\quad
+\eta+\frac{1}{\alpha}\sum_{m=1}^{M}\pi_m
+\bigl(G_m(\qq)-\eta\bigr)_+\le0.
+\end{equation}
+The positive-part term is scenario-separable for fixed $\eta$, but the
+constraint is not.  Dualize the CVaR constraint with a multiplier
+$\lambda\ge0$:
+\begin{equation}
+\label{eq:pha-cvar-lag}
+L(\qq,\eta,\lambda)
+=\sum_{m=1}^{M}\pi_m\left[
+J_m(\qq)+\frac{\lambda}{\alpha}
+\bigl(G_m(\qq)-\eta\bigr)_+
+\right]
++\lambda\eta.
+\end{equation}
+For fixed $\lambda$, the problem is separable across scenarios given the common
+$\eta$.  Treat $\eta$ as an additional consensus variable in PHA: introduce
+copies $\eta^m$, add the consensus constraint $\eta^m=\eta$, and augment
+\eqref{eq:pha-cvar-lag} with the corresponding multiplier and proximal term.
+The scenario subproblem becomes
+\begin{equation}
+\label{eq:pha-cvar-sub}
+\min_{\qq^m,\eta^m}\ 
+\pi_m J_m(\qq^m)
++\frac{\lambda\pi_m}{\alpha}\bigl(G_m(\qq^m)-\eta^m\bigr)_+
++\text{(consensus terms for $\qq^m$ and $\eta^m$)}.
+\end{equation}
+After the PHA sweep, update $\lambda$ by projected subgradient ascent on the
+CVaR constraint:
+\begin{equation}
+\label{eq:pha-lambda}
+\lambda^{k+1}
+=\max\left(0,\
+\lambda^k+s_k\left[
+\eta^{k+1}+\frac{1}{\alpha}\sum_{m=1}^{M}\pi_m
+\bigl(G_m(\qq^{k+1,m})-\eta^{k+1}\bigr)_+
+\right]\right),
+\end{equation}
+with $s_k>0$ a decreasing step.  This is a PHA--Lagrangian hybrid: PHA handles
+the nonanticipativity of $\qq$ and $\eta$, and the outer multiplier handles the
+CVaR inequality.  The CVaR condition is conservative relative to the chance
+constraint, so a feasible CVaR policy is reliable; the price is conservatism.
+
+\subsubsection{Lagrangian relaxation of the empirical probability}
+
+A more direct approach keeps the empirical probability.  Write the chance
+constraint as
+\begin{equation}
+\label{eq:pha-prob}
+(1-\alpha)-\frac{1}{M}\sum_{m=1}^{M}\ind\{G_m(\qq)\le0\}\le0.
+\end{equation}
+Dualize it with $\lambda\ge0$:
+\begin{equation}
+\label{eq:pha-prob-lag}
+L(\qq,\lambda)
+=\E[J(\qq,\omega)]
++\lambda\left[(1-\alpha)-\Prob(G(\qq,\omega)\le0)\right]
+=\E\bigl[J(\qq,\omega)-\lambda\ind\{G(\qq,\omega)\le0\}\bigr]
++\lambda(1-\alpha).
+\end{equation}
+For fixed $\lambda$, the scenario objective is
+\begin{equation}
+\label{eq:pha-prob-scenario}
+f_m^\lambda(\qq^m)=J_m(\qq^m)-\lambda\ind\{G_m(\qq^m)\le0\}.
+\end{equation}
+This is scenario-separable, so PHA applies directly with $f_m=f_m^\lambda$.
+The outer multiplier is updated by
+\begin{equation}
+\label{eq:pha-prob-lambda}
+\lambda^{k+1}
+=\max\left(0,\
+\lambda^k+s_k\left[(1-\alpha)
+-\frac{1}{M}\sum_{m=1}^{M}\ind\{G_m(\qq^{k+1,m})\le0\}\right]\right).
+\end{equation}
+If the empirical compliance probability is below $1-\alpha$, the bracket is
+positive, $\lambda$ increases, and the reward $-\lambda$ for compliant
+scenarios becomes stronger.  This is a clean decomposition, but it has two
+caveats:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item the indicator is nonsmooth, so the scenario subproblem should be
+        solved by a derivative-free method or by a smooth sigmoid
+        approximation;
+  \item for nonconvex problems there may be a positive duality gap, so a
+        zero of the Lagrangian dual does not guarantee primal feasibility.
+        Validate the final policy out of sample and increase $\lambda$ or add
+        a penalty if the reliability target is missed.
+\end{itemize}
+
+\subsubsection{Sigmoid smoothing and continuation}
+
+Replace the indicator by the smooth approximation
+\begin{equation}
+\label{eq:pha-sigmoid}
+\ind\{G_m(\qq)\le0\}
+\approx
+\sigma\!\left(-\frac{G_m(\qq)}{\varepsilon_s}\right),
+\end{equation}
+and use the same Lagrangian decomposition with
+\begin{equation}
+\label{eq:pha-sigmoid-scenario}
+f_m^{\lambda,\varepsilon_s}(\qq^m)
+=J_m(\qq^m)
+-\lambda\,\sigma\!\left(-\frac{G_m(\qq^m)}{\varepsilon_s}\right).
+\end{equation}
+The scenario subproblem is now differentiable, so an adjoint gradient or a
+surrogate gradient can be used.  Use a continuation schedule
+$\varepsilon_s=10^{-1},10^{-2},10^{-3}$ and, for each $\varepsilon_s$, run
+PHA and the outer $\lambda$ update to convergence (or a fixed budget).  Warm-
+start the next stage from the previous consensus policy.  The sigmoid is
+smooth but not exact: at the final stage, check the empirical probability with
+the exact indicator on the test archive.
+
+\subsubsection{Mixed-integer reliability formulation}
+
+If the chance constraint must be represented exactly, introduce
+$z_m\in\{0,1\}$ with $z_m=1$ meaning scenario $m$ is compliant:
+\begin{equation}
+\label{eq:pha-minlp}
+\sum_{m=1}^{M}z_m\ge(1-\alpha)M,
+\qquad
+G_m(\qq)\le M_G(1-z_m),\quad m=1,\dots,M,
+\end{equation}
+where $M_G$ is a valid upper bound on $G$.  The $z_m$ are scenario-local; the
+reliability budget is the only coupling.  Dualize the budget with
+$\lambda\ge0$:
+\begin{equation}
+\label{eq:pha-minlp-lag}
+L(\qq,\{z_m\},\lambda)
+=\sum_{m=1}^{M}\pi_m\left[
+J_m(\qq)+\lambda\bigl((1-\alpha)-z_m\bigr)
+\right],
+\end{equation}
+subject to $G_m(\qq)\le M_G(1-z_m)$ and $z_m\in\{0,1\}$.  For fixed $\lambda$,
+each scenario subproblem chooses $z_m\in\{0,1\}$ and $\qq^m$:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item if $z_m=1$, the scenario must satisfy $G_m(\qq^m)\le0$ and pays
+        $J_m(\qq^m)-\lambda$;
+  \item if $z_m=0$, the compliance constraint is inactive and the scenario pays
+        $J_m(\qq^m)$.
+\end{itemize}
+PHA handles the consensus on $\qq$; the outer $\lambda$ update is
+\begin{equation}
+\label{eq:pha-minlp-lambda}
+\lambda^{k+1}
+=\max\left(0,\
+\lambda^k+s_k\left[(1-\alpha)
+-\frac{1}{M}\sum_{m=1}^{M}z_m^{k+1}\right]\right).
+\end{equation}
+This is exact in the sense that, for a given $\lambda$, the scenario problems
+are the Lagrangian subproblems of the MINLP; but the dual may have a gap, and
+the subproblems contain binaries.  It is practical only for small $M$ and when
+the scenario subproblems are cheap or surrogate-based.  It is useful as a
+reference against which the CVaR and sigmoid approximations are compared.
+
+\subsection{PHA with PDE subproblems}
+
+Each PHA scenario subproblem is a single-scenario PDE-constrained optimization
+with a proximal term.  There are three ways to solve it:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Adjoint + L-BFGS-B.}  The proximal term is cheap; the
+        gradient of $f_m$ comes from the discrete adjoint.  This is the
+        highest-fidelity option and the natural choice when the forward solver
+        is differentiable.
+  \item \textbf{Surrogate subproblem.}  Replace the PDE solve by the FNO or a
+        POD reduced model, solve the subproblem with autodiff, and validate the
+        resulting consensus policy with the high-fidelity model.  This is the
+        practical choice when $M$ is large and each forward solve is
+        expensive.  The surrogate must be trained on the rate range visited by
+        PHA, and the final policy must be re-evaluated with the FV model.
+  \item \textbf{Derivative-free subproblem.}  If the chance constraint is kept
+        in exact indicator form and $N_q$ is small, use pattern search or
+        CMA-ES for the scenario subproblem.  This is robust but expensive.
+\end{enumerate}
+
+A useful large-scale pattern is \emph{surrogate-PHA}: train the FNO on a
+scenario/rate design, run PHA entirely on the surrogate to obtain a candidate
+consensus policy and a set of active scenarios, then evaluate that policy and
+the active scenarios with the high-fidelity model.  If the high-fidelity
+reliability or cost differs from the surrogate prediction, add the active
+scenarios to the training set, retrain, and repeat.  This combines PHA's
+scenario parallelism with the surrogate's speed.
+
+\subsection{Strengths and weaknesses of PHA}
+
+\paragraph{Strengths.}
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item Scenario decomposition: the $M$ subproblems are independent and
+        parallelizable.
+  \item Works with nonsmooth scenario objectives and constraints; the
+        proximal term regularizes the subproblems.
+  \item Naturally handles a large number of scenarios and scenario bundles.
+  \item Provides scenario policies $\qq^{k,m}$ and multipliers $\ww^{k,m}$
+        that diagnose which scenarios disagree with the consensus.
+  \item With CVaR or a Lagrangian chance constraint, it extends to reliability
+        requirements without giving up scenario decomposition.
+\end{itemize}
+
+\paragraph{Weaknesses.}
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item No global-convergence guarantee for the nonconvex PDE problem; it is a
+        heuristic in that regime.
+  \item The penalty $r$ and the outer multiplier step $s_k$ need tuning.
+  \item Each iteration requires $M$ scenario subproblem solves; if the
+        subproblems are solved accurately and $M$ is large, the total cost can
+        exceed a well-tuned deterministic-equivalent NLP.
+  \item The chance-constraint coupling requires a dual/penalty layer, and the
+        dual may have a gap.
+  \item The consensus policy is an average of scenario policies; it may not be
+        optimal for any single scenario, and its out-of-sample performance must
+        be checked.
+\end{itemize}
+
+\paragraph{When to use PHA.}
+Use PHA when (i) $M$ is large or expected to grow, (ii) the scenario
+subproblems are parallelizable and cheap relative to communication, (iii) the
+objective and state equations are scenario-separable, and (iv) a convex or
+weakly coupled structure makes the augmented Lagrangian well behaved.  For a
+small $M$ and a smooth problem with a reliable adjoint, a direct SAA NLP is
+usually simpler and faster.  PHA is not a substitute for a good scenario
+generator, a validated forward model, or an out-of-sample certificate.
+
+% ======================================================================
+\section{Other decomposition methods}
+\label{sec:decomp}
+
+\subsection{L-shaped method and Benders decomposition}
+
+For a two-stage stochastic linear program with recourse, the L-shaped method
+\citep{vanslyke1969} is the canonical decomposition.  The master problem
+chooses the here-and-now decision and a lower bound on the recourse cost; the
+subproblems, one per scenario, generate optimality cuts.  Benders decomposition
+\citep{benders1962} is the same idea in a more general setting.  The extension
+to the remediation problem is not direct because the recourse (the PDE state)
+is nonlinear and the chance constraint introduces binaries or nonsmooth
+indicators.  Useful variants are:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Generalized Benders} for smooth nonlinear recourse, with cuts
+        from the Lagrangian dual of the scenario subproblem;
+  \item \textbf{Integer L-shaped} or branch-and-cut for the MINLP chance
+        constraint, with the reliability budget as the complicating constraint;
+  \item \textbf{Linearized recourse} around a reference policy, used as a
+        lower-bound generator inside a trust-region or branch-and-bound
+        scheme.
+\end{itemize}
+These methods give bounds and finite convergence in the convex case, which is
+valuable for verification.  They are less attractive as a first implementation
+because the PDE subproblems are nonlinear and the chance constraint is not
+naturally linear.
+
+\subsection{Dual decomposition and Lagrangian relaxation}
+
+Dual decomposition relaxes the coupling constraints with multipliers and solves
+independent subproblems.  It is the same principle as the Lagrangian layer in
+Section~\ref{sec:pha-chance}.  It is most useful when the coupling is a small
+number of linear or convex constraints (capacity, budget, reliability) and the
+scenario subproblems are easy.  The disadvantages are the usual ones:
+duality gap for nonconvex problems, slow subgradient convergence, and the need
+for a primal recovery step.  For the remediation problem, dual decomposition is
+a building block inside PHA or a stochastic-gradient method, not a stand-alone
+solution.
+
+\subsection{Scenario reduction and bundling}
+
+For very large $M$, reduce the scenario archive before optimizing:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item fast forward selection or k-means in the space of KL coefficients;
+  \item Wasserstein-based scenario reduction;
+  \item bundling for PHA (each bundle is one subproblem).
+\end{itemize}
+Scenario reduction is safe for the expected objective when the reduced
+distribution is close in an appropriate Wasserstein metric.  It is more
+dangerous for a chance constraint: the tail scenarios that determine
+reliability may be exactly the ones that reduction discards.  Keep the tail,
+or use importance sampling, and always validate on an independent
+unreduced archive.
+
+% ======================================================================
+\section{Stochastic gradient and stochastic approximation}
+\label{sec:sg}
+
+\subsection{Expected-value objective}
+
+If the chance constraint is replaced by a smooth penalty or a CVaR term, the
+problem has the form
+\begin{equation}
+\label{eq:sg-problem}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\
+F(\qq)=\E\bigl[\phi(\qq,\omega)\bigr],
+\end{equation}
+where $\phi$ is a smooth (or smoothed) scenario cost.  The gradient is
+\begin{equation}
+\label{eq:sg-grad}
+\nabla F(\qq)=\E\bigl[\nabla_{\qq}\phi(\qq,\omega)\bigr].
+\end{equation}
+A mini-batch of $B\ll M$ scenarios gives an unbiased estimate
+\begin{equation}
+\label{eq:sg-est}
+g^k=\frac{1}{B}\sum_{b=1}^{B}\nabla_{\qq}\phi(\qq^k,\omega^{k,b}),
+\end{equation}
+and the projected stochastic gradient iteration is
+\begin{equation}
+\label{eq:sg-update}
+\qq^{k+1}=\Proj_{\mathcal{Q}_{\mathrm{ad}}}
+\bigl(\qq^k-\gamma_k g^k\bigr).
+\end{equation}
+Standard choices are $\gamma_k=\gamma_0/\sqrt{k}$ (robust, $O(1/\sqrt{K})$
+for convex problems) or $\gamma_k=\gamma_0/k$ (slower tail, better final
+accuracy), with Polyak--Ruppert averaging
+$\bar\qq^K=\frac{1}{K}\sum_{k=1}^{K}\qq^k$.  Adaptive methods (AdaGrad, RMSProp,
+Adam) are convenient when the components of $\qq$ have very different scales
+or the gradient noise is heteroscedastic.  They do not remove the need to tune
+the step size or to validate the final policy.
+
+For nonconvex problems, the guarantee is stationarity of the averaged iterates
+under decreasing steps and bounded variance, not global optimality.  The
+practical advantage is that each iteration touches only $B$ scenarios, so the
+method scales to very large $M$ and can be run online as new scenarios arrive.
+
+\subsection{Constrained variants}
+
+The chance constraint can be handled by:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{sigmoid smoothing}: replace the indicator by
+        $\sigma(-G/\varepsilon_s)$ and optimize
+        $\E[J]+\rho[1-\alpha-\E\sigma(-G/\varepsilon_s)]_+^2$;
+  \item \textbf{CVaR}: add $\lambda[\eta+\frac{1}{\alpha}\E(G-\eta)_+]$ and
+        update $\eta$ and $\lambda$ in an inner/outer loop;
+  \item \textbf{two-time-scale stochastic approximation}: update $\qq$ on a
+        fast timescale and the multipliers $\lambda$ (and $\eta$) on a slow
+        timescale;
+  \item \textbf{penalty}: minimize $\E[J]+\rho[(1-\alpha)-\ind\{G\le0\}]_+^2$
+        with a smoothed indicator and increase $\rho$ until feasibility.
+\end{itemize}
+The constrained stochastic approximation literature (e.g.\
+\citealp{nemirovski2009}) gives convergence rates for convex and smooth
+problems; for the nonconvex PDE problem, treat the rates as guidance rather
+than a guarantee.
+
+\subsection{Variance reduction}
+
+Stochastic gradients are noisy; the following are essential in practice:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Common random numbers (CRN).}  Use the same scenario batch for
+        all candidates being compared; this reduces the variance of
+        differences and of finite-difference gradients.
+  \item \textbf{Antithetic variates.}  Pair $\xi$ with $-\xi$ in the KL
+        coefficients when the functional is monotone.
+  \item \textbf{Low-discrepancy sampling.}  Use Sobol or Latin hypercube points
+        for the KL coefficients, especially when $N_{KL}$ is small.
+  \item \textbf{Control variates.}  Use the FNO or a coarse-grid FV solution as
+        a control variate for the fine-grid objective; the difference has much
+        lower variance than either term alone.
+  \item \textbf{Importance sampling.}  For rare compliance failures, tilt the
+        scenario distribution toward high-concentration events and reweight.
+        Check the estimator against plain Monte Carlo on a small subset.
+\end{enumerate}
+
+\subsection{Strengths and weaknesses}
+
+\paragraph{Strengths.}  Scales to very large $M$; simple to implement; naturally
+online; handles smooth penalties and CVaR; parallelizes over the batch.
+
+\paragraph{Weaknesses.}  Noisy; step-size and penalty tuning; slow tail
+convergence; constraint feasibility is not guaranteed without a careful
+dual/penalty layer; a single run does not provide a reliability certificate.
+
+% ======================================================================
+\section{Derivative-free and global optimization}
+\label{sec:df}
+
+\subsection{Pattern search and MADS}
+
+Pattern search (Hooke--Jeeves, generalized pattern search) evaluates the
+objective on a set of poll directions around the current point and moves to a
+better point; the step size shrinks when no improvement is found.  Mesh-
+adaptive direct search (MADS) extends this to constrained problems with a
+poll step and a search step, and has convergence theory for nonsmooth
+functions under mild assumptions.  For the remediation problem:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item use the exact empirical chance constraint (no smoothing), with a
+        filter or an augmented-Lagrangian constraint handling;
+  \item use common random numbers so that differences between candidates are
+        meaningful;
+  \item start from a space-filling design and run several restarts;
+  \item restrict to $N_q\lesssim5$--$10$ and a coarse SAA ($M\approx50$--$200$).
+\end{itemize}
+Pattern search is easy to implement, robust to noise, and a good way to find a
+basin before switching to a gradient-based method.
+
+\subsection{CMA-ES and differential evolution}
+
+CMA-ES adapts a multivariate Gaussian search distribution to the objective
+landscape; differential evolution maintains a population and uses mutation and
+crossover.  Both are global-ish population methods that handle nonsmooth and
+rugged objectives.  They are attractive for small $N_q$ and a coarse SAA, but
+each candidate requires $M$ PDE solves, so the cost grows quickly.  Use:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item a small population and a coarse SAA for exploration;
+  \item CRN across the population;
+  \item a penalty or a constrained ranking for the chance constraint;
+  \item a final local refinement with a gradient method or a trust-region
+        surrogate.
+\end{itemize}
+Neither method provides a global optimality certificate for this problem.
+
+\subsection{Bayesian optimization}
+
+Bayesian optimization builds a Gaussian-process surrogate of the objective and
+constraint functions and chooses the next evaluation by maximizing an
+acquisition function (expected improvement, upper confidence bound, or a
+constrained variant).  It is sample-efficient and well suited to very
+expensive forward solves with $N_q\lesssim10$.  The difficulties are:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item the chance constraint is a probability, not a single smooth function;
+        use a surrogate for $G_m$ or for the empirical probability, and a
+        constrained acquisition function;
+  \item the objective is noisy because of the Monte Carlo scenarios; use a
+        noise-aware GP (nugget) and CRN;
+  \item scaling to $N_q>20$ is poor;
+  \item the GP is only a local model; validate the recommended policy with the
+        high-fidelity model.
+\end{itemize}
+
+\subsection{Strengths and weaknesses}
+
+\paragraph{Strengths.}  No gradient required; handles nonsmooth chance
+constraints; robust to simulation noise; easy to parallelize the objective
+evaluations; good for small $N_q$ and expensive FV.
+
+\paragraph{Weaknesses.}  Cost grows with $N_q$ and with the number of
+constraints; no global guarantee (except specialized global-search variants);
+slow tail convergence; not competitive for $N_q$ in the hundreds.
+
+% ======================================================================
+\section{Surrogate and reduced-order optimization}
+\label{sec:surrogate}
+
+\subsection{Surrogate models}
+
+A surrogate replaces the high-fidelity map
+$(\qq,\omega)\mapsto(J,G,H)$ or $(\qq,\omega)\mapsto C(\cdot)$ by a cheap
+approximation:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Fourier neural operator (FNO)}: learns the map from the
+        conductivity field and the rate vector to the concentration field;
+        differentiable, fast, and accurate for smooth parametric PDEs.
+  \item \textbf{POD--Galerkin or POD--DEIM}: projects the state onto a
+        reduced basis built from high-fidelity snapshots; fast for a fixed
+        parameter range, less flexible for strong heterogeneity.
+  \item \textbf{Gaussian process / polynomial chaos}: good for low-dimensional
+        parameterizations and small data; uncertainty quantification is built
+        in.
+\end{itemize}
+The surrogate is trained on a design of experiments over scenarios and rates.
+For the remediation problem, the design must cover the no-pumping case, the
+capacity case, asymmetric pumping patterns, and the compliance locations.
+The training loss should include the field error, the well-concentration
+error, and the mass-balance residual.
+
+\subsection{Trust-region model management}
+
+Optimize the surrogate inside a trust region around the current best policy:
+\begin{equation}
+\label{eq:tr}
+\qq^{k+1}
+=\argmin_{\qq\in\mathcal{Q}_{\mathrm{ad}}\cap\mathcal{B}(\qq^k,\Delta_k)}
+\ \hat J_M(\qq)
+\quad\text{s.t.}\quad
+\hat c_M(\qq)\le0,
+\end{equation}
+where $\hat J_M$ and $\hat c_M$ are surrogate-based SAA functionals and
+$\mathcal{B}(\qq^k,\Delta_k)$ is a trust region.  Evaluate the candidate with
+the high-fidelity model on a validation set.  If the high-fidelity agreement
+is good, accept the step and possibly expand $\Delta_k$; otherwise reject the
+step, shrink $\Delta_k$, and add the candidate to the training set.  This is
+the standard trust-region framework for simulation-based optimization and it
+provides a practical safeguard against surrogate bias.
+
+\subsection{Active learning and decision-focused validation}
+
+A small field error does not imply a small decision error.  After solving the
+surrogate problem, evaluate the recommended policy on an independent
+high-fidelity test archive and compare:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt]
+  \item the SAA objective and the out-of-sample objective;
+  \item the empirical compliance probability and the CVaR;
+  \item the cleanup time and the residual mass;
+  \item the active scenarios and the constraint margin.
+\end{itemize}
+If the discrepancy is too large, add the worst scenarios and the neighborhood
+of the candidate policy to the training set, retrain, and repeat.  This
+active-learning loop is the practical answer to surrogate bias: the surrogate
+is not trusted until it has been tested on the decisions it recommends.
+
+\subsection{Surrogate inside PHA and SAA}
+
+The surrogate can be used at three levels:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Inner level}: replace the PDE solve in each PHA scenario
+        subproblem or each SAA objective evaluation;
+  \item \textbf{Outer level}: solve the entire SAA/PHA problem on the
+        surrogate, then validate the consensus policy with the FV model;
+  \item \textbf{Control-variate level}: use the surrogate as a control variate
+        to reduce the variance of the high-fidelity SAA estimator.
+\end{enumerate}
+The inner level is the most aggressive and the most dependent on surrogate
+accuracy; the control-variate level is the safest and often gives a large
+variance reduction with a small bias correction.
+
+\subsection{Strengths and weaknesses}
+
+\paragraph{Strengths.}  Many scenario evaluations per second; differentiable
+with respect to $\qq$; enables PHA and SAA at scales that are impossible with
+the FV model; can be used for real-time decision support.
+
+\paragraph{Weaknesses.}  Surrogate bias; training cost; extrapolation outside
+the training range; the decision error can be much larger than the field error.
+Always pair the surrogate with a high-fidelity validation and an active-
+learning loop.
+
+% ======================================================================
+\section{Chance-constraint-specific algorithms}
+\label{sec:chance}
+
+This section collects the reformulations that can be plugged into any of the
+outer algorithms above.
+
+\subsection{Exact mixed-integer reformulation}
+
+With binaries $z_m\in\{0,1\}$,
+\begin{equation}
+\label{eq:minlp}
+\sum_{m=1}^{M}z_m\ge(1-\alpha)M,
+\qquad
+G_m(\qq)\le M_G(1-z_m),\quad m=1,\dots,M.
+\end{equation}
+This is exact but is a mixed-integer nonlinear program with $M$ binaries and
+$M$ PDE state constraints.  It is useful only for tiny $N_q$ and moderate $M$,
+and even then the PDE evaluations dominate.  It is the reference against which
+the CVaR and sigmoid approximations are compared.  The Lagrangian version in
+Section~\ref{sec:pha-chance} is the scenario-decomposed way to use it.
+
+\subsection{CVaR reformulation}
+
+The CVaR constraint
+\begin{equation}
+\label{eq:cvar}
+\CVaR_{1-\alpha}(G)
+=\min_{\eta\in\R}\left\{
+\eta+\frac{1}{\alpha}\E\bigl[(G-\eta)_+\bigr]
+\right\}\le0
+\end{equation}
+is a sufficient condition for the chance constraint and is convex in the
+probability space.  For the SAA, introduce $\eta$ and solve
+\begin{equation}
+\label{eq:cvar-saa}
+\min_{\qq,\eta}\ J_M(\qq)
+\quad\text{s.t.}\quad
+\eta+\frac{1}{\alpha M}\sum_{m=1}^{M}
+\bigl(G_m(\qq)-\eta\bigr)_+\le0.
+\end{equation}
+The positive part is nonsmooth at $G_m=\eta$; smooth it by
+$(\cdot)_+\approx\frac{1}{2}(\cdot+\sqrt{(\cdot)^2+\epsilon^2})$ or use a
+nonsmooth solver.  CVaR is more conservative than the chance constraint: a
+CVaR-feasible policy is reliable, but a chance-feasible policy may be rejected.
+Use CVaR when the tail of the violation distribution matters and when a
+convex-in-probability surrogate is desirable.
+
+\subsection{Sigmoid smoothing}
+
+The empirical probability is approximated by
+\begin{equation}
+\label{eq:sigmoid}
+\Prob_M(G\le0)
+\approx\frac{1}{M}\sum_{m=1}^{M}
+\sigma\!\left(-\frac{G_m(\qq)}{\varepsilon_s}\right).
+\end{equation}
+As $\varepsilon_s\downarrow0$, the approximation converges to the empirical
+probability for almost every $\qq$.  In practice, use a continuation schedule
+$\varepsilon_s=10^{-1},10^{-2},10^{-3}$ and re-optimize at each stage.  The
+sigmoid is easy to differentiate and works well with adjoint or surrogate
+gradients.  The drawback is that a small $\varepsilon_s$ produces very small
+gradients when all scenarios are far from the boundary; a moderate
+$\varepsilon_s$ is used during early iterations.  The final policy must be
+checked with the exact indicator on an independent test archive.
+
+\subsection{Difference-of-convex and successive convex approximation}
+
+The empirical probability constraint can be written as a difference of convex
+functions in some formulations, or approximated by a sequence of convex
+surrogates (successive convex approximation, SCA).  The idea is to linearize
+or convexify the nonconvex part around the current policy, solve a convex
+subproblem, and use a trust region or line search.  This is attractive when
+the dynamics can be linearized and the chance constraint is the only source of
+nonconvexity.  For the full PDE problem, the convex subproblem is still a
+PDE-constrained problem, so the practical benefit is mainly in the constraint
+handling, not in the PDE cost.
+
+\subsection{Penalty and augmented-Lagrangian methods}
+
+A generic penalty formulation is
+\begin{equation}
+\label{eq:penalty}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\
+J_M(\qq)
++\rho\left[\left(1-\alpha-\Prob_M(G\le0)\right)_+\right]^2
++\rho_h\left[\left(1-\alpha_h-\Prob_M(H\ge0)\right)_+\right]^2.
+\end{equation}
+Use a smoothed probability and increase $\rho,\rho_h$ until the constraints
+are satisfied at the candidate solution.  This is simple and works with any
+outer solver, but the penalty parameters can be large and the final
+feasibility must be checked independently.  The augmented Lagrangian is
+preferable when accurate constraint gradients are available, because it avoids
+some of the ill-conditioning of a pure quadratic penalty.
+
+\subsection{Sample size and validation}
+
+The empirical probability $\hat p_M$ has standard error
+$\sqrt{\hat p_M(1-\hat p_M)/M}$.  To resolve a violation probability
+$\alpha$, one needs $M\gg1/\alpha$; for $\alpha=0.05$, $M=100$ is too small
+and $M=1000$--$5000$ is typical.  The Dvoretzky--Kiefer--Wolfowitz inequality
+gives the distribution-free bound
+\begin{equation}
+\label{eq:dkw}
+\Prob\left(\sup_{\qq}\abs{\hat p_M(\qq)-p(\qq)}>\varepsilon\right)
+\le2\exp(-2M\varepsilon^2),
+\end{equation}
+so $M\ge\frac{1}{2\varepsilon^2}\ln\frac{2}{\delta}$ for accuracy
+$\varepsilon$ with confidence $1-\delta$.  For $\varepsilon=0.01$ and
+$\delta=0.05$, this is $M\approx1.85\times10^4$; this is the sample size for a
+uniform probability certificate, not the sample size needed to find a good
+policy.  The practical recipe is: $M=100$--$500$ for exploration, increase
+until the out-of-sample objective and reliability stabilize, and use
+$M=2000$--$5000$ (or more) for the final certificate.
+
+% ======================================================================
+\section{Risk-averse and distributionally robust extensions}
+\label{sec:risk}
+
+If the expected cost is replaced by a mean--CVaR objective,
+\begin{equation}
+\label{eq:meancvar}
+(1-\beta)\E[J(\qq,\omega)]
++\beta\,\CVaR_{1-\alpha}\bigl(J(\qq,\omega)\bigr),
+\end{equation}
+the SAA problem remains convex in the probability variable and can be solved
+by the same SAA/NLP or PHA machinery with an auxiliary $\eta$.  The PHA
+derivation is analogous to Section~\ref{sec:pha-chance}: treat $\eta$ as a
+consensus variable and dualize or penalize the CVaR term.
+
+Distributionally robust optimization (DRO) replaces the expectation by a
+worst-case expectation over an ambiguity set $\mathcal{P}$:
+\begin{equation}
+\label{eq:dro}
+\min_{\qq\in\mathcal{Q}_{\mathrm{ad}}}\
+\sup_{\Prob'\in\mathcal{P}}\E_{\Prob'}[J(\qq,\omega)]
+\quad\text{s.t.}\quad
+\Prob'(G\le0)\ge1-\alpha\ \ \forall\Prob'\in\mathcal{P}.
+\end{equation}
+For a Wasserstein ball, the inner problem can sometimes be reformulated as a
+finite-dimensional convex program or solved by cutting planes; for a
+moment-ambiguity set, it becomes a semidefinite or second-order cone program.
+DRO is more conservative than the SAA chance constraint and is best treated as
+a sensitivity analysis after the baseline policy is certified.  It is not the
+first algorithm to implement.
+
+% ======================================================================
+\section{Recommended hybrid roadmap}
+\label{sec:hybrid}
+
+The following staged approach matches the gate-driven philosophy of the
+forward-model plans.  Each stage produces an artifact that can be checked
+before the next stage is started.
+
+\subsection{Stage 0: freeze the scenario and validation protocol}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item Freeze the random-field model, $N_{KL}$, the well layout, the cost
+        coefficients, and the chance-constraint parameters.
+  \item Generate a training archive and a disjoint test archive with
+        independent seeds; store the KL coefficients and all random variables.
+  \item Precompute the unit-rate flow responses and the well operators.
+  \item Check the forward model against the trusted 1D/2D/3D references; do not
+        optimize until the forward gates are green.
+\end{enumerate}
+
+\subsection{Stage 1: coarse exploration}
+
+Run a derivative-free method (pattern search or CMA-ES) on a coarse SAA
+($M\approx50$--$200$) with the exact empirical chance constraint and common
+random numbers.  Keep the best few candidates.  This stage is robust and gives
+a good basin; it is not the final answer.
+
+\subsection{Stage 2: SAA refinement with adjoint gradients}
+
+For each candidate, solve the SAA problem with the adjoint gradient and a
+smooth (CVaR or sigmoid) chance constraint on the full training archive.  Use
+L-BFGS-B, SQP, or a trust-region method, with a continuation in the smoothing
+parameter and a multi-start around the coarse candidates.  Check the adjoint
+gradient against a finite difference on a smooth test problem before trusting
+the refinement.
+
+\subsection{Stage 3: large-scenario decomposition or surrogate}
+
+If $M$ is large and the scenario subproblems are parallelizable, run PHA on
+the full archive, with the chance constraint handled by the CVaR/Lagrangian
+layer.  If the FV solve is the bottleneck, train or update the FNO, run
+surrogate-PHA, and validate the consensus policy with the FV model.  Use
+active learning to add the worst scenarios and the candidate neighborhood to
+the training set.
+
+\subsection{Stage 4: out-of-sample certificate}
+
+Evaluate the final policy on the independent test archive and report:
+\begin{align}
+\hat J_{\mathrm{test}}
+&=\frac{1}{M_{\mathrm{test}}}\sum_{m\in\mathcal{T}}J(\qq^\star,\omega^m),
+\label{eq:Jtest}\\
+\hat p_{\mathrm{test}}
+&=\frac{1}{M_{\mathrm{test}}}\sum_{m\in\mathcal{T}}
+\ind\{G(\qq^\star,\omega^m)\le0\},
+\label{eq:ptest}\\
+\widehat{\CVaR}_{\mathrm{test}}
+&=\min_{\eta}\left\{\eta+\frac{1}{\alpha M_{\mathrm{test}}}
+\sum_{m\in\mathcal{T}}\bigl(G(\qq^\star,\omega^m)-\eta\bigr)_+
+\right\}.
+\label{eq:cvartest}
+\end{align}
+Accept the policy only if $\hat p_{\mathrm{test}}\ge1-\alpha-\varepsilon_p$
+and the test objective is within a stated tolerance of the training objective.
+Repeat the SAA with $K$ independent seeds and report the best policy and the
+spread; a single run is not a certificate.
+
+\begin{algorithm}[htbp]
+\caption{Hybrid algorithm with an optional PHA stage}
+\label{alg:hybrid}
+\begin{algorithmic}[1]
+\Require random-field model, fixed wells, cost coefficients, $\alpha$,
+         $M_{\mathrm{coarse}}$, $M_{\mathrm{fine}}$, tolerances
+\Ensure policy $\qq^\star$, out-of-sample certificate, run manifest
+\State Generate training and test archives; freeze seeds and $N_{KL}$
+\State Precompute unit-rate flow responses; verify the forward model
+\State \textbf{Stage 1:} pattern search / CMA-ES on a coarse SAA with the
+       exact empirical chance constraint; keep the best candidates
+\State \textbf{Stage 2:} adjoint-based SAA refinement with CVaR or sigmoid
+       smoothing; multi-start from Stage 1
+\If{$M$ is large and scenario subproblems are parallelizable}
+  \State \textbf{Stage 3a:} run Rockafellar--Wets PHA with the
+         CVaR/Lagrangian chance-constraint layer; aggregate the scenario
+         policies
+\EndIf
+\If{a validated FNO/POD surrogate is available}
+  \State \textbf{Stage 3b:} run surrogate-PHA or surrogate-SAA; validate the
+         candidate with the FV model; add active scenarios and retrain if the
+         decision error exceeds tolerance
+\EndIf
+\State \textbf{Stage 4:} evaluate $\qq^\star$ on the test archive; compute
+       $\hat J_{\mathrm{test}}$, $\hat p_{\mathrm{test}}$,
+       $\widehat{\CVaR}_{\mathrm{test}}$, and confidence intervals
+\State Repeat the SAA with $K$ independent seeds; report the best policy and
+       the spread
+\State \Return $\qq^\star$, metrics, figures, and \texttt{run\_config.json}
+\end{algorithmic}
+\end{algorithm}
+
+% ======================================================================
+\section{Verification and diagnostics}
+\label{sec:verification}
+
+The following checks are the minimum for a trustworthy stochastic optimization
+run.  They are cheap compared with the optimization itself and catch most of
+the mistakes that produce an apparently good but unreliable policy.
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Adjoint gradient check.}  On a smooth test problem (one well,
+        homogeneous $K$, no chance constraint), compare the adjoint gradient
+        with a central finite difference for several random directions and
+        step sizes.  A relative error below $10^{-4}$ in double precision is
+        the acceptance gate.  If it fails, stop and fix the adjoint, the
+        boundary conditions, or the well regularization.
+  \item \textbf{SAA replication.}  Solve $K$ independent SAA problems with the
+        same $M$ but different seeds.  Report the best objective, the mean,
+        and the spread.  A large spread means $M$ is too small or the problem
+        is too nonconvex for a single run.
+  \item \textbf{Out-of-sample reliability.}  Evaluate the policy on an
+        independent test archive.  The empirical compliance probability must
+        meet $1-\alpha$ within the Monte Carlo error; report a confidence
+        interval, not only a point estimate.
+  \item \textbf{PHA consensus diagnostics.}  Plot the consensus residual
+        $\max_m\norm{\qq^{k,m}-\qq^k}$, the multiplier norm, and the
+        aggregated objective versus iteration.  A stalled residual with a
+        growing multiplier norm indicates a bad penalty or an infeasible
+        chance-constraint layer.
+  \item \textbf{PHA vs deterministic equivalent.}  On a small convex toy
+        problem (or a linearized version of the remediation problem), verify
+        that PHA converges to the same objective as the direct SAA NLP.  This
+        validates the implementation before using PHA on the nonconvex
+        problem.
+  \item \textbf{Surrogate decision error.}  Compare the surrogate-recommended
+        policy with its high-fidelity evaluation on the decision-relevant
+        metrics (cost, reliability, cleanup time, extracted mass), not only on
+        the field error.
+  \item \textbf{Sensitivity.}  Vary $M$, $N_{KL}$, the penalty $r$, the
+        smoothing parameter $\varepsilon_s$, and the chance-constraint level
+        $\alpha$.  Report how the policy and the reliability change.  A policy
+        that is only good at one setting is not robust.
+\end{enumerate}
+
+% ======================================================================
+\section{Summary and decision guide}
+\label{sec:summary}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Start with SAA + adjoint + L-BFGS-B/SQP.}  It is the simplest
+        method that uses the structure of the problem and gives exact local
+        gradients.  Use CVaR or sigmoid smoothing for the chance constraint,
+        with a continuation in the smoothing parameter.
+  \item \textbf{Use Rockafellar--Wets PHA when scenario decomposition is the
+        bottleneck.}  It is the natural algorithm for large $M$, parallel
+        scenario subproblems, and a separable expected-cost objective.  For
+        chance constraints, combine it with a CVaR/Lagrangian layer or the
+        mixed-integer reliability formulation, and validate the consensus
+        policy out of sample.
+  \item \textbf{Use derivative-free methods for small $N_q$ and nonsmooth
+        chance constraints.}  Pattern search, CMA-ES, and Bayesian
+        optimization are robust exploration tools; they are not scalable to
+        many wells or many periods.
+  \item \textbf{Use a surrogate when the FV solve is the bottleneck.}  The FNO
+        or a POD model makes PHA and SAA affordable at large $M$; pair it with
+        a trust region, active learning, and a high-fidelity certificate.
+  \item \textbf{Use stochastic gradient methods for very large or online
+        scenario streams.}  They scale well but need variance reduction and a
+        careful constraint layer.
+  \item \textbf{Always finish with an independent out-of-sample certificate.}
+        The SAA objective is not a reliability guarantee; the test archive,
+        multiple SAA replications, and the diagnostics in
+        Section~\ref{sec:verification} are what make the result credible.
+\end{enumerate}
+
+The recommended default for the first end-to-end run is therefore:
+\[
+\boxed{
+\text{coarse pattern search}
+\;\longrightarrow\;
+\text{adjoint SAA with CVaR/sigmoid}
+\;\longrightarrow\;
+\text{PHA or surrogate-PHA if }M\text{ is large}
+\;\longrightarrow\;
+\text{out-of-sample certificate.}
+}
+\]
+This sequence uses each algorithm where it is strongest and keeps a
+high-fidelity check at the end.
+
+% ======================================================================
+\appendix
+
+\section{PHA derivation details}
+\label{app:pha}
+
+The augmented Lagrangian \eqref{eq:pha-L} is the standard augmented Lagrangian
+for the constraints $\qq^m-\qq=0$ with multipliers $\pi_m\ww^m$ and penalty
+$\pi_m r$.  The aggregate step \eqref{eq:pha-q} follows from
+\begin{equation}
+\label{eq:pha-deriv}
+\nabla_{\qq}L_r
+=-\sum_{m=1}^{M}\pi_m\ww^m
+-r\sum_{m=1}^{M}\pi_m(\qq^m-\qq)=0,
+\end{equation}
+so
+\begin{equation}
+\label{eq:pha-deriv2}
+\qq=\sum_{m=1}^{M}\pi_m\qq^m
++\frac{1}{r}\sum_{m=1}^{M}\pi_m\ww^m,
+\end{equation}
+and the projection onto $\mathcal{Q}_{\mathrm{ad}}$ gives
+\eqref{eq:pha-aggregate}.  The multiplier update \eqref{eq:pha-w} is the
+standard dual ascent step for the same augmented Lagrangian.  If the
+multipliers are initialized at zero, the weighted sum of the multipliers
+remains zero:
+\begin{equation}
+\label{eq:pha-mult-sum}
+\sum_{m=1}^{M}\pi_m\ww^{k+1,m}
+=\sum_{m=1}^{M}\pi_m\ww^{k,m}
++r\sum_{m=1}^{M}\pi_m(\qq^{k+1,m}-\qq^{k+1})
+=\sum_{m=1}^{M}\pi_m\ww^{k,m},
+\end{equation}
+because $\qq^{k+1}=\sum_m\pi_m\qq^{k+1,m}$ when the projection is inactive.
+Hence the aggregate is the weighted average \eqref{eq:pha-average}.
+
+The PHA iteration is a Gauss--Seidel sweep on the augmented Lagrangian: first
+minimize over the consensus $\qq$, then over the scenario copies $\qq^m$, then
+update the multipliers.  The order can be reversed; the convergence theory is
+the same under the standard assumptions.
+
+\section{CVaR and chance-constraint equivalence}
+\label{app:cvar}
+
+For a random variable $Z$ and a confidence level $1-\alpha$, the CVaR is
+\begin{equation}
+\label{eq:app-cvar}
+\CVaR_{1-\alpha}(Z)
+=\min_{\eta\in\R}\left\{
+\eta+\frac{1}{\alpha}\E\bigl[(Z-\eta)_+\bigr]
+\right\}.
+\end{equation}
+The minimizer $\eta^\star$ is a $(1-\alpha)$-quantile of $Z$.  The key
+inequality is
+\begin{equation}
+\label{eq:app-cvar-ineq}
+\Prob(Z\le0)\ge1-\alpha
+\quad\Longleftarrow\quad
+\CVaR_{1-\alpha}(Z)\le0.
+\end{equation}
+Thus a CVaR-feasible policy satisfies the chance constraint, but the converse
+is false: CVaR controls the average of the worst $\alpha$ fraction, not only
+the probability of violation.  This is why the CVaR reformulation is
+conservative and why it is useful as a tractable surrogate when the chance
+constraint is nonsmooth.
+
+For the SAA, the empirical CVaR is
+\begin{equation}
+\label{eq:app-cvar-saa}
+\CVaR_{1-\alpha}^M(Z)
+=\min_{\eta}\left\{
+\eta+\frac{1}{\alpha M}\sum_{m=1}^{M}(Z_m-\eta)_+
+\right\},
+\end{equation}
+and the constraint $\CVaR_{1-\alpha}^M(G(\qq))\le0$ is equivalent to the
+existence of $\eta$ satisfying the inequality in \eqref{eq:cvar-saa}.  This is
+the form used in the PHA--CVaR hybrid of Section~\ref{sec:pha-chance}.
+
+\section{PHA convergence notes}
+\label{app:convergence}
+
+The convergence result in Proposition~\ref{prop:pha-convex} is the
+Rockafellar--Wets theorem for convex scenario problems.  The essential
+ingredients are:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item the scenario objectives are proper, closed, convex functions;
+  \item the feasible set is convex and closed;
+  \item a constraint qualification holds for the consensus constraints;
+  \item the augmented Lagrangian subproblems are solved exactly (or with
+        summable error).
+\end{enumerate}
+Under these conditions, the sequence of aggregates converges to an optimal
+solution and the multipliers converge to optimal dual variables.  For
+polyhedral scenario problems, finite convergence is possible but not
+guaranteed.
+
+For nonconvex problems, the standard result is local: if the iteration
+converges, it converges to a stationary point of the augmented Lagrangian
+under a constraint qualification and a second-order condition.  There is no
+general global guarantee, and the algorithm can cycle or stall.  Practical
+remedies are adaptive penalties, multiple starts, inexact inner solves with a
+summable accuracy schedule, and a final high-fidelity validation.
+
+% ======================================================================
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem[Benders(1962)]{benders1962}
+J.~F. Benders.
+Partitioning procedures for solving mixed-variables programming problems.
+\textit{Numerische Mathematik}, 4:238--252, 1962.
+
+\bibitem[Birge and Louveaux(2011)]{birge2011}
+J.~R. Birge and F.~Louveaux.
+\textit{Introduction to Stochastic Programming}.
+Springer, New York, 2nd edition, 2011.
+
+\bibitem[Conn et~al.(2009)]{conn2009}
+A.~R. Conn, K.~Scheinberg, and L.~N. Vicente.
+\textit{Introduction to Derivative-Free Optimization}.
+SIAM, Philadelphia, 2009.
+
+\bibitem[Hansen(2016)]{hansen2016}
+N.~Hansen.
+The CMA evolution strategy: A tutorial.
+arXiv:1604.00772, 2016.
+
+\bibitem[Kleywegt et~al.(2002)]{kleywegt2002}
+A.~J. Kleywegt, A.~Shapiro, and T.~Homem-de-Mello.
+The sample average approximation method for stochastic discrete optimization.
+\textit{SIAM Journal on Optimization}, 12(2):479--502, 2002.
+
+\bibitem[Nemirovski et~al.(2009)]{nemirovski2009}
+A.~Nemirovski, A.~Juditsky, G.~Lan, and A.~Shapiro.
+Robust stochastic approximation approach to stochastic programming.
+\textit{SIAM Journal on Optimization}, 19(4):1574--1609, 2009.
+
+\bibitem[Nocedal and Wright(2006)]{nocedal2006}
+J.~Nocedal and S.~J. Wright.
+\textit{Numerical Optimization}.
+Springer, New York, 2nd edition, 2006.
+
+\bibitem[Peherstorfer et~al.(2018)]{peherstorfer2018}
+B.~Peherstorfer, K.~Willcox, and M.~Gunzburger.
+Survey of multifidelity methods in uncertainty propagation, inference, and
+optimization.
+\textit{SIAM Review}, 60(3):550--591, 2018.
+
+\bibitem[Rockafellar and Uryasev(2000)]{rockafellar2000}
+R.~T. Rockafellar and S.~Uryasev.
+Optimization of conditional value-at-risk.
+\textit{Journal of Risk}, 2(3):21--41, 2000.
+
+\bibitem[Rockafellar and Wets(1991)]{rockafellar1991}
+R.~T. Rockafellar and R.~J.-B. Wets.
+Scenarios and policy aggregation in optimization under uncertainty.
+\textit{Mathematics of Operations Research}, 16(1):119--147, 1991.
+
+\bibitem[Shapiro et~al.(2009)]{shapiro2009}
+A.~Shapiro, D.~Dentcheva, and A.~Ruszczy\'nski.
+\textit{Lectures on Stochastic Programming: Modeling and Theory}.
+SIAM, Philadelphia, 2009.
+
+\bibitem[Shahriari et~al.(2016)]{shahriari2016}
+B.~Shahriari, K.~Swersky, Z.~Wang, R.~P. Adams, and N.~de~Freitas.
+Taking the human out of the loop: A review of Bayesian optimization.
+\textit{Proceedings of the IEEE}, 104(1):148--175, 2016.
+
+\bibitem[Van Slyke and Wets(1969)]{vanslyke1969}
+R.~M. Van Slyke and R.~J.-B. Wets.
+L-shaped linear programs with applications to optimal control and stochastic
+programming.
+\textit{SIAM Journal on Applied Mathematics}, 17(4):663--681, 1969.
+
+\bibitem[Watson and Woodruff(2011)]{watson2011}
+J.-P. Watson and D.~L. Woodruff.
+Progressive hedging innovations for a class of stochastic mixed-integer
+resource allocation problems.
+\textit{Computational Management Science}, 8(4):355--370, 2011.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,339 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage[round,numbers]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---------------------------------------------------------------- shortcuts
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\pdd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\pddt}[2]{\frac{\partial^{2} #1}{\partial #2^{2}}}
+\newcommand{\erfc}{\operatorname{erfc}}
+\newcommand{\Lpde}{\mathcal{L}_{\mathrm{PDE}}}
+\newcommand{\Lic}{\mathcal{L}_{\mathrm{IC}}}
+\newcommand{\Lbc}{\mathcal{L}_{\mathrm{BC}}}
+\newcommand{\Ldata}{\mathcal{L}_{\mathrm{data}}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+
+\title{Phase 1 Sandbox: One-Dimensional Advection--Dispersion Equation\\
+\large Mathematical formulation for PINN and FNO verification}
+\author{Groundwater Remediation Models}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document fixes the mathematical problem used to debug the physics-informed
+neural network (PINN) and Fourier neural operator (FNO) models. Following
+Phase~1 of the debugging plan, we strip the governing equation to one spatial
+dimension, remove reaction and heterogeneity, and compare the learned solution
+against the closed-form Ogata--Banks (1961) solution. Everything below is
+non-dimensionalized so that the residual is well scaled (this also anticipates
+the variable-scaling check in Phase~2).
+\end{abstract}
+
+\section{Governing equation and assumptions}
+\label{sec:governing}
+
+The starting point is the advection--dispersion equation (ADE) for a
+conservative (non-reactive, non-sorbing) solute in a one-dimensional,
+homogeneous, isotropic aquifer with steady, uniform flow:
+
+\begin{equation}
+\label{eq:ade_dim}
+\pdd{C}{t} + v\,\pdd{C}{x} \;=\; D\,\pddt{C}{x},
+\qquad (x,t)\in(0,L)\times(0,T],
+\end{equation}
+where
+\begin{itemize}
+  \item $C(x,t)$ \;[$\si{M.L^{-3}}$] is the dissolved solute concentration,
+  \item $v$ \;[$\si{L.T^{-1}}$] is the constant average linear (pore) velocity,
+  \item $D$ \;[$\si{L^{2}.T^{-1}}$] is the longitudinal hydrodynamic dispersion
+        coefficient $D=\alpha_L v + D_m$, with $\alpha_L$ the longitudinal
+        dispersivity and $D_m$ the effective molecular diffusion.
+\end{itemize}
+
+\paragraph{Phase 1 simplifications.} Compared with the full porous-media model:
+\begin{enumerate}
+  \item \textbf{One dimension only} --- transverse dispersion is discarded.
+  \item \textbf{Homogeneous \& isotropic} --- $v$ and $D$ are constant (no
+        heterogeneous conductivity field, no spatially varying retardation).
+  \item \textbf{No reaction / no sorption} --- the retardation factor $R=1$ and
+        the first-order decay rate $\lambda=0$, hence no source terms.
+\end{enumerate}
+
+\section{Initial and boundary conditions}
+\label{sec:bc}
+
+We model a clean aquifer invaded from the left by a step (continuous) injection
+of concentration $C_0$:
+
+\begin{subequations}
+\label{eq:icbc}
+\begin{align}
+C(x,0) &= 0, && x\in[0,L], \label{eq:ic}\\[2pt]
+C(0,t) &= C_0, && t>0, \label{eq:bc_in}\\[2pt]
+C(L,t) &= 0, && t>0. \label{eq:bc_out}
+\end{align}
+\end{subequations}
+Equation~\eqref{eq:bc_in} is a Dirichlet (first-type) inlet boundary and
+\eqref{eq:bc_out} a Dirichlet ``clean'' outlet. The outlet condition is exact in
+the limit of a semi-infinite domain; in the sandbox we choose $L$ (equivalently
+the final time $T$) large enough that the plume front stays well inside the
+domain, so that $C(L,t)\approx 0$ and the semi-infinite reference solution of
+Section~\ref{sec:analytical} applies to machine precision. The residual
+approximation error is quantified in Section~\ref{sec:verification}.
+
+\section{Non-dimensionalization}
+\label{sec:nondim}
+
+Introduce the dimensionless variables
+\begin{equation}
+\xi=\frac{x}{L},\qquad
+\tau=\frac{t\,v}{L}\quad(\text{pore volumes}),\qquad
+u=\frac{C}{C_0},
+\end{equation}
+and the \textbf{P\'eclet number}
+\begin{equation}
+\label{eq:pe}
+\mathrm{Pe}=\frac{vL}{D},
+\end{equation}
+which measures advective versus dispersive transport. Substitution into
+\eqref{eq:ade_dim} gives the dimensionless ADE
+\begin{equation}
+\label{eq:ade_nd}
+\boxed{\;
+\pdd{u}{\tau}+\pdd{u}{\xi}=\frac{1}{\mathrm{Pe}}\pddt{u}{\xi},
+\;}
+\qquad (\xi,\tau)\in(0,1)\times(0,\tau_{\max}],
+\end{equation}
+with $\tau_{\max}=Tv/L$, subject to
+\begin{equation}
+u(\xi,0)=0,\qquad u(0,\tau)=1,\qquad u(1,\tau)=0 .
+\label{eq:nd_bc}
+\end{equation}
+All quantities in \eqref{eq:ade_nd}--\eqref{eq:nd_bc} are $\mathcal{O}(1)$,
+which keeps the PINN residual well conditioned.
+
+\section{Analytical (reference) solution}
+\label{sec:analytical}
+
+For the semi-infinite problem with a step inlet, the classical solution
+\citep{ogata1961solution} is
+\begin{equation}
+\label{eq:ogata_nd}
+u_{\mathrm{ref}}(\xi,\tau)=
+\frac{1}{2}\left[
+\erfc\!\left(\frac{(\xi-\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\right)
++\;e^{\mathrm{Pe}\,\xi}\,
+\erfc\!\left(\frac{(\xi+\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\right)
+\right],
+\end{equation}
+or, in dimensional form,
+\begin{equation}
+\label{eq:ogata_dim}
+C_{\mathrm{ref}}(x,t)=
+\frac{C_0}{2}\left[
+\erfc\!\left(\frac{x-vt}{2\sqrt{Dt}}\right)
++\;e^{vx/D}\,
+\erfc\!\left(\frac{x+vt}{2\sqrt{Dt}}\right)
+\right].
+\end{equation}
+Equation~\eqref{eq:ogata_nd} is the ground truth used for the Phase~1 baseline
+test. Note that $u_{\mathrm{ref}}(0,\tau)=1$ and
+$\lim_{\xi\to\infty}u_{\mathrm{ref}}=0$, so it satisfies
+\eqref{eq:bc_in} exactly and \eqref{eq:bc_out} in the far-field limit.
+
+\section{PINN formulation}
+\label{sec:pinn}
+
+We approximate $u\approx u_\theta(\xi,\tau)$ with a feed-forward multilayer
+perceptron (MLP) $\theta\in\R^{n_\theta}$, with $\tanh$ activations in the hidden
+layers and a logistic (sigmoid) output so that the prediction is hard-bounded to
+$u\in(0,1)$, consistent with the normalized concentration. The PDE residual is
+\begin{equation}
+\label{eq:residual}
+\mathcal{R}_\theta(\xi,\tau)
+=\pdd{u_\theta}{\tau}+\pdd{u_\theta}{\xi}
+-\frac{1}{\mathrm{Pe}}\pddt{u_\theta}{\xi},
+\end{equation}
+computed exactly by automatic differentiation. The training objective is the
+composite loss
+\begin{equation}
+\label{eq:loss}
+\mathcal{L}(\theta)=
+\lambda_{\mathrm{PDE}}\,\Lpde(\theta)
++\lambda_{\mathrm{IC}}\,\Lic(\theta)
++\lambda_{\mathrm{BC}}\,\Lbc(\theta)
++\lambda_{\mathrm{data}}\,\Ldata(\theta),
+\end{equation}
+with
+\begin{align}
+\Lpde(\theta)&=\frac{1}{N_f}\sum_{i=1}^{N_f}
+\bigl|\mathcal{R}_\theta(\xi_i,\tau_i)\bigr|^{2},
+&&(\xi_i,\tau_i)\sim\mathcal{U}\bigl((0,1)\times(0,\tau_{\max})\bigr),
+\label{eq:Lpde}\\[4pt]
+\Lic(\theta)&=\frac{1}{N_{\mathrm{ic}}}\sum_{i=1}^{N_{\mathrm{ic}}}
+\bigl|u_\theta(\xi_i,0)-0\bigr|^{2},
+&&\xi_i\sim\mathcal{U}(0,1),
+\label{eq:Lic}\\[4pt]
+\Lbc(\theta)&=\frac{1}{N_{\mathrm{bc}}}\sum_{i=1}^{N_{\mathrm{bc}}}
+\Bigl(\bigl|u_\theta(0,\tau_i)-1\bigr|^{2}
++\bigl|u_\theta(1,\tau_i)-0\bigr|^{2}\Bigr),
+&&\tau_i\sim\mathcal{U}(0,\tau_{\max}).
+\label{eq:Lbc}
+\end{align}
+For the Phase~1 baseline the Dirichlet conditions are \emph{soft} constraints
+(penalized in \eqref{eq:Lbc}); hard (architectural) enforcement is deferred to
+Phase~2. The optional data term $\Ldata$ supervises against
+\eqref{eq:ogata_nd} at a few interior points when used as a sanity check, and is
+set to $\lambda_{\mathrm{data}}=0$ for the pure-physics baseline.
+
+\paragraph{Optimization.} Adam is used for the first $\sim\!10^4$--$2\times10^4$
+iterations (with collocation points re-sampled each step), followed by a short
+L-BFGS polish; this ordering is motivated in Phase~3 of the plan.
+
+\section{FNO formulation}
+\label{sec:fno}
+
+The FNO learns the \emph{solution operator} rather than a single trajectory.
+Writing the governing parameters as an input function $a$ and the concentration
+field as the output $u$, the operator to learn is
+\begin{equation}
+\mathcal{G}: a \;\longmapsto\; u,
+\qquad a=(\mathrm{Pe})\ \text{or}\ (v,D),
+\qquad u=u(\xi,\tau),
+\end{equation}
+discretized as
+\begin{equation}
+u_{j}^{n}\approx
+\mathcal{G}_\theta\!\bigl(a;\ \xi_j,\tau_n\bigr),\qquad
+j=0,\dots,N_x,\quad n=0,\dots,N_t .
+\end{equation}
+$\mathcal{G}_\theta$ is a Fourier neural operator
+\citep{li2020fourier}: a lifting MLP, $K$ spectral (Fourier) convolution layers
+in which the integral kernel is parameterized directly in frequency space with
+$k_{\max}$ retained modes, and a projection MLP. Phase~1 uses the synthetic
+dataset of Section~\ref{sec:data} (a family of ``hydrologies'' indexed by
+$(v,D)$) to train the operator in supervised mode against
+\eqref{eq:ogata_nd}; spectral-hyperparameter checks (number of modes, resolution
+invariance) are deferred to Phase~4.
+
+\section{Synthetic data generation}
+\label{sec:data}
+
+The reference generator produces a family of 1D transport scenarios
+(``hydrologies'') by sampling the physical parameters and evaluating
+\eqref{eq:ogata_dim} on a space--time grid:
+
+\begin{itemize}
+  \item \textbf{Scenario:} a tuple $(C_0,v,D,L,T)$ with fixed grid
+        $(N_x,N_t)$.
+  \item \textbf{Single-scenario output:} the full field
+        $C(x_i,t_n)$ plus the final-time snapshot $C(x_i,T)$.
+  \item \textbf{Dataset:} $N$ scenarios with $(v,D)$ drawn from prescribed
+        ranges; each sample stores the parameters and the corresponding
+        concentration field, which is exactly the supervised input/output format
+        required by the FNO in Section~\ref{sec:fno}.
+\end{itemize}
+
+\section{Verification metric}
+\label{sec:verification}
+
+The baseline passes if the PINN converges to the reference solution. The
+reported metric is the relative $L^2$ error over the domain,
+\begin{equation}
+\label{eq:metric}
+E_{\mathrm{rel}}
+=\frac{\norm{u_\theta-u_{\mathrm{ref}}}_{2}}{\norm{u_{\mathrm{ref}}}_{2}},
+\qquad
+\norm{f}_{2}^{2}=\frac{1}{N_x N_t}
+\sum_{j,n} f(\xi_j,\tau_n)^{2},
+\end{equation}
+evaluated on a fixed test grid independent of the training collocation points.
+A target of $E_{\mathrm{rel}}\lesssim 10^{-2}$ confirms the core architecture
+and loss formulation; failure indicates a bug in the residual/graph rather than
+in heterogeneity or dimensionality (Phase~2 onward).
+
+\paragraph{Corner singularity and the interior metric.}
+The step-inlet problem is discontinuous at the entrance corner
+$(\xi,\tau)=(0,0)$: the initial condition \eqref{eq:ic} imposes $u=0$ while the
+inlet boundary \eqref{eq:bc_in} imposes $u=1$. The reference solution
+\eqref{eq:ogata_nd} returns $u_{\mathrm{ref}}(0,0)=1$, whereas any continuous
+ansatz that honors the initial condition returns $0$ there. The pointwise error
+at the corner is therefore exactly $1$ and a thin band around it is
+contaminated; this is a metric artifact of the discontinuous problem, not a
+network or loss bug. We therefore always report a second, corner-excluded
+metric alongside the full-grid one,
+\begin{equation}
+\label{eq:metric_int}
+E_{\mathrm{rel}}^{\mathrm{int}}
+=\frac{\norm{u_\theta-u_{\mathrm{ref}}}_{2,\Omega_{\mathrm{int}}}}
+       {\norm{u_{\mathrm{ref}}}_{2,\Omega_{\mathrm{int}}}},\qquad
+\Omega_{\mathrm{int}}=\{(\xi,\tau): \xi>0.05,\ \tau>0.05\},
+\end{equation}
+which is the physically meaningful number for the interior plume.
+
+\section{Baseline results}
+\label{sec:results}
+
+The Phase~1 hard-BC ansatz (Section~\ref{sec:pinn})
+$u_\theta(\xi,\tau)=(1-\xi)s(\tau)+\xi(1-\xi)s(\tau)\,\mathrm{NN}_\theta(\xi,\tau)$
+with $s(\tau)=1-e^{-\tau/\varepsilon}$, $\varepsilon=10^{-3}$, attains
+\begin{equation}
+E_{\mathrm{rel}}=1.35\times10^{-2},\qquad
+E_{\mathrm{rel}}^{\mathrm{int}}=8.0\times10^{-3},
+\end{equation}
+so the interior error is below the $10^{-2}$ target while the full-grid number
+is dominated by the measure-zero corner discontinuity. The residual inspection
+(Phase~2) confirms that the PDE residual after training is concentrated at the
+inlet/corner band and is orders of magnitude smaller in the interior.
+
+\section{Baseline parameters}
+\label{sec:params}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+Symbol & Meaning & Value & Units \\
+\midrule
+$L$   & domain length        & $100$            & \si{m} \\
+$v$   & pore velocity        & $0.1$            & \si{m.d^{-1}} \\
+$D$   & dispersion           & $0.5$            & \si{m^{2}.d^{-1}} \\
+$C_0$ & inlet concentration  & $1$              & \si{mg.L^{-1}} \\
+$\mathrm{Pe}=vL/D$ & P\'eclet number & $20$ & -- \\
+$\tau_{\max}=Tv/L$ & final pore volumes & $0.5$ & -- \\
+\midrule
+$N_x,N_t$ & reference grid & $256\times 256$ & -- \\
+$N_f$   & PDE collocation points (per step) & $1500$ & -- \\
+$N_{\mathrm{ic}}$ & IC points & $150$ & -- \\
+$N_{\mathrm{bc}}$ & BC points & $150$ & -- \\
+\bottomrule
+\end{tabular}
+\caption{Phase 1 sandbox configuration. The outlet BC
+\eqref{eq:bc_out} is consistent with the semi-infinite reference solution
+because $\tau_{\max}=0.5$ keeps the front (centered at $\xi=\tau$) well inside
+the domain.}
+\label{tab:params}
+\end{table}
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+\bibitem{ogata1961solution}
+A. Ogata and R. B. Banks,
+\textit{A solution of the differential equation of longitudinal dispersion in
+porous media}, U.S. Geological Survey Professional Paper 411-A, 1961.
+\bibitem{li2020fourier}
+Z. Li, N. Kovachki, K. Azizzadenesheli, B. Liu, K. Bhattacharya, A. Stuart,
+A. Anandkumar, \textit{Fourier Neural Operator for Parametric Partial
+Differential Equations}, ICLR, 2021.
+\end{thebibliography}
+
+\end{document}

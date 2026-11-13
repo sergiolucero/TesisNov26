@@ -1,0 +1,16 @@
+.git
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+*.pyo
+*.log
+*.pid
+*.aux
+*.out
+*.pdf
+*.zip
+out/
+figs/
+*.npz
+app.log
+app.pid

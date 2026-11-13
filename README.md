@@ -1,3 +1,5 @@
+![Groundwater remediation visualization](assets/pics/visual1.jpeg)
+
 # TESIS — Physics-Informed Models for Groundwater Remediation
 
 Research code for verifying and scaling PINN/FNO surrogates for groundwater

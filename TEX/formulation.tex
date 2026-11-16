@@ -257,9 +257,20 @@ E_{\mathrm{rel}}
 \sum_{j,n} f(\xi_j,\tau_n)^{2},
 \end{equation}
 evaluated on a fixed test grid independent of the training collocation points.
-A target of $E_{\mathrm{rel}}\lesssim 10^{-2}$ confirms the core architecture
-and loss formulation; failure indicates a bug in the residual/graph rather than
-in heterogeneity or dimensionality (Phase~2 onward).
+A target of $E_{\mathrm{rel}}\lesssim 10^{-2}$ is the scale at which the core
+architecture and loss formulation are confirmed; a much larger error indicates
+a bug in the residual/graph rather than in heterogeneity or dimensionality
+(Phase~2 onward).
+
+\paragraph{Reporting policy: medians, not best runs.}
+Because training is stochastic, $E_{\mathrm{rel}}$ is a random variable. We
+therefore report its \emph{median} over $N\geq5$ seeds together with the
+interquartile range, and never a single run in isolation. Section~\ref{sec:results}
+shows why this is not pedantry: at fixed hyperparameters the metric spans more
+than an order of magnitude across seeds, so a single-run comparison can invert
+the sign of a real effect. A candidate variant counts as an improvement only if
+it beats the baseline median by more than the baseline IQR, evaluated on the
+same seeds (a paired comparison).
 
 \paragraph{Corner singularity and the interior metric.}
 The step-inlet problem is discontinuous at the entrance corner
@@ -285,15 +296,56 @@ which is the physically meaningful number for the interior plume.
 
 The Phase~1 hard-BC ansatz (Section~\ref{sec:pinn})
 $u_\theta(\xi,\tau)=(1-\xi)s(\tau)+\xi(1-\xi)s(\tau)\,\mathrm{NN}_\theta(\xi,\tau)$
-with $s(\tau)=1-e^{-\tau/\varepsilon}$, $\varepsilon=10^{-3}$, attains
-\begin{equation}
-E_{\mathrm{rel}}=1.35\times10^{-2},\qquad
-E_{\mathrm{rel}}^{\mathrm{int}}=8.0\times10^{-3},
-\end{equation}
-so the interior error is below the $10^{-2}$ target while the full-grid number
-is dominated by the measure-zero corner discontinuity. The residual inspection
-(Phase~2) confirms that the PDE residual after training is concentrated at the
-inlet/corner band and is orders of magnitude smaller in the interior.
+with $s(\tau)=1-e^{-\tau/\varepsilon}$, $\varepsilon=10^{-3}$.
+
+\paragraph{Seed variance dominates a single run.}
+Training is stochastic (collocation resampling and, most importantly, the
+initialization), so a single run does not characterize the method. Repeating
+the baseline over five seeds ($0$--$4$, identical hyperparameters) gives
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccccc}
+\toprule
+ & median & IQR & min & max & spread \\
+\midrule
+$E_{\mathrm{rel}}$ (full grid)      & $1.61\times10^{-2}$ & $2.18\times10^{-2}$ & $1.17\times10^{-2}$ & $8.14\times10^{-2}$ & $7.0\times$ \\
+$E_{\mathrm{rel}}^{\mathrm{int}}$ ($\Omega_{\mathrm{int}}$) & $1.42\times10^{-2}$ & $2.59\times10^{-2}$ & $6.64\times10^{-3}$ & $8.16\times10^{-2}$ & $12.3\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Phase~1 hard-BC baseline over five seeds. ``Spread'' is
+$\max/\min$. The distribution is right-skewed: the mean of the full-grid metric
+($3.19\times10^{-2}$) is twice its median, so median and IQR are reported
+rather than mean and standard deviation. Reproduce with
+\texttt{runs/sweeps/baseline\_n5} (harness: \texttt{SCRIPTS/seed\_sweep.py}).}
+\label{tab:baseline_seeds}
+\end{table}
+
+Two conclusions follow, and they supersede the single-run figures quoted in
+earlier drafts of this document.
+
+First, \textbf{the corner-excluded metric does not rescue the target}. The best
+seed reaches $E_{\mathrm{rel}}^{\mathrm{int}}=6.64\times10^{-3}$, comfortably
+below $10^{-2}$; the median ($1.42\times10^{-2}$) is not. Reporting the best run
+alone would therefore overstate the method. The measure-zero corner
+discontinuity of Section~\ref{sec:verification} is real and accounts for part of
+the gap between the two metrics, but it is not the whole story. Across the
+five seeds the two metrics are perfectly rank-correlated (Spearman
+$\rho=1$), so excluding the corner never reorders the runs, and the ratio
+$E_{\mathrm{rel}}^{\mathrm{int}}/E_{\mathrm{rel}}$ ranges from $0.57$ to
+$1.00$ --- on the worst seed the interior restriction removes essentially no
+error. Even in the interior the error therefore varies by more than an order of
+magnitude ($12.3\times$); the corner is a contributing artifact, not the
+governing one.
+
+Second, \textbf{run-to-run variance is now the dominant error source}, ahead of
+the loss-shaping refinements of Phase~3. A variant must beat the median by more
+than the IQR of
+Table~\ref{tab:baseline_seeds} to be considered an improvement. As a concrete
+example, causal $\tau$-ramped PDE weighting looked like a $32\%$ gain on seed
+$0$ but won only $2$ of $5$ paired seeds (median ratio $1.31$ in the wrong
+direction), so it is not adopted. All subsequent claims in this project are
+reported as a median over $N\geq5$ seeds with the spread alongside.
 
 \section{Baseline parameters}
 \label{sec:params}

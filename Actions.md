@@ -69,9 +69,19 @@ next.
 
 ## Next steps (continue here)
 
-- [ ] **Phase 1 wrap-up:** update `formulation.tex` metric section to report the
-      corner-excluded error alongside the full-grid error (document the
-      singularity), recompile PDF.
+- [x] **Phase 1 wrap-up:** `TEX/formulation.tex` §6 (Verification metric) now
+      states a reporting policy — median over N>=5 seeds with IQR, never a
+      single run — and §8 (Baseline results) replaced the single-run figures
+      (1.35e-2 / 8.0e-3) with the five-seed table: full-grid median **1.61e-2**
+      (IQR 2.18e-2, spread 7.0x), corner-excluded median **1.42e-2**
+      (IQR 2.59e-2, spread 12.3x). Corrects the earlier claim that the interior
+      target was met: only the best seed (6.64e-3) beats 1e-2, the median does
+      not. Adds the paired-comparison decision rule and the tau-ramp
+      counter-example. Verified: braces and environments balanced, all refs
+      resolve, Spearman rho=1 between the two metrics (interior/full ratio
+      0.57-1.00, so corner exclusion does not reorder or rescue the runs).
+      **Still to do on a TeX machine: `latexmk -pdf TEX/formulation.tex`** —
+      no LaTeX toolchain here, so `TEX/formulation.pdf` is stale until rebuilt.
 - [x] **Phase 2 residual inspection:** plotted |R(ξ,τ)| at initialization and
       after training. Full-grid trained max |R|=1e3 is at (0,0); interior mean
       |R|=2.08e-2 with no interior spikes. Figures: `out/residual/*.png`.

@@ -24,7 +24,7 @@ next.
 | `hydrology.py` | Synthetic 1D ADE data generator (Ogata–Banks 1961) | works, verified |
 | `solve_1d_pinn.py` | PINN baseline solver (soft/hard BC, Adam + L-BFGS, config/manifests, checkpoint/resume, batching, tau-ramp) | working |
 | `out/scenario.npz` | Single scenario (Pe=20, tau_max=0.5, 256×256) | generated |
-| `out/dataset.npz` | 32-scenario FNO dataset (v∈[0.05,0.5], D∈[0.1,2.0], 128×128) | generated |
+| `out/dataset.npz` | FNO dataset — **as generated: 10 scenarios, 50×100 grid** (v∈[0.05,0.5], D∈[0.1,2.0]); earlier notes saying 32/128×128 were wrong | generated |
 | `out/pinn*/` | PINN runs: soft-BC, hard-BC variants, figures + `model.pt` | see run log |
 | `figs/*.png` | Data-generator demo figures | generated |
 
@@ -92,19 +92,37 @@ next.
       untested. See `runs/phase3_tau_ramp.json` for the raw numbers.
 - [ ] **Phase 3 optimizer:** extend the Adam→L-BFGS schedule (more L-BFGS on a
       fixed fine grid) and add gradient logging if we keep soft BCs.
-- [ ] **Phase 3 follow-up (seed-robustness):** the 7× spread at fixed settings
-      is now the dominant error source, ahead of loss-shaping tricks. Worth
-      pinning down before more architecture work: report median-of-N (N≥5)
-      everywhere, and consider seeded collocation annealing or an
-      ensemble/restart pick rather than chasing per-run minima.
-- [ ] **Phase 4 FNO:** train a Fourier neural operator on `out/dataset.npz`
-      (32 hydrologies), then test modes/resolution invariance/per-channel norm.
+- [x] **Phase 3 follow-up (seed-robustness): `SCRIPTS/seed_sweep.py`.** The 7×
+      spread at fixed settings was the dominant error source, ahead of
+      loss-shaping tricks. The harness runs any command across a seed range,
+      pulls one scalar per run out of that run's JSON manifest (`--metric
+      metrics.regions.full`), and reports **median / IQR / min-max** plus a
+      **paired** arm-vs-arm comparison on shared seeds. It refuses to compare
+      unpaired runs and prints the spread next to every median, so a claimed
+      improvement can be judged against the noise it must beat. Usage is in the
+      script's docstring; 17 unit tests in `tests/test_seed_sweep.py` (suite is
+      now 49 tests). **Policy: report median-of-N with N>=5 from now on; a
+      single-seed number is `preliminary` and must be labelled so.**
+- [ ] **Phase 3 follow-up (seed reduction):** knowing the spread exists is not
+      the same as shrinking it. Candidate fixes worth testing *with the
+      harness*: seeded collocation annealing (ramp collocation density in τ
+      rather than the loss weight), multi-restart pick (train k seeds, keep the
+      median-quality model), or an ensemble average at eval time. Each must
+      beat the 1.61e-2 median baseline by more than its IQR to count.
+- [ ] **Phase 4 FNO — currently broken, not merely untested.** `out/fno10`
+      reports rel L2 **0.973** (per-sample 0.803 / 1.143; >1.0 is worse than
+      predicting all zeros), on a test set of **2 samples**. The recorded
+      dataset facts were also wrong: `out/dataset.npz` holds **10 scenarios**
+      (not 32) at **50×100** (not 128×128). Before any GPU time: regenerate
+      >=32 scenarios, add a trivial-predictor baseline so "worse than zeros"
+      fails fast, and re-verify with `seed_sweep.py`. Also note `--save-model
+      True` produced a 3.7 MB file named `True` (now gitignored).
 
 ## Run log
 
 | Date | Command / action | Result | Notes |
 |---|---|---|---|
-| (prior) | generated `out/scenario.npz`, `out/dataset.npz` | ok | Pe=20 sandbox + 32 hydrologies |
+| (prior) | generated `out/scenario.npz`, `out/dataset.npz` | ok | Pe=20 sandbox; dataset actually 10 scenarios (not 32 — corrected) |
 | (prior) | compiled `formulation.tex` | ok | PDF at `formulation.pdf` |
 | (prior) | ran `solve_1d_pinn.py` once | figures only, error not logged | superseded |
 | today | soft-BC baseline, adam 12k + lbfgs 200 | rel L2 2.43e-2 | `out/pinn/` |

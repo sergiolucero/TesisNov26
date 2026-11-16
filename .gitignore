@@ -45,3 +45,6 @@ app.pid
 *.key
 *.pem
 .DS_Store
+
+# Tracked archive snapshots
+!ZIPS/**/*.zip

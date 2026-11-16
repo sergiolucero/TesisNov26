@@ -13,6 +13,7 @@ venv/
 # Generated data and run artifacts
 out/
 figs/
+do_results/
 *.npz
 *.pt
 *.pth

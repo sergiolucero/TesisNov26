@@ -64,6 +64,9 @@ json_str() {
 # Collect
 # --------------------------------------------------------------------------
 HOST=$(hostname 2>/dev/null || echo unknown)
+# The tailnet name is what NewPlan.md and the ACL policy refer to
+# (ubuntu-hub, do-relay, ...), and it can differ from the OS hostname.
+TS_HOST=""
 NOW=$(date -u +%FT%TZ)
 UPTIME=$(uptime -p 2>/dev/null || echo unknown)
 LOAD=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo "? ? ?")
@@ -76,21 +79,27 @@ TS_INSTALLED=0
 TS_IP=""
 TS_UP=0
 TS_TAGS=""
+TS_HOST=""
 if have tailscale; then
   TS_INSTALLED=1
   TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
   [[ -n "$TS_IP" ]] && TS_UP=1
-  # Tags come from the control plane; absent/empty means the node is untagged,
-  # which matters for the fleet-acl.hujson policy (NewPlan.md §6).
-  TS_TAGS=$(tailscale status --json 2>/dev/null | python3 -c '
+  # Tags and the tailnet hostname come from the control plane. Tags matter for
+  # the fleet-acl.hujson policy (NewPlan.md §6); the tailnet hostname is what
+  # that policy and the docs refer to (ubuntu-hub, do-relay, ...), which can
+  # differ from the OS hostname.
+  ts_self=$(tailscale status --json 2>/dev/null | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
-    sys.exit(0)
-for t in (d.get("Self") or {}).get("Tags") or []:
-    print(t)
-' 2>/dev/null | tr '\n' ' ' | sed 's/ *$//' || true)
+    d = {}
+s = d.get("Self") or {}
+print(",".join(s.get("Tags") or []))
+print(s.get("HostName") or "")
+' 2>/dev/null || true)
+  TS_TAGS=$(printf '%s\n' "$ts_self" | sed -n 1p)
+  TS_HOST=$(printf '%s\n' "$ts_self" | sed -n 2p)
 fi
 
 HERDR_INSTALLED=0
@@ -180,7 +189,10 @@ fi
 # --------------------------------------------------------------------------
 if [[ "$JSON" == "0" ]]; then
   printf 'fleet status  %s\n' "$NOW"
-  printf '  host: %s%s\n' "$HOST" "${ROLE:+  role: $ROLE}"
+  printf '  host: %s%s\n' "${TS_HOST:-$HOST}" "${ROLE:+  role: $ROLE}"
+  if [[ -n "$TS_HOST" && "$TS_HOST" != "$HOST" ]]; then
+    printf '  os hostname: %s (tailnet name differs)\n' "$HOST"
+  fi
   printf '  uptime: %s   load: %s   mem available: %s MB   disk used: %s%%\n' \
     "$UPTIME" "$LOAD" "$MEM_AVAIL_MB" "$DISK_PCT"
   echo
@@ -275,7 +287,8 @@ for i in "${!JOBS_FOUND[@]}"; do
 done
 
 printf '{'
-printf '"host":%s,' "$(json_str "$HOST")"
+printf '"host":%s,' "$(json_str "${TS_HOST:-$HOST}")"
+printf '"os_hostname":%s,' "$(json_str "$HOST")"
 printf '"role":%s,' "$(json_str "$ROLE")"
 printf '"time":%s,' "$(json_str "$NOW")"
 printf '"uptime":%s,' "$(json_str "$UPTIME")"

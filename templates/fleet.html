@@ -131,6 +131,9 @@
           <h2>Host</h2>
           <dl>
             <dt>host</dt><dd>{{ snapshot.host }}</dd>
+            {% if snapshot.os_hostname and snapshot.os_hostname != snapshot.host %}
+            <dt>os host</dt><dd>{{ snapshot.os_hostname }}</dd>
+            {% endif %}
             <dt>uptime</dt><dd>{{ snapshot.uptime }}</dd>
             <dt>load</dt><dd>{{ snapshot.load }}</dd>
             <dt>mem free</dt><dd>{{ snapshot.mem_available_mb }} MB</dd>

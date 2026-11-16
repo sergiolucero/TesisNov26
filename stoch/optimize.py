@@ -7,8 +7,9 @@ weight should be increased in continuation if the final policy is infeasible.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 from scipy.optimize import minimize
@@ -162,8 +163,15 @@ def pattern_search(
     tol: float = 1e-3,
     max_iter: int = 80,
     max_evals: int = 2000,
+    progress: Optional[Callable[[dict], None]] = None,
 ) -> OptResult:
-    """Compass/coordinate pattern search with capacity projection."""
+    """Compass/coordinate pattern search with capacity projection.
+
+    ``progress`` is called once per outer iteration with a small dict (phase,
+    iteration, evaluations, step, best objective, elapsed seconds) so long
+    runs are visible in the log instead of going silent.
+    """
+    t0 = time.time()
     q0 = project_capacity(q0, problem.q_max, problem.Q_max)
     q = q0.copy()
     best = problem.objective(q)
@@ -171,6 +179,9 @@ def pattern_search(
     hist = [{"eval": 0, "f": best, "q": q.tolist()}]
     nit = 0
     evals = 1
+    if progress is not None:
+        progress({"phase": "search-start", "iteration": 0, "evals": evals,
+                  "step": step, "best": best, "elapsed": time.time() - t0})
     while step > tol and nit < max_iter and evals < max_evals:
         improved = False
         for i in range(problem.n_wells):
@@ -192,6 +203,10 @@ def pattern_search(
         nit += 1
         if not improved:
             step *= 0.5
+        if progress is not None:
+            progress({"phase": "iter", "iteration": nit, "evals": evals,
+                      "step": step, "best": best,
+                      "elapsed": time.time() - t0})
     ev = problem.evaluate(q, keep=False)
     return OptResult(q=q, fun=best, nit=nit, method="pattern", history=hist,
                      metrics=ev.summary())
@@ -202,14 +217,19 @@ def slsqp_adjoint(
     q0: np.ndarray,
     max_iter: int = 100,
     ftol: float = 1e-8,
+    progress: Optional[Callable[[dict], None]] = None,
 ) -> OptResult:
     """SLSQP with the discrete-adjoint gradient and the capacity constraint."""
+    t0 = time.time()
     q0 = project_capacity(q0, problem.q_max, problem.Q_max)
     hist: list[dict] = []
 
     def fun(q):
         f = problem.objective(q, keep=True)
         hist.append({"eval": len(hist), "f": float(f), "q": np.asarray(q).tolist()})
+        if progress is not None and (len(hist) == 1 or len(hist) % 5 == 0):
+            progress({"phase": "eval", "evals": len(hist), "best": float(f),
+                      "elapsed": time.time() - t0})
         return f
 
     def jac(q):
@@ -236,6 +256,7 @@ def multi_start(
     n_starts: int = 5,
     method: str = "pattern",
     seed: int = 0,
+    progress: Optional[Callable[[dict], None]] = None,
     **kwargs,
 ) -> OptResult:
     """Random feasible starts, keep the best penalised objective."""
@@ -249,16 +270,23 @@ def multi_start(
             w = rng.random(problem.n_wells) + 0.1
             q0 = w / w.sum() * rng.uniform(0.2, 1.0) * problem.Q_max
         q0 = project_capacity(q0, problem.q_max, problem.Q_max)
+        if progress is not None:
+            progress({"phase": "start", "start": k + 1, "n_starts": n_starts})
         if method == "pattern":
-            kw = {k: v for k, v in kwargs.items()
-                  if k in ("step0", "tol", "max_iter", "max_evals")}
+            kw = {key: val for key, val in kwargs.items()
+                  if key in ("step0", "tol", "max_iter", "max_evals")}
+            kw["progress"] = progress
             r = pattern_search(problem, q0, **kw)
         elif method == "slsqp":
-            kw = {k: v for k, v in kwargs.items() if k in ("max_iter", "ftol")}
+            kw = {key: val for key, val in kwargs.items() if key in ("max_iter", "ftol")}
+            kw["progress"] = progress
             r = slsqp_adjoint(problem, q0, **kw)
         else:
             raise ValueError("method must be 'pattern' or 'slsqp'")
         results.append(r)
+        if progress is not None:
+            progress({"phase": "done", "start": k + 1, "n_starts": n_starts,
+                      "fun": float(r.fun), "nit": int(r.nit)})
         if best is None or r.fun < best.fun:
             best = r
     assert best is not None

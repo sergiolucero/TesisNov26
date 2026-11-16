@@ -73,8 +73,9 @@ OBSERVATIONS
   identical q* => identical result to the quick run is not yet available).
   Treat the full opt stage as a long run (overnight class) or reduce
   saa.M_train/M_test, optim.n_starts or optim.max_evals in the YAML.
-* run_optimization.py prints only at the end of a stage, so a long run looks
-  silent even with `-u`. Add progress prints before launching multi-hour runs.
+* `run_optimization.py` now logs stage timing and per-iteration optimizer
+  progress ([opt] lines), so a long run no longer looks silent; `fleet_status.sh`
+  shows the same job sentinels and the last log line.
 * Note the difference in well counts: --quick shrinks wells.n (4 wells,
   total 60 m3/d at --rate 0.3) versus the full config (9 wells, 135 m3/d).
 

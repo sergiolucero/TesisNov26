@@ -80,8 +80,16 @@ everything with `herdr server stop`. The hub role of
 `SCRIPTS/fleet_bootstrap.sh` performs the install idempotently (skip it with
 `--no-herdr`, or force it on another node with `--herdr`).
 
-> **Reboot behaviour:** `herdr server` is a foreground process. Until a systemd
-> user unit exists (see §9), start it once per boot on the hub.
+**Run it as a user service** so the hub survives logout and reboot. The unit
+lives in `SCRIPTS/herdr-server.service`; the bootstrap installs and enables it
+with `--systemd`:
+
+```bash
+./SCRIPTS/fleet_bootstrap.sh --role hub --systemd
+loginctl enable-linger "$USER"                        # survive logout
+systemctl --user status herdr-server.service
+systemctl --user restart herdr-server.service        # after config changes
+```
 
 ### C. Python environment (hub and CPU workers)
 
@@ -202,10 +210,16 @@ Run these from any tailnet node (or `surface-ctrl` over SSH):
 ```bash
 tailscale status                          # who is up, IPs, last seen
 sudo tailscale ping ubuntu-hub            # path check (direct vs DERP)
+./SCRIPTS/fleet_status.sh                 # one-shot health snapshot
+./SCRIPTS/fleet_status.sh --json          # same, for scripts/dashboards
 ./SCRIPTS/fleet_bootstrap.sh --verify     # tailnet + herdr, role-aware
 herdr status                              # server, socket, update state
 ssh ubuntu-hub 'df -h; free -h; uptime'   # capacity before a heavy run
 ```
+
+`fleet_status.sh` reports host/load/disk, Tailscale, Herdr, repo state, and
+job sentinels; it exits non-zero on a failed sentinel, a down tailnet, or
+disk ≥ 95%. Pass `--role hub` on the hub so a stopped Herdr server is flagged.
 
 Expected runtime envelope on the 1 vCPU hub container (`RUNTIMES.txt`): unit
 suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
@@ -272,6 +286,13 @@ suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
 | PINN/FNO training, residual sweeps | Colab T4, else DO GPU | needs CUDA, ephemeral is cheapest |
 | LaTeX compile + public preview | `do-relay` | always-on, HTTPS, external access |
 | Editing, review, monitoring | `surface-ctrl` | mobile, no compute |
+| 2.5D axisymmetric PINN (smoke) | `ubuntu-hub`, then Colab | `N_r ~ 5×10⁴`, hours on CPU |
+| Full 3D PINN / FNO3d | **rented GPU only** (24–80 GB) | `3D_plan.md`: 1–10 days, 50 GB–2 TB |
+
+**3D decision (from `3D_plan.md`).** Start with the 2.5D axisymmetric bridge and
+run its smoke tests on the hub; full 3D training does not fit the hub's CPU or
+memory and belongs on a rented 24–80 GB GPU (DO GPU size or Colab Pro) after
+the 2D gates are green. Never queue a 3D run on `ubuntu-hub`.
 
 Rule of thumb: if a run needs a GPU or more than ~10 minutes, it does not run
 on the hub.
@@ -280,13 +301,16 @@ on the hub.
 
 ## 9. Open Items
 
-- [ ] systemd user unit for `herdr server` so the hub survives reboot
+- [x] systemd user service for `herdr server` (`SCRIPTS/herdr-server.service`,
+      installed with `--systemd`, lingering enabled on the hub)
+- [x] `SCRIPTS/fleet_status.sh`: tailnet + Herdr + repo + sentinels + disk,
+      with `--json` and a failing exit code
+- [x] progress lines in `run_optimization.py` and `stoch/optimize.py` (stage
+      timing + per-iteration pattern-search/SLSQP updates)
+- [x] 3D/2.5D placement decided in §8 (2.5D on the hub first, full 3D on a
+      rented GPU only)
 - [ ] tailnet ACL: tag `server:hub`, `server:relay`, `client:surface`, deny
       server-to-server except SSH from the hub
-- [ ] `SCRIPTS/fleet_status.sh`: one command aggregating tailnet + Herdr +
-      sentinels + disk for the tablet
-- [ ] progress prints in `run_optimization.py` before the long `--stage opt`
-      (it is silent for hours today; see `RUNTIMES.txt`)
-- [ ] decide 3D/2.5D placement (hub vs DO GPU) once `3D_plan.md` gates land
+- [ ] wire `fleet_status.sh --json` into the relay dashboard / tablet view
 - [ ] rotate the DO token and store it in the password manager; audit
       `deploy_do.sh` excludes before the next burst run

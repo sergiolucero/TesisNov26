@@ -33,17 +33,21 @@
 #   --no-ssh         do not enable Tailscale SSH
 #   --herdr          install Herdr (default: only on --role hub)
 #   --no-herdr       skip the Herdr install
+#   --systemd        install + enable the Herdr user service (hub only)
 #   --dry-run        print the commands instead of running them
 #   --verify         only report status; change nothing
 #   -h, --help       this text
 
 set -Eeuo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
 ROLE="hub"
 HOSTNAME_ARG=""
 AUTHKEY="${TS_AUTHKEY:-}"
 ENABLE_SSH=1
 HERDR_MODE=auto   # auto | yes | no; auto = yes only for the hub
+SYSTEMD=0         # 1 = install the Herdr user service
 DRY_RUN=0
 VERIFY=0
 
@@ -76,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --no-ssh)    ENABLE_SSH=0; shift ;;
     --herdr)     HERDR_MODE=yes; shift ;;
     --no-herdr)  HERDR_MODE=no; shift ;;
+    --systemd)   SYSTEMD=1; shift ;;
     --dry-run)   DRY_RUN=1; shift ;;
     --verify)    VERIFY=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -223,6 +228,35 @@ if [[ "$HERDR_MODE" == "yes" ]]; then
   fi
 else
   log "herdr: skipped (role=$ROLE; use --herdr to install)"
+fi
+
+# --------------------------------------------------------------------------
+# 3b. Herdr user service (hub only)
+# --------------------------------------------------------------------------
+if [[ "$SYSTEMD" == "1" ]]; then
+  if [[ "$ROLE" != "hub" ]]; then
+    warn "--systemd targets the hub role; ignoring for role=$ROLE"
+  else
+    UNIT_SRC="$SCRIPT_DIR/herdr-server.service"
+    UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    if [[ ! -f "$UNIT_SRC" ]]; then
+      warn "unit template missing: $UNIT_SRC"
+    elif ! have systemctl; then
+      warn "systemctl not found; copy $UNIT_SRC to $UNIT_DIR manually"
+    else
+      log "installing Herdr user service in $UNIT_DIR"
+      run mkdir -p "$UNIT_DIR"
+      run cp "$UNIT_SRC" "$UNIT_DIR/herdr-server.service"
+      run systemctl --user daemon-reload
+      run systemctl --user enable --now herdr-server.service
+      if [[ "$DRY_RUN" != "1" ]]; then
+        systemctl --user --no-pager status herdr-server.service 2>&1 | head -6 || true
+        if ! loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+          warn "enable lingering so the service survives logout: loginctl enable-linger $(id -un)"
+        fi
+      fi
+    fi
+  fi
 fi
 
 # --------------------------------------------------------------------------

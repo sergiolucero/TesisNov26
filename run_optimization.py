@@ -53,6 +53,11 @@ from stoch.wells import place_wells, plume_mask
 HERE = Path(__file__).resolve().parent
 
 
+def log(msg: str) -> None:
+    """Timestamped, flushed progress line (long runs must never look dead)."""
+    print(f"[opt] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
@@ -325,6 +330,7 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     t0 = time.time()
     outdir = ensure_dir(outdir)
     ensure_dir(outdir / "figures")
+    log(f"start: out={outdir} stages={sorted(stages)}")
     grid = make_grid(cfg)
     aq = base_aquifer(cfg, grid)
     kl = make_kl(cfg, grid)
@@ -340,9 +346,13 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     write_manifest(outdir / "run_config.json", cfg)
 
     # ---- O0: design plume and wells -----------------------------------
+    t_stage = time.time()
+    log("stage O0: deterministic forward checks and well layout")
     Cmean, mask, layout = design_plume(cfg, grid, kl, gen, fwd)
     o0 = stage_o0(cfg, outdir, grid, {})
     metrics["stages"]["O0"] = o0
+    log(f"stage O0 done in {time.time() - t_stage:.1f}s "
+        f"({layout.n_wells} wells, {layout.method})")
 
     # layout figure uses the mean design field
     Kmean = np.mean([gen.sample(9000 + k).K for k in range(5)], axis=0)
@@ -369,24 +379,58 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     test_scen = [gen.sample(s) for s in seeds_te]
 
     if "o1" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O1: random-field archive and statistics")
         metrics["stages"]["O1"] = stage_o1(cfg, outdir, grid, aq, gen, fwd, layout)
+        log(f"stage O1 done in {time.time() - t_stage:.1f}s")
 
     train = Archive(grid, aq, layout.wells, train_scen, fwd)
     test = Archive(grid, aq, layout.wells, test_scen, fwd)
+    log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test scenarios")
 
     if "o2" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O2: objective, cleanup time, SAA convergence")
         o2, ev_te = stage_o2(cfg, outdir, train, test, layout, cost, fwd)
         metrics["stages"]["O2"] = o2
+        log(f"stage O2 done in {time.time() - t_stage:.1f}s")
 
     if "o3" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O3: discrete-adjoint gradient check")
         metrics["stages"]["O3"] = stage_o3(cfg, outdir, train, cost)
+        log(f"stage O3 done in {time.time() - t_stage:.1f}s")
 
     if "o4" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O4: chance-constraint reformulations")
         metrics["stages"]["O4"] = stage_o4(cfg, outdir, train, cost)
+        log(f"stage O4 done in {time.time() - t_stage:.1f}s")
 
     # ---- SAA optimization ---------------------------------------------
     if "opt" in stages or "all" in stages:
         opt = cfg["optim"]
+        t_stage = time.time()
+        log(f"stage opt: method={opt['method']} starts={opt['n_starts']} "
+            f"max_iter={opt['max_iter']} max_evals={opt.get('max_evals', 2000)}")
+
+        def opt_progress(ev: dict) -> None:
+            phase = ev.get("phase")
+            if phase == "start":
+                log(f"opt start {ev['start']}/{ev['n_starts']}")
+            elif phase == "search-start":
+                log(f"  search: f={ev['best']:.6g} step={ev['step']:.3g}")
+            elif phase == "iter":
+                log(f"  iter {ev['iteration']:3d} evals={ev['evals']:5d} "
+                    f"step={ev['step']:.3g} best={ev['best']:.6g} "
+                    f"elapsed={ev['elapsed']:.1f}s")
+            elif phase == "eval":
+                log(f"  eval {ev['evals']:5d} f={ev['best']:.6g} "
+                    f"elapsed={ev['elapsed']:.1f}s")
+            elif phase == "done":
+                log(f"  start {ev['start']}/{ev['n_starts']} done: "
+                    f"f={ev['fun']:.6g} nit={ev['nit']}")
+
         problem = SAAProblem(
             train, cost,
             q_max=float(cfg["wells"]["q_max"]),
@@ -404,7 +448,9 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
             max_iter=int(opt["max_iter"]),
             max_evals=int(opt.get("max_evals", 2000)),
             seed=int(opt["seed"]),
+            progress=opt_progress,
         )
+        log(f"stage opt done in {time.time() - t_stage:.1f}s")
         q_star = result.q
         ev_tr = train.evaluate(q_star, cost, keep=True)
         ev_te = test.evaluate(q_star, cost, keep=True)

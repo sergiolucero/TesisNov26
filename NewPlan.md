@@ -246,6 +246,9 @@ suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
   `client-surface`, `worker`); do not keep default `autogroup:member` grants on
   servers. That file is a reviewed draft — ACLs live in the Tailscale control
   plane, so it is pasted into the admin console, never applied by the repo.
+  Tag a node with `sudo ./SCRIPTS/fleet-tag.sh --role <role> --yes`; note that
+  `tailscale set` cannot advertise tags, only `tailscale up` can, and `up`
+  requires the complete settings set (the script handles that).
 - **SSH:** key-based only (`~/.ssh/tesis_do_ed25519` for DO); no agent
   forwarding to ephemeral nodes.
 - **Tokens:** `DIGITALOCEAN_TOKEN`, DeepSeek keys, and HF tokens live in the
@@ -327,10 +330,13 @@ on the hub.
       rented GPU only)
 - [x] tailnet ACL drafted: `SCRIPTS/fleet-acl.hujson` tags `server-hub`,
       `server-relay`, `client-surface`, `worker` and denies server-to-server
-      except `server-hub → server-relay`; `fleet_status.sh` now reports each
-      node's tags (warn, not fail, so the staged rollout stays green).
-      **Remaining manual step:** paste it into the admin console and tag the
-      nodes — see the rollout order at the top of the file.
+      except `server-hub → server-relay`; `SCRIPTS/fleet-tag.sh` applies a tag
+      to one node (dry run by default, re-states the node's current settings
+      so `tailscale up` cannot silently reset them); `fleet_status.sh` reports
+      each node's tags (warn, not fail, so the staged rollout stays green).
+      **Remaining manual step:** paste the policy into the admin console, then
+      tag each node with `sudo ./SCRIPTS/fleet-tag.sh --role <role> --yes` —
+      see the rollout order at the top of `fleet-acl.hujson`.
 - [x] wire `fleet_status.sh --json` into the relay dashboard / tablet view:
       `app.py` route `/fleet` (`templates/fleet.html`) runs the probe with a
       15 s timeout and renders host/tailnet/Herdr/repo/sentinel/disk state

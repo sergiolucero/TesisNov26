@@ -8,22 +8,29 @@
 //    server-to-server except SSH from the hub"
 //
 // STATUS: DRAFT — review, then paste into the Tailscale admin console
-// (Access controls → Edit policy), or apply with `tailscale set --advertise-tags`
-// on each node after the tags below exist. Nothing in the repo applies this
+// (Access controls → Edit policy). Nothing in the repo applies this
 // automatically; ACLs are control-plane state, not code.
 //
 // Tailnet:  sergiolucero.github   (MagicDNS suffix: tail39daae.ts.net)
 // Docs:     https://tailscale.com/kb/1018/acls
 //
 // HOW TO ROLL THIS OUT WITHOUT LOCKING YOURSELF OUT
-//   1. Add the `tagOwners` + `tag` grants, save. Verify every node still
-//      reaches the hub (`tailscale ping`, `ssh`). Clients are unaffected
-//      because the default `autogroup:member` rule is still present.
-//   2. Tag the nodes:  sudo tailscale set --advertise-tags=tag:server-hub
-//      (re-authenticate if prompted). Tagged nodes lose their user identity,
-//      so do this while you still have SSH to them.
-//   3. Only then delete the transitional `autogroup:member` rules marked
-//      TRANSITIONAL below, one at a time, re-testing after each.
+//   See SCRIPTS/fleet-tag.sh for the per-node commands, and the rollout order
+//   in its header. In short:
+//     1. Paste this file (tagOwners + grants) into the admin console, save.
+//        It is additive: the TRANSITIONAL autogroup:member block below keeps
+//        every current path working, so nothing breaks yet.
+//     2. Tag ONE node at a time with `sudo tailscale up --advertise-tags=...`
+//        (see fleet-tag.sh), re-testing `tailscale ping` + `ssh` after each.
+//     3. Only after every node is tagged, delete the TRANSITIONAL block, one
+//        grant at a time, re-testing after each deletion.
+//
+// IMPORTANT — two gotchas this file used to get wrong:
+//   * `tailscale set` CANNOT advertise tags (no such flag on 1.104.x). Tags
+//     are set with `tailscale up --advertise-tags=...`.
+//   * `tailscale up` with any flag requires the COMPLETE set of settings; an
+//     unspecified flag that differs from the current value makes it error out.
+//     fleet-tag.sh therefore re-states this node's current settings explicitly.
 //
 // Tag naming: ACL tags must be lowercase alphanumeric plus hyphens — there is
 // no colon or slash. `server:hub` in NewPlan.md is written here as

@@ -33,7 +33,7 @@ uncertainty.
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
 | `app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
-| `SCRIPTS/` | Fleet bootstrap/status (`fleet_bootstrap.sh`, `fleet_status.sh`, `herdr-server.service`, `fleet-acl.hujson`) and helpers like `gh_setup.sh` |
+| `SCRIPTS/` | Fleet bootstrap/status/tagging (`fleet_bootstrap.sh`, `fleet_status.sh`, `fleet-tag.sh`, `herdr-server.service`, `fleet-acl.hujson`) and helpers like `gh_setup.sh` |
 | `NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
 | `TEX/` | LaTeX formulation and plans |
 | `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |

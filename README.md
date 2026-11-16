@@ -72,11 +72,14 @@ instructions.
 
 ## Acknowledgements
 
-This project was developed with assistance from the following AI tools.
+This project was developed with assistance from the AI tools and run on
+infrastructure and services from the platforms below.
+
+### AI tools
 
 <table>
   <tr>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
       <a href="https://gemini.google.com/">
         <img src="assets/logos/gemini.svg" alt="Google Gemini" width="64" height="64">
       </a>
@@ -85,7 +88,7 @@ This project was developed with assistance from the following AI tools.
       <br>
       Research assistance, code review, and documentation support.
     </td>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
       <a href="https://pi.dev/">
         <img src="assets/logos/pi.svg" alt="Pi coding agent" width="64" height="64">
       </a>
@@ -95,8 +98,44 @@ This project was developed with assistance from the following AI tools.
       <br>
       Implementation, testing, and repository maintenance.
     </td>
+    <td align="center" width="33%">
+      <a href="https://www.deepseek.com/">
+        <img src="assets/logos/deepseek.svg" alt="DeepSeek" width="64" height="64">
+      </a>
+      <br>
+      <a href="https://www.deepseek.com/"><strong>DeepSeek</strong></a>
+      <br>
+      Model assistance for code and analysis.
+    </td>
   </tr>
 </table>
 
-Gemini and Pi are trademarks of their respective owners; their logos are
-used here for identification only.
+### Platforms and services
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://www.digitalocean.com/">
+        <img src="assets/logos/digitalocean.svg" alt="DigitalOcean" width="64" height="64">
+      </a>
+      <br>
+      <a href="https://www.digitalocean.com/"><strong>DigitalOcean</strong></a>
+      <br>
+      Cloud droplets used for the remote 2D and optimization runs
+      (<code>deploy_do.sh</code>, <code>remote_run.sh</code>).
+    </td>
+    <td align="center" width="50%">
+      <a href="https://github.com/">
+        <img src="assets/logos/github.svg" alt="GitHub" width="64" height="64">
+      </a>
+      <br>
+      <a href="https://github.com/"><strong>GitHub</strong></a>
+      <br>
+      Version control, release archives, and the GitHub CLI
+      (<code>SCRIPTS/gh_setup.sh</code>).
+    </td>
+  </tr>
+</table>
+
+Gemini, Pi, DeepSeek, DigitalOcean, and GitHub are trademarks of their
+respective owners; their logos are used here for identification only.

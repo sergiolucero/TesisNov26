@@ -82,9 +82,23 @@ next.
       0.57-1.00, so corner exclusion does not reorder or rescue the runs).
       **Still to do on a TeX machine: `latexmk -pdf TEX/formulation.tex`** —
       no LaTeX toolchain here, so `TEX/formulation.pdf` is stale until rebuilt.
-- [x] **Phase 2 residual inspection:** plotted |R(ξ,τ)| at initialization and
-      after training. Full-grid trained max |R|=1e3 is at (0,0); interior mean
-      |R|=2.08e-2 with no interior spikes. Figures: `out/residual/*.png`.
+- [x] **Phase 2 residual inspection (re-derived + corrected):** re-ran seed 0
+      end-to-end (reproduced E_rel=1.4168e-2 exactly) and regenerated the
+      figures into `out/residual/` after they were lost. Trained interior mean
+      |R|=2.13e-2 (was 2.08e-2), inlet 3.98e-1, IC band 7.78e-1, corner 7.26e1.
+      Two corrections to the recorded conclusion:
+      (a) the max |R|=1e3 at (0,0) is **structural, not physical** — it equals
+      1/eps exactly, because the ansatz's s(tau)=1-exp(-tau/eps) contributes
+      u_tau = s'(tau) -> 1/eps. It is identical at init and after training and
+      identical for seeds 0/1/2, so no training can remove it; it is a metric
+      artefact like the corner discontinuity, not a residual. `inspect_residual.py`
+      now prints the 1/eps reference and the ratio (observed 1.000).
+      (b) "no interior spikes" holds, but the interior is **outlet-biased**:
+      mean |R| rises 16x with xi (1.5e-2 for xi<0.2 -> 2.5e-1 for xi>0.8 at
+      tau=0.5) and 20x with tau near the outlet (3.0e-3 at tau=0.1 ->
+      2.6e-1 at tau=0.5). Monotone, smooth, coincident with u->0 at the outlet
+      where the hard constraint pins u(1,tau)=0. Not a bug, but a trend the 2D
+      work should watch.
 - [x] **Portability basics:** added device/dtype, config manifest,
       checkpoint/resume + SIGTERM checkpointing, collocation batching and
       gradient accumulation, tau-ramped PDE weighting flag, Dockerfiles,

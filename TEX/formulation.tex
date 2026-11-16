@@ -189,9 +189,43 @@ with
 &&\tau_i\sim\mathcal{U}(0,\tau_{\max}).
 \label{eq:Lbc}
 \end{align}
-For the Phase~1 baseline the Dirichlet conditions are \emph{soft} constraints
-(penalized in \eqref{eq:Lbc}); hard (architectural) enforcement is deferred to
-Phase~2. The optional data term $\Ldata$ supervises against
+\paragraph{Soft versus hard boundary conditions (Phase 2).}
+In \eqref{eq:Lbc} the Dirichlet data enter as a penalty, which is a \emph{soft}
+constraint: the boundary error is only driven to zero as training proceeds, and
+the PDE and boundary terms compete for gradient budget. Phase~2 therefore moves
+to a \emph{hard} (architectural) ansatz that satisfies the initial condition and
+the outlet condition exactly and the inlet condition up to a short ramp,
+\begin{equation}
+\label{eq:hardbc}
+u_\theta(\xi,\tau)=(1-\xi)\,s(\tau)
++\xi(1-\xi)\,s(\tau)\,\mathrm{NN}_\theta(\xi,\tau),
+\qquad s(\tau)=1-e^{-\tau/\varepsilon},
+\end{equation}
+with $\varepsilon=10^{-3}$ (Phase~2 found $\varepsilon=10^{-4}$ unstable: too
+steep a ramp near $\tau=0$). Both terms of \eqref{eq:hardbc} carry the factor
+$s(\tau)$, so $u_\theta(\xi,0)=0$ for every $\xi$: the initial condition
+\eqref{eq:ic} holds identically. At $\xi=1$ the factor $(1-\xi)$ vanishes in both
+terms, so the outlet condition \eqref{eq:bc_out} also holds identically. Only the
+inlet is approximate: $u_\theta(0,\tau)=s(\tau)$, which equals $1$ only in the
+limit $\tau\gg\varepsilon$, recovering \eqref{eq:bc_in} away from the corner.
+
+\paragraph{A structural floor on the residual norm.}
+The ramp in \eqref{eq:hardbc} has a consequence that matters when reading
+residual diagnostics: since $s'(\tau)=e^{-\tau/\varepsilon}/\varepsilon$, we
+have $s'(0)=1/\varepsilon$, so
+\begin{equation}
+\label{eq:residual_floor}
+\max_{\xi,\tau}\bigl|\mathcal{R}_\theta\bigr|
+\;\gtrsim\;\frac{1}{\varepsilon}
+\end{equation}
+\emph{independently of the network weights}. Measured at the entrance corner,
+$|R|$ equals $1/\varepsilon$ to three digits at initialization and after
+training, and for every seed. This is a property of the ansatz, not a training
+failure, and no amount of optimization removes it. It is the residual-side
+analogue of the corner discontinuity in Section~\ref{sec:verification}: both say
+that a small set of points is structurally excluded from the error metric, which
+is why band-limited means (interior, inlet, inlet-adjacent) are reported
+instead of a global maximum. The optional data term $\Ldata$ supervises against
 \eqref{eq:ogata_nd} at a few interior points when used as a sanity check, and is
 set to $\lambda_{\mathrm{data}}=0$ for the pure-physics baseline.
 

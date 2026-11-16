@@ -1,0 +1,139 @@
+{
+  "_note": "Phase 3 tau-ramp sweep (see Actions.md). 5 paired seeds per arm, hard-BC eps=1e-3, adam 10000 + lbfgs 250, CPU-only. Values are relative L2 vs Ogata-Banks on a 256x256 grid.",
+  "host": "ubuntu-hub (1 CPU class, torch 2.14 CPU, 8 cores)",
+  "metric_keys": "full = whole grid; int = tau,xi>0.1 (interior); left = left boundary layer (tau>0, xi<0.05)",
+  "runs": [
+    {
+      "adam_steps": 10000,
+      "dir": "baseline",
+      "full": 0.014168157639931095,
+      "interior_0.1": 0.00830863630060291,
+      "lbfgs_steps": 250,
+      "left_layer": 0.016493641370468576,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 0,
+      "tau_ramp": false
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "b_s1",
+      "full": 0.035918556596744165,
+      "interior_0.1": 0.035161396661911606,
+      "lbfgs_steps": 250,
+      "left_layer": 0.009116595847713368,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 1,
+      "tau_ramp": false
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "b_s2",
+      "full": 0.01170979426170056,
+      "interior_0.1": 0.007107678271670839,
+      "lbfgs_steps": 250,
+      "left_layer": 0.010936713547135601,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 2,
+      "tau_ramp": false
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "base_s3",
+      "full": 0.08143936102659409,
+      "interior_0.1": 0.0839290362836841,
+      "lbfgs_steps": 250,
+      "left_layer": 0.013265952125615496,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 3,
+      "tau_ramp": false
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "base_s4",
+      "full": 0.016131634647147675,
+      "interior_0.1": 0.015342005690951267,
+      "lbfgs_steps": 250,
+      "left_layer": 0.007776156667665567,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 4,
+      "tau_ramp": false
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "rt02_p2",
+      "full": 0.01238915083619795,
+      "interior_0.1": 0.00809553435838264,
+      "lbfgs_steps": 250,
+      "left_layer": 0.01009892465208606,
+      "ramp_power": 2.0,
+      "ramp_tau": 0.02,
+      "seed": 0,
+      "tau_ramp": true
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "rt05_p1",
+      "full": 0.009574436513485867,
+      "interior_0.1": 0.004557644980272186,
+      "lbfgs_steps": 250,
+      "left_layer": 0.00449892451142999,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 0,
+      "tau_ramp": true
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "r_s1",
+      "full": 0.04709016410838265,
+      "interior_0.1": 0.04488035019410685,
+      "lbfgs_steps": 250,
+      "left_layer": 0.016234258805239515,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 1,
+      "tau_ramp": true
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "r_s2",
+      "full": 0.028396416478916907,
+      "interior_0.1": 0.025351864786929506,
+      "lbfgs_steps": 250,
+      "left_layer": 0.015647339905097993,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 2,
+      "tau_ramp": true
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "ramp_s3",
+      "full": 0.052563649789333367,
+      "interior_0.1": 0.052577792540271215,
+      "lbfgs_steps": 250,
+      "left_layer": 0.00977527554164284,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 3,
+      "tau_ramp": true
+    },
+    {
+      "adam_steps": 10000,
+      "dir": "ramp_s4",
+      "full": 0.03833666060908285,
+      "interior_0.1": 0.03532439582776395,
+      "lbfgs_steps": 250,
+      "left_layer": 0.02329450409404953,
+      "ramp_power": 1.0,
+      "ramp_tau": 0.05,
+      "seed": 4,
+      "tau_ramp": true
+    }
+  ]
+}

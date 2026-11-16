@@ -19,7 +19,7 @@ next.
 
 | File | Purpose | Status |
 |---|---|---|
-| `plan.md` | 4-phase debugging plan (1D sandbox → BC → optimizer → FNO) | Phase 1 ✓, Phase 2 ✓, Phase 3 tooling started |
+| `plan.md` | 4-phase debugging plan (1D sandbox → BC → optimizer → FNO) | Phase 1 ✓, Phase 2 ✓, Phase 3 tau-ramp run (negative) — see below |
 | `formulation.tex` / `.pdf` | Math formulation: dimensionless ADE, Ogata–Banks ref, PINN & FNO loss | compiled |
 | `hydrology.py` | Synthetic 1D ADE data generator (Ogata–Banks 1961) | works, verified |
 | `solve_1d_pinn.py` | PINN baseline solver (soft/hard BC, Adam + L-BFGS, config/manifests, checkpoint/resume, batching, tau-ramp) | working |
@@ -79,10 +79,24 @@ next.
       checkpoint/resume + SIGTERM checkpointing, collocation batching and
       gradient accumulation, tau-ramped PDE weighting flag, Dockerfiles,
       compose file, `.dockerignore`, and `runs/best_hardbc.json`.
-- [ ] **Phase 3 experiment:** run `--tau-ramp` and/or RAR to test whether the
-      corner band shrinks without hurting the interior metric.
+- [x] **Phase 3 experiment — tau-ramp: NEGATIVE RESULT.** 5 paired seeds per
+      arm (hard-BC `eps=1e-3`, Adam 10k + L-BFGS 250, CPU), recorded in
+      `runs/phase3_tau_ramp.json`. Seed 0 alone suggested a large win (full
+      1.42e-2 → 9.57e-3, interior 8.3e-3 → 4.6e-3), but it does **not
+      replicate**: ramp wins only 2/5 seeds, median ramp/base error ratio 1.31
+      (i.e. worse), permutation test p=0.38. The real story is that **seed
+      variance dominates**: the baseline alone ranges 1.17e-2 … 8.14e-2 (7×)
+      at fixed hyperparameters. Conclusion: tau-ramp does not reliably shrink
+      the corner band, and single-seed comparisons in this setup are
+      uninformative — any future claim needs a multi-seed median. RAR remains
+      untested. See `runs/phase3_tau_ramp.json` for the raw numbers.
 - [ ] **Phase 3 optimizer:** extend the Adam→L-BFGS schedule (more L-BFGS on a
       fixed fine grid) and add gradient logging if we keep soft BCs.
+- [ ] **Phase 3 follow-up (seed-robustness):** the 7× spread at fixed settings
+      is now the dominant error source, ahead of loss-shaping tricks. Worth
+      pinning down before more architecture work: report median-of-N (N≥5)
+      everywhere, and consider seeded collocation annealing or an
+      ensemble/restart pick rather than chasing per-run minima.
 - [ ] **Phase 4 FNO:** train a Fourier neural operator on `out/dataset.npz`
       (32 hydrologies), then test modes/resolution invariance/per-channel norm.
 
@@ -104,3 +118,4 @@ next.
 | today | installed Herdr 0.9.5 on the hub | ok | official installer → `/root/.local/bin/herdr`; `herdr server` + `herdr status` smoke-tested; hub role of `SCRIPTS/fleet_bootstrap.sh` now installs it (`--herdr`/`--no-herdr`), docs updated |
 | today | fleet tooling round 2 | green | added `SCRIPTS/fleet_status.sh` (human + `--json`, non-zero exit on failed checks), `SCRIPTS/herdr-server.service` + bootstrap `--systemd` (service enabled, lingering on), and `[opt]` stage/iteration progress in `run_optimization.py`/`stoch/optimize.py`; quick opt unchanged (q*=[0.1,0,0,9.38], 12.8 s) |
 | today | fleet dashboard (`NewPlan.md` §9) | JSON contract verified, routes checked | new `app.py` route `/fleet` + `templates/fleet.html`: shells out to `fleet_status.sh --json` (15 s timeout) and renders host/tailnet/Herdr/repo/sentinel/disk server-side (no JS, tablet-friendly); `/fleet?role=hub` flags a stopped Herdr server; probe failures (missing script, bad JSON, timeout) render a banner instead of a 500. Linked from `/` and `/plots`; docs in `README.md` + `NewPlan.md` §5/§7/§9. Could not boot Flask here (no flask/jinja on this laptop) — validated the JSON schema, all 22 template field refs, route/`url_for` wiring, and the three error paths against the real script; 32 unit tests still green |
+| today | Phase 3 tau-ramp sweep, 5 paired seeds per arm | NEGATIVE, artifact kept | seed 0 looked like a big win (full 1.42e-2→9.57e-3) but it does not replicate: ramp better on 2/5 seeds, median ramp/base ratio 1.31, permutation p=0.38. Baseline alone spans 1.17e-2…8.14e-2 at fixed settings, so seed variance dominates. Raw numbers in `runs/phase3_tau_ramp.json`; conclusion recorded in Next steps |

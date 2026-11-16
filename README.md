@@ -33,6 +33,7 @@ uncertainty.
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
 | `SCRIPTS/` | Helper and run scripts, including `gh_setup.sh` |
+| `NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
 | `TEX/` | LaTeX formulation and plans |
 | `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |
 | `optimization_plan.md` | Stochastic optimization execution plan |
@@ -136,6 +137,12 @@ infrastructure and services from the platforms below.
     </td>
   </tr>
 </table>
+
+### Orchestration
+
+[Herdr](https://herdr.dev) — terminal workspace manager for AI coding agents,
+used for the hub's persistent sessions (`NewPlan.md`,
+`SCRIPTS/fleet_bootstrap.sh`).
 
 Gemini, Pi, DeepSeek, DigitalOcean, and GitHub are trademarks of their
 respective owners; their logos are used here for identification only.

@@ -11,9 +11,9 @@
 #   colab-t4      ephemeral Colab GPU node         (run_colab.sh)
 #
 # The script only performs safe, repeatable actions: it installs Tailscale if
-# missing, joins the tailnet with the node's hostname, and prints the per-role
-# next step. It never touches experiment data and never runs the workloads
-# themselves.
+# missing, joins the tailnet with the node's hostname, installs Herdr on the
+# hub, and prints the per-role next step. It never touches experiment data and
+# never runs the workloads themselves.
 #
 # Usage:
 #   ./SCRIPTS/fleet_bootstrap.sh --role hub              # ubuntu-hub
@@ -31,6 +31,8 @@
 #   --hostname NAME  Tailscale hostname (default: role mapping below)
 #   --authkey KEY    Tailscale auth key (default: $TS_AUTHKEY)
 #   --no-ssh         do not enable Tailscale SSH
+#   --herdr          install Herdr (default: only on --role hub)
+#   --no-herdr       skip the Herdr install
 #   --dry-run        print the commands instead of running them
 #   --verify         only report status; change nothing
 #   -h, --help       this text
@@ -41,6 +43,7 @@ ROLE="hub"
 HOSTNAME_ARG=""
 AUTHKEY="${TS_AUTHKEY:-}"
 ENABLE_SSH=1
+HERDR_MODE=auto   # auto | yes | no; auto = yes only for the hub
 DRY_RUN=0
 VERIFY=0
 
@@ -71,6 +74,8 @@ while [[ $# -gt 0 ]]; do
     --hostname)  HOSTNAME_ARG=${2:-}; shift 2 ;;
     --authkey)   AUTHKEY=${2:-}; shift 2 ;;
     --no-ssh)    ENABLE_SSH=0; shift ;;
+    --herdr)     HERDR_MODE=yes; shift ;;
+    --no-herdr)  HERDR_MODE=no; shift ;;
     --dry-run)   DRY_RUN=1; shift ;;
     --verify)    VERIFY=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -87,9 +92,13 @@ case "$ROLE" in
 esac
 NODE_NAME=${HOSTNAME_ARG:-$DEFAULT_HOST}
 
+if [[ "$HERDR_MODE" == "auto" ]]; then
+  [[ "$ROLE" == "hub" ]] && HERDR_MODE=yes || HERDR_MODE=no
+fi
+
 OS=$(uname -s)
 
-log "role=$ROLE node=$NODE_NAME os=$OS dry_run=$DRY_RUN verify=$VERIFY"
+log "role=$ROLE node=$NODE_NAME os=$OS dry_run=$DRY_RUN verify=$VERIFY herdr=$HERDR_MODE"
 
 # --------------------------------------------------------------------------
 # Verify mode: report only
@@ -108,6 +117,14 @@ if [[ "$VERIFY" == "1" ]]; then
     warn "no tailnet IPv4; the node is not up"
   fi
   log "expected hostname for role '$ROLE': $DEFAULT_HOST (actual: $(hostname))"
+  if [[ "$HERDR_MODE" == "yes" ]]; then
+    if have herdr; then
+      log "herdr $(herdr --version 2>/dev/null | head -1)"
+      herdr status 2>&1 | head -8 || true
+    else
+      warn "herdr is not installed on $NODE_NAME (or not on PATH)"
+    fi
+  fi
   exit 0
 fi
 
@@ -184,13 +201,40 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Role-specific next step
+# 3. Herdr (hub orchestrator)
+# --------------------------------------------------------------------------
+if [[ "$HERDR_MODE" == "yes" ]]; then
+  if have herdr; then
+    log "herdr already installed: $(herdr --version 2>/dev/null | head -1)"
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    printf '[dry-run] would install herdr via https://herdr.dev/install.sh\n'
+  else
+    log "installing herdr (stable channel)"
+    if have curl; then
+      sh -c 'curl -fsSL https://herdr.dev/install.sh | sh'
+    else
+      warn "curl not found; install curl or see https://herdr.dev/tui/docs/install/"
+    fi
+    if have herdr; then
+      log "herdr installed: $(herdr --version 2>/dev/null | head -1)"
+    else
+      warn "herdr is not on PATH; add \$HOME/.local/bin to PATH and re-open the shell"
+    fi
+  fi
+else
+  log "herdr: skipped (role=$ROLE; use --herdr to install)"
+fi
+
+# --------------------------------------------------------------------------
+# 4. Role-specific next step
 # --------------------------------------------------------------------------
 case "$ROLE" in
   hub)
     cat <<'EOF'
 
 [fleet] next: hub duties
+  - orchestrator:       herdr            (TUI; starts/attaches the server)
+                        herdr status     (server and client state)
   - master bare repo:   git clone --bare <origin> ~/tesis.git
   - colab dispatch:     ./run_colab.sh  (sentinel /tmp/tesis-colab.done)
   - heavy CPU work:     python -u run_optimization.py --stage gates

@@ -25,3 +25,21 @@ Run on Ubuntu and DigitalOcean (install via MSI/winget on Windows Surface Pro: `
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up --hostname=$(hostname)
 ```
+
+### B. Install Herdr (`ubuntu-hub`, orchestrator)
+
+Herdr is the terminal workspace manager for the fleet's coding agents. Its
+background server keeps agent panes alive across SSH disconnects, so the hub
+can host the persistent `pi` sessions the other nodes attach to.
+
+```bash
+curl -fsSL https://herdr.dev/install.sh | sh   # installs to ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"           # add to ~/.bashrc or ~/.profile
+herdr --version                                # verify (stable channel)
+herdr server                                   # headless daemon on the hub
+```
+
+Check runtime state with `herdr status`; update with `herdr update`; stop
+everything with `herdr server stop`. The hub role of
+`SCRIPTS/fleet_bootstrap.sh` performs the install idempotently (skip it with
+`--no-herdr`, or force it on another node with `--herdr`).

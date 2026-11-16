@@ -10,6 +10,8 @@ next.
   `numpy 2.5.4`, `scipy 1.18.1`, `matplotlib 3.11.2`.
   - ⚠️ The default `python3` has **no torch**; always use `/root/base/bin/python3`.
 - Jupyter Lab entrypoint: `jl.sh` (`jupyter lab --ip=0.0.0.0 --allow-root`).
+- Orchestrator: Herdr 0.9.5, installed to `/root/.local/bin/herdr` (stable
+  channel); start with `herdr` (TUI) or `herdr server` (headless).
 - Working directory: `/root/TESIS`.
 - **Run discipline:** every training run is capped at 10 min via `timeout 600`.
 
@@ -99,3 +101,4 @@ next.
 | today | residual inspection on best model | Phase 2 closed | trained interior mean \|R\|=2.08e-2; spike confined to corner/inlet |
 | today | portability/code hardening | smoke-tested | checkpoint/resume, grad accumulation, tau-ramp, manifests, Docker/compose files |
 | today | fleet artifacts from `NewPlan.md` | dry-run + smoke | added `run_colab.sh` (Colab T4 entry point, sentinel `/tmp/tesis-colab.done`) and `SCRIPTS/fleet_bootstrap.sh` (idempotent Tailscale join, `--role hub\|relay\|surface\|colab`, `--dry-run`, `--verify`); `run_optimization.py --quick` re-run green in 11.9 s |
+| today | installed Herdr 0.9.5 on the hub | ok | official installer → `/root/.local/bin/herdr`; `herdr server` + `herdr status` smoke-tested; hub role of `SCRIPTS/fleet_bootstrap.sh` now installs it (`--herdr`/`--no-herdr`), docs updated |

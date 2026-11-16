@@ -75,10 +75,22 @@ DISK_PCT=$(df -Pk "$REPO" 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}' |
 TS_INSTALLED=0
 TS_IP=""
 TS_UP=0
+TS_TAGS=""
 if have tailscale; then
   TS_INSTALLED=1
   TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
   [[ -n "$TS_IP" ]] && TS_UP=1
+  # Tags come from the control plane; absent/empty means the node is untagged,
+  # which matters for the fleet-acl.hujson policy (NewPlan.md §6).
+  TS_TAGS=$(tailscale status --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for t in (d.get("Self") or {}).get("Tags") or []:
+    print(t)
+' 2>/dev/null | tr '\n' ' ' | sed 's/ *$//' || true)
 fi
 
 HERDR_INSTALLED=0
@@ -132,6 +144,12 @@ done
 # --------------------------------------------------------------------------
 if [[ "$TS_INSTALLED" == "1" && "$TS_UP" == "1" ]]; then :; else FAILS=$((FAILS + 1)); fi
 
+# Untagged nodes are a warning only: fleet-acl.hujson is rolled out in stages,
+# so an untagged node is expected until NewPlan.md §6 is complete.
+if [[ "$TS_INSTALLED" == "1" && "$TS_UP" == "1" && -z "$TS_TAGS" ]]; then
+  WARNS=$((WARNS + 1))
+fi
+
 if [[ "$HERDR_INSTALLED" == "0" ]]; then
   if [[ "$ROLE" == "hub" ]]; then FAILS=$((FAILS + 1)); else WARNS=$((WARNS + 1)); fi
 elif [[ "$HERDR_SERVER" != "running" && "$ROLE" == "hub" ]]; then
@@ -171,6 +189,8 @@ if [[ "$JSON" == "0" ]]; then
   if [[ "$TS_INSTALLED" == "1" ]]; then
     if [[ "$TS_UP" == "1" ]]; then ok "up, tailnet IPv4 $TS_IP"
     else fail "installed but not up (run: sudo tailscale up)"; fi
+    if [[ -n "$TS_TAGS" ]]; then ok "tags: $TS_TAGS"
+    else warn "untagged (see SCRIPTS/fleet-acl.hujson and NewPlan.md §6)"; fi
   else
     fail "not installed (run: SCRIPTS/fleet_bootstrap.sh --role ${ROLE:-hub})"
   fi
@@ -262,8 +282,8 @@ printf '"uptime":%s,' "$(json_str "$UPTIME")"
 printf '"load":%s,' "$(json_str "$LOAD")"
 printf '"mem_available_mb":%s,' "$(json_str "$MEM_AVAIL_MB")"
 printf '"disk_used_pct":%s,' "$(json_str "$DISK_PCT")"
-printf '"tailscale":{"installed":%s,"up":%s,"ipv4":%s},' \
-  "$TS_INSTALLED" "$TS_UP" "$(json_str "$TS_IP")"
+printf '"tailscale":{"installed":%s,"up":%s,"ipv4":%s,"tags":%s},' \
+  "$TS_INSTALLED" "$TS_UP" "$(json_str "$TS_IP")" "$(json_str "$TS_TAGS")"
 printf '"herdr":{"installed":%s,"version":%s,"server":%s},' \
   "$HERDR_INSTALLED" "$(json_str "$HERDR_VERSION")" "$(json_str "$HERDR_SERVER")"
 printf '"repo":{"git":%s,"path":%s,"branch":%s,"head":%s,"dirty":%s,"ahead":%s,"behind":%s},' \

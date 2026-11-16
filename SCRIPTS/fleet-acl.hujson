@@ -1,0 +1,158 @@
+// ============================================================================
+// fleet-acl.hujson — Tailscale access policy for the TESIS fleet
+// ============================================================================
+//
+// Implements the NewPlan.md §6 / §9 open item:
+//
+//   "tailnet ACL: tag server:hub, server:relay, client:surface, deny
+//    server-to-server except SSH from the hub"
+//
+// STATUS: DRAFT — review, then paste into the Tailscale admin console
+// (Access controls → Edit policy), or apply with `tailscale set --advertise-tags`
+// on each node after the tags below exist. Nothing in the repo applies this
+// automatically; ACLs are control-plane state, not code.
+//
+// Tailnet:  sergiolucero.github   (MagicDNS suffix: tail39daae.ts.net)
+// Docs:     https://tailscale.com/kb/1018/acls
+//
+// HOW TO ROLL THIS OUT WITHOUT LOCKING YOURSELF OUT
+//   1. Add the `tagOwners` + `tag` grants, save. Verify every node still
+//      reaches the hub (`tailscale ping`, `ssh`). Clients are unaffected
+//      because the default `autogroup:member` rule is still present.
+//   2. Tag the nodes:  sudo tailscale set --advertise-tags=tag:server-hub
+//      (re-authenticate if prompted). Tagged nodes lose their user identity,
+//      so do this while you still have SSH to them.
+//   3. Only then delete the transitional `autogroup:member` rules marked
+//      TRANSITIONAL below, one at a time, re-testing after each.
+//
+// Tag naming: ACL tags must be lowercase alphanumeric plus hyphens — there is
+// no colon or slash. `server:hub` in NewPlan.md is written here as
+// `tag:server-hub`.
+// ============================================================================
+
+{
+  // ------------------------------------------------------------------------
+  // Who may own/apply each tag.
+  //
+  // tagOwners is an *authorization* list, not an assignment: it decides who is
+  // allowed to advertise a tag. Assign the tag on the node itself with
+  // `tailscale set --advertise-tags=...` or from the admin console.
+  //
+  // The hub is deliberately the only owner of server tags, so a compromised
+  // laptop cannot relabel itself as a server.
+  // ------------------------------------------------------------------------
+  "tagOwners": {
+    "tag:server-hub":     ["autogroup:admin"],
+    "tag:server-relay":   ["autogroup:admin"],
+    "tag:client-surface": ["autogroup:admin"],
+    // Ephemeral Colab/DO workers: no inbound access at all, outbound only.
+    "tag:worker":         ["autogroup:admin"]
+  },
+
+  // ------------------------------------------------------------------------
+  // Grants. Tailscale prefers `grants` over the legacy `acls`; each grant is
+  // "src may reach dst on dst-ports" and implies no other capability.
+  //
+  // Ports used by this fleet (NewPlan.md §2, §5):
+  //   22   SSH (Tailscale SSH)
+  //   5001 app.py figure viewer + /fleet dashboard (run_app.sh)
+  //   80   do-relay Nginx → 443 redirect
+  //   443  do-relay Nginx TLS (LaTeX preview)
+  //   8888 Jupyter on do-relay
+  // ------------------------------------------------------------------------
+  "grants": [
+    // --- Humans administer servers -----------------------------------------
+    // Admin devices (your laptop/tablet via user identity) reach the hub and
+    // the relay on SSH. This is the rule that keeps you able to fix things.
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["tag:server-hub", "tag:server-relay"],
+      "ip":  ["22"]
+    },
+
+    // --- surface-ctrl drives the hub ---------------------------------------
+    // The tablet is a control plane: SSH + VS Code Remote-SSH to the hub, plus
+    // the dashboard so it can read fleet health.
+    {
+      "src": ["tag:client-surface"],
+      "dst": ["tag:server-hub"],
+      "ip":  ["22", "5001"]
+    },
+    // Tablet reaches the public preview hosted on the relay.
+    {
+      "src": ["tag:client-surface"],
+      "dst": ["tag:server-relay"],
+      "ip":  ["443"]
+    },
+
+    // --- hub → relay --------------------------------------------------------
+    // The hub publishes/compiles and dispatches: SSH for `docker compose`,
+    // latexmk and sending artifacts.
+    {
+      "src": ["tag:server-hub"],
+      "dst": ["tag:server-relay"],
+      "ip":  ["22", "80", "443", "8888"]
+    },
+
+    // --- workers phone home -------------------------------------------------
+    // Ephemeral Colab/DO workers may reach the hub (to report a sentinel, pull
+    // the repo). They get NO inbound grant: nothing may initiate to a worker.
+    {
+      "src": ["tag:worker"],
+      "dst": ["tag:server-hub"],
+      "ip":  ["22"]
+    },
+
+    // --- dashboard readers --------------------------------------------------
+    // Anyone on the tailnet may read fleet health from the hub (read-only page;
+    // it runs `fleet_status.sh`, which repairs nothing).
+    {
+      "src": ["autogroup:member"],
+      "dst": ["tag:server-hub"],
+      "ip":  ["5001"]
+    },
+
+    // --- TRANSITIONAL: remove after every node is tagged ---------------------
+    // Deliberately broad so step 1 of the rollout cannot lock you out. Delete
+    // these two blocks once §6 of NewPlan.md is satisfied; they are the
+    // "autogroup:member for servers" pattern the plan says not to keep.
+    {
+      "src": ["autogroup:member"],
+      "dst": ["tag:server-hub", "tag:server-relay"],
+      "ip":  ["22", "80", "443"]
+    }
+  ],
+
+  // ------------------------------------------------------------------------
+  // Explicitly denied paths.
+  //
+  // Tailscale is default-deny: a flow is allowed only if some grant matches,
+  // so "server-to-server except SSH from the hub" already holds when you
+  // delete the TRANSITIONAL block above. These entries document the intent so
+  // a future edit does not silently re-open them, and they pin the fact that
+  // the relay must never initiate to the hub (NewPlan.md §1: the hub alone
+  // runs the Herdr server and the bare repo).
+  //
+  // Tailscale SSH is NOT declared here on purpose: on this tailnet it is
+  // currently disabled (RunSSH=false) and the `ssh` section of an ACL needs
+  // control-plane validation we cannot run offline. Turn it on in the admin
+  // console (Machines → SSH) once the nodes are tagged, then consider adding
+  //   "ssh": [{ "action": "check", "src": ["autogroup:admin"],
+  //             "dst": ["tag:server-hub","tag:server-relay"],
+  //             "users": ["autogroup:nonroot"] }]
+  // The `grants` above already carry port 22; the ssh section only adds
+  // *session* semantics (check/accept) on top of the transport rule.
+  // ------------------------------------------------------------------------
+
+  // MagicDNS is enabled on this tailnet, so the hostnames in NewPlan.md
+  // (ubuntu-hub, do-relay, surface-ctrl) resolve without IPs. Set them with:
+  //   sudo tailscale up --hostname=ubuntu-hub     # or SCRIPTS/fleet_bootstrap.sh --role hub
+  //
+  // Autogroup note: `autogroup:self` (a user's own devices) is intentionally
+  // NOT used for servers. Do not add it to tag:server-* destinations — it is
+  // how a lost phone becomes a jump host. See NewPlan.md §6.
+  //
+  // `hosts` stays empty: every node gets a stable MagicDNS name, so no manual
+  // name→IP aliases are needed. Add entries only for hosts outside the tailnet.
+  "hosts": {}
+}

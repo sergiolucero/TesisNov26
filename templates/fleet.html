@@ -144,6 +144,15 @@
             <span class="pill ok">up</span>
             <dl style="margin-top:.6rem">
               <dt>IPv4</dt><dd>{{ snapshot.tailscale.ipv4 }}</dd>
+              <dt>tags</dt>
+              <dd>
+                {% if snapshot.tailscale.tags %}
+                  <span class="pill ok">{{ snapshot.tailscale.tags }}</span>
+                {% else %}
+                  <span class="pill warn">untagged</span>
+                  <span style="color:var(--muted)">see fleet-acl.hujson</span>
+                {% endif %}
+              </dd>
             </dl>
           {% elif snapshot.tailscale.installed %}
             <span class="pill fail">not up</span>

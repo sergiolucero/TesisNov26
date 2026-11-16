@@ -98,3 +98,4 @@ next.
 | today | error-location diagnostic on best model | corner band dominates | max err 1.0 @ (0,0) |
 | today | residual inspection on best model | Phase 2 closed | trained interior mean \|R\|=2.08e-2; spike confined to corner/inlet |
 | today | portability/code hardening | smoke-tested | checkpoint/resume, grad accumulation, tau-ramp, manifests, Docker/compose files |
+| today | fleet artifacts from `NewPlan.md` | dry-run + smoke | added `run_colab.sh` (Colab T4 entry point, sentinel `/tmp/tesis-colab.done`) and `SCRIPTS/fleet_bootstrap.sh` (idempotent Tailscale join, `--role hub\|relay\|surface\|colab`, `--dry-run`, `--verify`); `run_optimization.py --quick` re-run green in 11.9 s |

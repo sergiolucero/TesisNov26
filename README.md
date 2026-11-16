@@ -32,6 +32,7 @@ uncertainty.
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
+| `app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
 | `SCRIPTS/` | Fleet bootstrap/status (`fleet_bootstrap.sh`, `fleet_status.sh`, `herdr-server.service`) and helpers like `gh_setup.sh` |
 | `NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
 | `TEX/` | LaTeX formulation and plans |
@@ -54,6 +55,9 @@ python -u run_2d.py --quick
 
 # Stochastic optimization gates
 python -u run_optimization.py --config configs/opt/benchmark_small.yaml
+
+# Figure viewer + fleet dashboard (http://localhost:5001)
+./run_app.sh start        # / and /plots for figures, /fleet for node health
 ```
 
 On this machine use `/root/base/bin/python3`; the default `python3` has no

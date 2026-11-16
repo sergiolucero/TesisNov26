@@ -217,6 +217,17 @@ herdr status                              # server, socket, update state
 ssh ubuntu-hub 'df -h; free -h; uptime'   # capacity before a heavy run
 ```
 
+For the tablet view, `app.py` serves the same snapshot as a rendered page:
+
+```bash
+./run_app.sh start                        # http://<tailnet-ip>:5001
+curl -sf localhost:5001/fleet             # add ?role=hub on the hub
+```
+
+`/fleet` shells out to `fleet_status.sh --json` (15 s timeout) and renders it
+server-side, so it needs no JavaScript; a failed probe shows a banner rather
+than an error page.
+
 `fleet_status.sh` reports host/load/disk, Tailscale, Herdr, repo state, and
 job sentinels; it exits non-zero on a failed sentinel, a down tailnet, or
 disk ≥ 95%. Pass `--role hub` on the hub so a stopped Herdr server is flagged.
@@ -254,6 +265,8 @@ suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
 - [ ] `~/tesis.git` bare mirror cloned and fetchable
 - [ ] `run_optimization.py --stage gates` green (~74 s)
 - [ ] `app.py --port 5099` serves `/` (expect 200)
+- [ ] `./run_app.sh start` serves `/fleet` with `RESULT: healthy` or an
+expected warning banner
 
 **`do-relay`**
 
@@ -311,6 +324,10 @@ on the hub.
       rented GPU only)
 - [ ] tailnet ACL: tag `server:hub`, `server:relay`, `client:surface`, deny
       server-to-server except SSH from the hub
-- [ ] wire `fleet_status.sh --json` into the relay dashboard / tablet view
+- [x] wire `fleet_status.sh --json` into the relay dashboard / tablet view:
+      `app.py` route `/fleet` (`templates/fleet.html`) runs the probe with a
+      15 s timeout and renders host/tailnet/Herdr/repo/sentinel/disk state
+      server-side, so the tablet needs no JavaScript. `?role=hub` flags a
+      stopped Herdr server; a failed probe renders a banner instead of a 500.
 - [ ] rotate the DO token and store it in the password manager; audit
       `deploy_do.sh` excludes before the next burst run

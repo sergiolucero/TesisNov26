@@ -185,6 +185,58 @@ fraction of the cost — this is the number to use for the DO lane.
 Also note `--quick` (4 wells, 60 m³/d) and the full benchmark (9 wells,
 135 m³/d) are different problems; their `J` values are not comparable.
 
+### What `q*` actually does to the plume
+
+`q*` does not spread the pumping across the layout: it puts the entire budget on
+**1 of 9 wells** — index 0 at `(112.5, 51.2) m`, on the plume centreline, at
+**14.8 m³/d**. The other eight are shut in.
+
+Measured on test scenario 0 (`SCRIPTS/plot_policy_plume.py`, reproducible from
+`policy.json`):
+
+Averaged over the **80 held-out test scenarios** (not one scenario — the table
+is a median with IQR, in this project's house style):
+
+| quantity (80 test scenarios) | all wells off | under `q*` | change |
+| :--- | ---: | ---: | ---: |
+| peak concentration, median | 35.81 mg/L | 0.433 mg/L | **−98.7%** |
+|  | IQR 31.3–40.1 | IQR 0.27–1.03 | IQR −97.4% to −99.3% |
+|  | range 20.9–66.7 | range 0.11–12.3 | range −81.5% to −99.7% |
+| max at compliance point, median | 17.23 mg/L | 0.0260 mg/L | −99.8% |
+| scenarios meeting the 1.0 mg/L limit | **1 / 80** | **78 / 80** | — |
+
+The reduction is robust across realisations: the *worst* scenario still drops
+81.5%, and the median is 98.7%. The 78/80 compliant figure is the direct
+empirical counterpart of the reported 0.975 test reliability — the two
+non-compliant scenarios are the same 2.5% the CVaR formulation allows.
+
+Scenario 0 is representative (34.2 → 0.583 mg/L, −98.3%, and compliant at
+0.0168 mg/L), which is why it was chosen for the figure.
+
+The plume is **displaced, not erased**: under pumping the residual mass is
+drawn toward the well and the peak sits at `x≈115`, just down-gradient of it,
+while the far field is cleaned. That is the expected capture-zone behaviour and
+is visible in `plume_compare.png`, which plots both cases with independent
+colour scales (a shared scale makes the cleaned panel look empty).
+
+Two presentation defects were fixed while producing this. `plot_plume` drew
+every well as an identical dot, so a solution concentrating on one well was
+indistinguishable from an even layout — it now annotates each active well with
+its rate in m³/d and scales the marker, for both the 2D driver and the
+stochastic pipeline. And the comparison panel originally used a shared
+colourbar, which hid the contrast; each panel now carries its own scale and
+stated range. Six tests in `tests/test_plot_plume.py` cover the annotation, the
+all-zero-q path, and short `q` vectors.
+
+Note on randomness: `n_kl` resolves to **547** at 95% target variance, so the
+80 scenarios carry genuinely heterogeneous conductivity fields — this is not a
+single-aquifer result repeated 80 times. Source strength and regional gradient
+are held fixed (`random_source: false`), so the table isolates conductivity
+uncertainty only.
+
+`q*` was selected on the 40-scenario training archive and scored on the
+80-scenario test archive; it was not tuned on the test set.
+
 ---
 
 ## 7. What is now trustworthy, and what is not

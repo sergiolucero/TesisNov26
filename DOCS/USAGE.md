@@ -46,6 +46,7 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `seed_sweep.py` | Run any command across seeds, report median/IQR, compare arms | per command |
 | `runtimes_report.py` | Read `runs/runtimes.jsonl` as a table or a per-script summary | instant |
 | `collab_run.py` | GPU/Colab dispatcher with `smoke`/`quick`/`full` presets and `--gpu/--nx/--ny` | preset-dependent |
+| `new_high_colab.py` | Same stages tuned for the **high-end** Colab GPUs (A100/H100/G4): measures the card, batches the transport sweep, drives `--backend torch` | minutes – hours |
 | `run_colab.sh` | Shell wrapper: GPU check + pip install + `collab_run.py` | preset-dependent |
 | `multi_colab.py` | Drive **several** Colab VMs from your laptop for large runs | hours |
 | `app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) | long-running |
@@ -402,6 +403,63 @@ Measured cost per objective evaluation (this log's `s_per_eval`, `M_train=40`,
 That is close to `cells^1.2`, not the linear-in-cells guess, which is why the
 old `1.5e-6 * nx * ny * nsteps * M_train` estimate was ~6x pessimistic at
 80x80 and can be used only as an upper bound.
+
+### 4.6 `new_high_colab.py` — the A100/H100/G4 path
+
+`collab_run.py` is sized for a T4 and never selects the batched GPU backend of
+the optimizer. `new_high_colab.py` profiles the card (compute capability, VRAM,
+SM count), maps it onto a class (`v5` = A100, `v6` = H100/Blackwell G4, plus
+`ada`/`turing` fallbacks), and runs the same physics with the numbers that
+class can actually use: `float32` + a 1e-6 Krylov tolerance, one compass sweep
+per kernel batch, and `M_train`/`max_evals` sized from a measured peak-memory
+budget instead of guessed.
+
+```bash
+python3 SCRIPTS/new_high_colab.py bench forward --verify            # what does this card do?
+python3 SCRIPTS/new_high_colab.py opt --assume v5 --preset hi --zip  # paper-scale SAA, retuned
+python3 SCRIPTS/new_high_colab.py all --preset paper                 # reproduce the published numbers
+python3 SCRIPTS/new_high_colab.py bench --preset smoke --nx 24 --ny 12 --plan  # plumbing, no compute
+python3 SCRIPTS/new_high_colab.py --launch --gpu-class v6 --accelerator H100 \
+    bench forward opt --zip                                          # rent + ship + run + fetch
+```
+
+Stages are `bench` (throughput/VRAM probe → `bench.json`), `forward` (batched
+source plume, `--verify` compares against the NumPy/`splu` reference), `opt`
+(`run_optimization.py --backend torch` on a card-retuned config), and
+`pinn`/`fno` (delegated to `collab_run.py` with card-scaled sizes). Presets:
+`smoke` (quick config), `paper` (config values, published numbers), `hi`
+(default: card-class scenarios/budget) and `push` (2x grid, 1.5x `nsteps` —
+a resolution study, not comparable with the paper). Artifacts land in `--out`
+(`report.json`, `tuning.json`, `bench.json`, `forward.npz`, `opt/`), one record
+per run goes to `runs/runtimes.jsonl`, and `--launch` reuses the `colab` CLI
+(`colab new/upload/exec/download/stop`) so the whole cycle runs from the
+laptop. Full card-class table and tuning rationale: the module docstring.
+
+**Order matters, and it costs money if you get it wrong.** `bench` writes
+`bench.json`, and that measurement is what sizes `M_train`/`max_evals` for
+`opt` — run it first, on the same card, or the later stages fall back to the
+analytic estimate. `forward --verify` is the correctness gate: it compares the
+torch kernels against the NumPy/`splu` reference, so a wrong kernel cannot hide
+behind a large batch.
+
+```bash
+# before spending compute units: dry-run prints the exact colab commands
+python3 SCRIPTS/new_high_colab.py --launch --gpu-class v6 --accelerator H100 --dry-run bench
+# cheap probes, in this order
+python3 SCRIPTS/new_high_colab.py bench --preset smoke --nx 24 --ny 12 --nsteps 20
+python3 SCRIPTS/new_high_colab.py forward --verify
+# long run: cap the remote cell, and remember --keep leaves the VM billing
+python3 SCRIPTS/new_high_colab.py --launch --keep --session tesis-high --max-seconds 21600 opt
+colab url -s tesis-high          # re-attach after a disconnect; `colab stop` when done
+```
+
+Gotchas verified on this host: `--launch` needs the `colab` CLI on `PATH`
+(`~/.local/bin/colab`); `--device auto` is resolved to `cpu` when no CUDA card
+is present, so CPU smoke runs work but are ~1 s per transport solve, and `bench`
+caps its batch sweep at 4 slices there. Summarise what the log actually says
+with `python3 SCRIPTS/runtimes_report.py --summary` (mean wall clock and s/eval
+per script/grid), and use `SCRIPTS/bench_backend.py` for the separate question
+of whether the torch backend is ahead at all — see [`GPU.md`](GPU.md).
 
 ---
 

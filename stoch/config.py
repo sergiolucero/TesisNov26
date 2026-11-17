@@ -73,8 +73,16 @@ def apply_quick(cfg: dict) -> dict:
 
 
 def load_config(path: Optional[str | Path] = None, quick: bool = False) -> dict:
+    """Load a config file onto the defaults.
+
+    A path that does not exist is an error rather than a silent fallback to the
+    defaults: a typo in ``--config`` used to hand back a complete, plausible
+    benchmark config and quietly run the wrong experiment.
+    """
     cfg = default_config()
-    if path is not None and Path(path).exists():
+    if path is not None:
+        if not Path(path).exists():
+            raise FileNotFoundError(f"config file not found: {path}")
         with open(path) as f:
             _deep_update(cfg, yaml.safe_load(f) or {})
     if quick:

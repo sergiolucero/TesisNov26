@@ -115,6 +115,10 @@ class Archive:
                                 compliance_cells=self.compliance_cells)
             )
 
+    def get_problem(self, index: int = 0) -> ScenarioProblem:
+        """The NumPy problem of one scenario (shared with the torch backend)."""
+        return self.problems[index]
+
     # -- evaluation -------------------------------------------------------
     def evaluate(
         self,

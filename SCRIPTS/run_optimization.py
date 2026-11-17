@@ -10,10 +10,25 @@ Stages follow ``DOCS/optimization_plan.md``:
   O-4  chance-constraint reformulations on a toy ray
   opt  SAA optimization (pattern search or SLSQP+adjoint) and test certificate
 
+Backends
+--------
+``--backend numpy`` (default on CPU) is the SciPy reference path: every
+scenario owns a ``splu`` of the transport matrix, the discrete adjoint is
+exact to solver tolerance, and all the O-gates (adjoint vs. central
+differences, mass balance at 1e-15) are defined against it.
+
+``--backend torch`` swaps the scenario archive for
+:class:`stoch.saa_torch.TorchArchive`, which keeps the ensemble on the GPU and
+solves the transport equation with batched Krylov iterations.  The ``opt``
+stage then also evaluates the whole compass set of the pattern search in one
+call.  The gates stay on the NumPy path by design -- they verify solver
+properties, not throughput.
+
 Examples
 --------
     python run_optimization.py --quick
     python run_optimization.py --config configs/opt/benchmark.yaml --stage opt
+    python run_optimization.py --stage opt --backend torch --device cuda --dtype float32
 """
 
 from __future__ import annotations
@@ -124,6 +139,47 @@ def base_aquifer(cfg: dict, grid: Grid, K=None) -> Aquifer:
         alpha_l=float(a["alpha_l"]), alpha_t=float(a["alpha_t"]),
         decay=float(a["decay"]),
     )
+
+
+def make_archive(grid, aq, wells, scenarios, fwd, backend: str = "numpy",
+                 device: str = "auto", dtype: str = "float64",
+                 rtol: float | None = None, maxiter: int = 4000,
+                 label: str = "archive"):
+    """Build the NumPy reference archive or the batched (GPU) one.
+
+    Both expose ``evaluate(q, cost, keep=...)`` returning a
+    :class:`stoch.saa.SAAEvaluation`, so everything downstream -- reporting,
+    figures, gates, the optimizer -- is backend-agnostic.  The torch archive
+    additionally offers ``evaluate_many`` for batched candidate sweeps.
+    """
+    if backend == "numpy":
+        return Archive(grid, aq, wells, scenarios, fwd)
+    if backend == "torch":
+        # Imported lazily: the NumPy path must keep working on machines where
+        # PyTorch is not installed at all (see DOCS/HUMAN.md).
+        try:
+            from stoch.saa_torch import TorchArchive
+        except ImportError as exc:  # pragma: no cover - environment dependent
+            raise SystemExit(
+                "the torch backend needs PyTorch: pip install torch "
+                f"(import failed: {exc})"
+            ) from exc
+        return TorchArchive(grid, aq, wells, scenarios, fwd, device=device,
+                            dtype=dtype, rtol=rtol, maxiter=maxiter, label=label)
+    raise ValueError(f"unknown backend {backend!r}; use 'numpy' or 'torch'")
+
+
+def resolve_backend(backend: str, device: str) -> str:
+    """``auto`` -> torch when a CUDA/MPS device is actually available."""
+    if backend != "auto":
+        return backend
+    try:
+        from physics.fv2d_torch import resolve_device
+
+        dev = resolve_device(device)
+        return "torch" if dev.type in {"cuda", "mps"} else "numpy"
+    except Exception:
+        return "numpy"
 
 
 def no_pump_field(cfg, grid, aq, fwd, well_xy, q=0.0) -> np.ndarray:
@@ -333,11 +389,16 @@ def stage_o4(cfg, outdir, train, cost):
 # ---------------------------------------------------------------------------
 # Main experiment
 # ---------------------------------------------------------------------------
-def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
+def run(cfg: dict, outdir: Path, stages: set[str],
+        backend: str = "numpy", device: str = "auto",
+        dtype: str = "float64", rtol: float | None = None,
+        maxiter: int = 4000,
+        batched_search: bool | None = None) -> dict:
     t0 = time.time()
     outdir = ensure_dir(outdir)
     ensure_dir(outdir / "figures")
-    log(f"start: out={outdir} stages={sorted(stages)}")
+    log(f"start: out={outdir} stages={sorted(stages)} "
+        f"backend={backend} dtype={dtype} device={device}")
     grid = make_grid(cfg)
     aq = base_aquifer(cfg, grid)
     kl = make_kl(cfg, grid)
@@ -349,7 +410,8 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     fwd = make_forward(cfg)
     cost = make_cost(cfg)
 
-    metrics: dict = {"config": cfg, "stages": {}}
+    metrics: dict = {"config": cfg, "stages": {},
+                     "backend": {"name": backend, "device": device, "dtype": dtype}}
     write_manifest(outdir / "run_config.json", cfg)
 
     # ---- O0: design plume and wells -----------------------------------
@@ -391,9 +453,29 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
         metrics["stages"]["O1"] = stage_o1(cfg, outdir, grid, aq, gen, fwd, layout)
         log(f"stage O1 done in {time.time() - t_stage:.1f}s")
 
-    train = Archive(grid, aq, layout.wells, train_scen, fwd)
-    test = Archive(grid, aq, layout.wells, test_scen, fwd)
-    log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test scenarios")
+    t_arch = time.time()
+    train = make_archive(grid, aq, layout.wells, train_scen, fwd, backend=backend,
+                         device=device, dtype=dtype, rtol=rtol, maxiter=maxiter,
+                         label="train")
+    test = make_archive(grid, aq, layout.wells, test_scen, fwd, backend=backend,
+                        device=device, dtype=dtype, rtol=rtol, maxiter=maxiter,
+                        label="test")
+    log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test scenarios "
+        f"in {time.time() - t_arch:.1f}s")
+    if batched_search is None:
+        batched_search = (backend == "torch"
+                          and getattr(train, "device", None) is not None
+                          and getattr(train.device, "type", "cpu") in {"cuda", "mps"})
+    if batched_search:
+        log("batched search enabled: one compass sweep per kernel batch")
+
+    if hasattr(train, "describe"):
+        info = train.describe()
+        metrics["backend"].update({"train": info})
+        log(f"backend: {info}")
+        if not info["flow_krylov"]["converged"]:
+            log("warning: the batched flow solve did not converge; "
+                "raise --krylov-maxiter or use --backend numpy")
 
     if "o2" in stages or "all" in stages:
         t_stage = time.time()
@@ -419,7 +501,8 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
         opt = cfg["optim"]
         t_stage = time.time()
         log(f"stage opt: method={opt['method']} starts={opt['n_starts']} "
-            f"max_iter={opt['max_iter']} max_evals={opt.get('max_evals', 2000)}")
+            f"max_iter={opt['max_iter']} max_evals={opt.get('max_evals', 2000)} "
+            f"search={'batched' if batched_search else 'sequential'}")
 
         def opt_progress(ev: dict) -> None:
             phase = ev.get("phase")
@@ -437,6 +520,11 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
             elif phase == "done":
                 log(f"  start {ev['start']}/{ev['n_starts']} done: "
                     f"f={ev['fun']:.6g} nit={ev['nit']}")
+
+        if opt["method"] != "pattern" and batched_search:
+            log("batched search only applies to method='pattern'; "
+                "falling back to the sequential evaluator")
+            batched_search = False
 
         problem = SAAProblem(
             train, cost,
@@ -456,6 +544,7 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
             max_evals=int(opt.get("max_evals", 2000)),
             seed=int(opt["seed"]),
             progress=opt_progress,
+            batched=batched_search,
         )
         log(f"stage opt done in {time.time() - t_stage:.1f}s")
         q_star = result.q
@@ -470,6 +559,8 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
 
         metrics["stages"]["opt"] = {
             "method": result.method,
+            "backend": backend,
+            "batched_search": bool(batched_search),
             "opt_wall_clock_s": round(float(time.time() - t_stage), 3),
             "n_evaluations": int(problem.n_eval),
             "train": ev_tr.summary(),
@@ -507,7 +598,7 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
             # compliance point: two transport solves on test scenario 0, one
             # with q* and one with every well off.
             t_plot = time.time()
-            prob0 = test.problems[0]
+            prob0 = test.get_problem(0)
             res_off = transport_run(
                 grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
                 np.zeros(layout.n_wells), fwd.dt, fwd.nsteps,
@@ -588,6 +679,24 @@ def main() -> None:
                     help="Override domain.ny from the config (applied after --quick)")
     ap.add_argument("--stage", default="all",
                     choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"])
+    ap.add_argument("--backend", default="numpy", choices=["numpy", "torch"],
+                    help="scenario-archive backend for the SAA/opt stage: the "
+                         "SciPy reference (numpy) or the batched GPU archive (torch)")
+    ap.add_argument("--device", default="auto",
+                    help="torch device for --backend torch: auto|cuda|cuda:N|cpu|mps")
+    ap.add_argument("--dtype", default="float64", choices=["float32", "float64"],
+                    help="working precision of the torch backend (float32 is a "
+                         "screening mode: ~2x faster, looser Krylov tolerance)")
+    ap.add_argument("--krylov-rtol", type=float, default=None,
+                    help="relative Krylov tolerance (default: 1e-11 float64, "
+                         "1e-6 float32)")
+    ap.add_argument("--krylov-maxiter", type=int, default=4000,
+                    help="max Krylov iterations per time step (torch backend)")
+    ap.add_argument("--batched-search", dest="batched_search", action="store_true",
+                    default=None,
+                    help="force the batched compass sweep (default: on for torch on a GPU)")
+    ap.add_argument("--no-batched-search", dest="batched_search", action="store_false",
+                    help="use the sequential pattern search even with a GPU archive")
     ap.add_argument("--runtime-log", default=str(ROOT / "runs" / "runtimes.jsonl"),
                     help="append one JSON record per run to this file "
                          "(default: runs/runtimes.jsonl; '' disables)")
@@ -607,8 +716,17 @@ def main() -> None:
         print(f"[opt] grid override: nx={domain['nx']} ny={domain['ny']}")
     tag = "quick" if args.quick else "full"
     out = Path(args.out) if args.out else (ROOT / "out" / "opt" / f"benchmark_{tag}")
+    backend = resolve_backend(args.backend, args.device)
+    if backend != args.backend:
+        print(f"[opt] backend auto-selected: {backend} "
+              f"(device={args.device}, no accelerator available)")
+    if args.backend == "numpy" and args.device not in {"auto", "cpu"}:
+        print(f"[opt] warning: --device {args.device} only applies to --backend torch")
     t_main = time.time()
-    metrics = run(cfg, out, stages)
+    metrics = run(cfg, out, stages, backend=backend, device=args.device,
+                  dtype=args.dtype, rtol=args.krylov_rtol,
+                  maxiter=args.krylov_maxiter,
+                  batched_search=args.batched_search)
 
     print("\n=== gates ===")
     for k, v in metrics["gates"].items():
@@ -638,6 +756,9 @@ def main() -> None:
             "outdir": str(Path(out).resolve()),
             "wall_clock_in_run_s": round(float(metrics["wall_clock_s"]), 3),
             "status": "ok",
+            "backend": metrics["backend"]["name"],
+            "device": str(metrics["backend"]["device"]),
+            "dtype": metrics["backend"]["dtype"],
         }
         if opt:
             record.update({

@@ -18,6 +18,12 @@ uncertainty.
   search, reporting, and 32 passing unit tests.
 - **Portability**: device/dtype selection, config manifests, resumable
   checkpoints, Dockerfiles, Colab runner, and a Flask figure viewer.
+- **GPU backend**: the 2D flow/transport/SAA stack has a batched PyTorch
+  implementation (`physics/fv2d_torch.py`, `stoch/saa_torch.py`) that keeps the
+  whole scenario ensemble on the device and evaluates a full compass sweep per
+  kernel batch. The NumPy path stays the reference and the verification gates
+  stay on it; `SCRIPTS/bench_backend.py` measures which one wins on a given
+  runtime. See [`DOCS/GPU.md`](DOCS/GPU.md).
 
 ## Layout
 
@@ -35,9 +41,10 @@ packages, configs and generated outputs.
 | `SCRIPTS/run_optimization.py` | Stochastic optimization workflow and gates |
 | `SCRIPTS/collab_run.py` | Colab/GPU dispatcher with `smoke`/`quick`/`full` presets |
 | `SCRIPTS/multi_colab.py` | Multi-VM Colab driver (`launch`/`status`/`logs`/`collect`/`stop`) |
+| `SCRIPTS/bench_backend.py` | NumPy vs batched-GPU backend benchmark + verdict |
 | `SCRIPTS/app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
-| `physics/` | Finite-volume flow/transport and analytical references |
-| `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report |
+| `physics/` | Finite-volume flow/transport (NumPy reference + batched torch) and analytical references |
+| `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report — and their batched (`*_torch`) counterparts |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
 | `DOCS/` | **All project documentation** — see [`DOCS/USAGE.md`](DOCS/USAGE.md) for the scripts |
@@ -45,6 +52,7 @@ packages, configs and generated outputs.
 | `DOCS/plan.md`, `DOCS/2D_plan.md`, `DOCS/3D_plan.md` | Staged verification plans and gates |
 | `DOCS/optimization_plan.md` | Stochastic optimization execution plan |
 | `DOCS/Conclusions.md` | **Consolidated findings, with what is trustworthy and what is not** |
+| `DOCS/GPU.md` | GPU audit: what ran on the accelerator, what now does, how to measure it |
 | `DOCS/Actions.md`, `DOCS/HUMAN.md`, `DOCS/GROWTH.md` | Run log, handoff notes, scaling plan |
 | `DOCS/Collab.md`, `DOCS/Results.md` | Colab GPU workflow, results log |
 | `TEX/` | LaTeX formulation and plans |

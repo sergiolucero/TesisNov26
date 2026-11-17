@@ -38,8 +38,9 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `solve_1d_fno.py` | 1D Fourier neural operator over the hydrology dataset | minutes |
 | `inspect_residual.py` | PDE-residual maps of the PINN at init and after training | minutes |
 | `run_2d.py` | 2D forward solve **and** the stochastic optimizer | 6 s – 20 s (quick) |
-| `run_optimization.py` | Gate suite (O0–O4) and SAA/CVaR optimization workflow | 2 s – hours |
+| `run_optimization.py` | Gate suite (O0–O4) and SAA/CVaR optimization workflow (`--backend numpy\|torch`) | 2 s – hours |
 | `plot_policy_plume.py` | Re-render the contamination figure from a stored `policy.json` (no rerun); `--all` sweeps every test scenario | seconds – minutes |
+| `bench_backend.py` | Measure NumPy vs batched-GPU backend on *this* runtime and print a verdict | minutes |
 | `libcolab.py` | Notebook helper: `modrun(nx, ny)` → `run_2d.py --mode optimize` | as `run_2d.py` |
 | `nruns.py` | Loop `run_2d.py --quick` over N seeds | minutes |
 | `seed_sweep.py` | Run any command across seeds, report median/IQR, compare arms | per command |
@@ -184,7 +185,7 @@ python3 -u SCRIPTS/run_optimization.py --stage opt --nx 40 --ny 20 \
 | `o3` | discrete-adjoint gradient vs finite differences (`rel error <= 1e-4`) | ~10 s |
 | `o4` | SAA vs CVaR reformulation comparison | ~30 s |
 | `gates` | O0–O4 with pass/fail summary | **74 s** (measured) |
-| `opt` | the actual multi-start SAA optimization | **> 30 min; 19–33 h** at 3 starts × 1500 evals |
+| `opt` | the actual multi-start SAA optimization | **> 30 min; 19–33 h** at 3 starts × 1500 evals (**minutes** with `--backend torch` on a GPU) |
 | `all` | everything above | hours |
 
 The `opt` stage writes `figures/well_layout.png`, `convergence.png`,
@@ -205,6 +206,44 @@ the optimization.
 `--nx` / `--ny` override `domain.nx`/`domain.ny` **after** the config is loaded,
 so they beat `--quick`'s built-in 30x15. The effective grid is recorded in
 `metrics.json` (`config.domain`), which is how you verify what actually ran.
+
+#### Backend: NumPy reference vs batched GPU
+
+Every stage runs on the SciPy reference by default. The `opt` stage can
+instead use the batched torch backend, which is where a GPU finally earns its
+keep (see [`GPU.md`](GPU.md) for the audit that motivated it):
+
+```bash
+# GPU: one compass sweep per kernel batch, float32 throughput mode
+python3 -u SCRIPTS/run_optimization.py --stage opt \
+    --config configs/opt/benchmark.yaml \
+    --backend torch --device cuda --dtype float32
+
+# CPU: same backend, same answer, but slower than SciPy -- useful for parity
+python3 -u SCRIPTS/run_optimization.py --quick --stage opt \
+    --backend torch --device cpu --dtype float64
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--backend` | `numpy` | `numpy` (SciPy `splu`) or `torch` (batched Krylov, GPU) |
+| `--device` | `auto` | `torch` device: `auto`, `cuda`, `cuda:N`, `cpu`, `mps` |
+| `--dtype` | `float64` | working precision; `float32` is the fast screening mode |
+| `--krylov-rtol` | per dtype | `1e-11` (float64) / `1e-6` (float32) |
+| `--krylov-maxiter` | `4000` | cap per time step |
+| `--[no-]batched-search` | on for a GPU | batched compass sweep vs. sequential pattern search |
+
+The choice is recorded in `metrics.json` under `backend` (including the GPU
+name, the flow-solve Krylov report and whether every solve converged) and in
+`runs/runtimes.jsonl`. The O1-O4 gates stay on NumPy by design: they certify
+solver properties, not throughput. `SLSQP`/the discrete adjoint is NumPy-only
+and says so if asked otherwise.
+
+Measure first on the runtime you are paying for:
+
+```bash
+python3 -u SCRIPTS/bench_backend.py --device cuda --dtype float32 --out out/bench_gpu.json
+```
 
 Cost model for the `opt` stage (measured, single-threaded numpy, x86):
 

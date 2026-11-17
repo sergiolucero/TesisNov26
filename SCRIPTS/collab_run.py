@@ -231,6 +231,19 @@ def run_opt(args: argparse.Namespace) -> None:
         "--stage", args.opt_stage,
         "--out", str(args.out_root / "opt" / f"{args.preset}_{args.opt_stage}"),
     ]
+    # The GPU backend only covers the SAA/opt stage: the O-gates verify solver
+    # properties (exact adjoint, 1e-15 mass balance) and are defined against
+    # the NumPy reference on purpose.
+    backend = "numpy"
+    if args.opt_backend in {"auto", "torch"} and args.opt_stage == "opt" \
+            and _cuda_available():
+        backend = "torch"
+    elif args.opt_backend == "torch" and args.opt_stage != "opt":
+        print(f"[collab_run] note: the torch backend only applies to --opt-stage opt; "
+              f"stage {args.opt_stage!r} runs on the NumPy reference")
+    cmd += ["--backend", backend]
+    if backend == "torch":
+        cmd += ["--device", args.device, "--dtype", args.opt_dtype]
     if args.nx is not None:
         cmd += ["--nx", str(args.nx)]
     if args.ny is not None:
@@ -238,6 +251,16 @@ def run_opt(args: argparse.Namespace) -> None:
     if (args.preset in {"smoke", "quick"} or args.quick_opt) and not args.no_quick_opt:
         cmd.append("--quick")
     run(cmd)
+
+
+def _cuda_available() -> bool:
+    """Whether this runtime can actually run on a GPU (never raises)."""
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
 def run_tests(args: argparse.Namespace) -> None:
@@ -311,6 +334,12 @@ def parse_args() -> argparse.Namespace:
 
     ap.add_argument("--opt-config", type=Path, default=ROOT / "configs" / "opt" / "benchmark.yaml")
     ap.add_argument("--opt-stage", choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"], default="gates")
+    ap.add_argument("--opt-backend", choices=["auto", "numpy", "torch"], default="auto",
+                    help="Backend for the opt stage. auto = torch when a GPU is "
+                         "visible (and the stage is 'opt'), numpy otherwise.")
+    ap.add_argument("--opt-dtype", default="float32", choices=["float32", "float64"],
+                    help="Working precision of the GPU backend; float32 is the "
+                         "fast screening mode, float64 matches the NumPy reference.")
     ap.add_argument("--quick-opt", action="store_true", help="Force --quick for optimization")
     ap.add_argument("--no-quick-opt", action="store_true",
                     help="Never pass --quick to the optimizer, even for the smoke/quick "

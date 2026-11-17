@@ -3,6 +3,13 @@
 This project can be run in a Google Colab notebook with a GPU by using the helper script `SCRIPTS/collab_run.py`.
 
 > Note: Google spells the product **Colab**. This repository also includes this file as `Collab.md` to match the requested name.
+>
+> **Before paying for Pro, read [`GPU.md`](GPU.md).** Until the batched backend
+> was added, the only code that touched the GPU was the two 1D toy models, while
+> the expensive optimization stage ran on SciPy sparse LU with the accelerator
+> idle. `GPU.md` records that audit, the new `--backend torch` path, and how to
+> measure on your own runtime whether the GPU actually pays off
+> (`SCRIPTS/bench_backend.py`).
 
 ## 1. Start a GPU runtime
 
@@ -66,6 +73,24 @@ PY
 ## 5. Run models/experiments
 
 `SCRIPTS/collab_run.py` dispatches the project entry points and lets you choose one or more models.
+
+### Which stages use the GPU
+
+| Stage | Backend | Notes |
+|---|---|---|
+| `dataset` | CPU (NumPy) | Ogata-Banks + dataset generation |
+| `pinn`, `fno` | GPU (torch) | 1D models: launch-bound, so a GPU barely helps |
+| `opt` | **GPU (torch) when available** | `--opt-backend auto` (default) selects the batched backend on a GPU runtime |
+| gates (`o1`-`o4`) | CPU (NumPy) | they certify the solver, not throughput |
+
+```python
+# force the batched backend and float32 throughput mode
+!python SCRIPTS/collab_run.py --models opt --opt-stage opt \
+    --opt-config configs/opt/benchmark.yaml --opt-backend torch --opt-dtype float32 --gpu 0
+
+# is the GPU actually earning its keep?
+!python SCRIPTS/bench_backend.py --device cuda --dtype float32 --out out/bench_gpu.json
+```
 
 ### Fast smoke run
 

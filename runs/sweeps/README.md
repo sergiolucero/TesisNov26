@@ -49,3 +49,19 @@ by the s3 outlier, which is why median+IQR is reported instead of mean±std.
 Per-run `run_config.json` and `sweep_summary.json` are tracked (24 KB total —
 they hold config, git SHA and metrics, so a result is reproducible from the
 record). Models (`*.pt`), figures (`*.png`) and checkpoints are gitignored.
+
+## `fno_m4_cf1/` — PRELIMINARY, not comparable
+
+Modes 4, 5 seeds, **60 epochs**. Median test rel L2 **8.57e-2**
+(IQR 1.04e-2, range 5.72e-2 … 1.19e-1).
+
+**Do not compare this to the 1.46e-2 quoted for the 250-epoch run in
+`Conclusions.md` §5.** Different training budget: 60 epochs is heavily
+undertrained for this operator, so the number reflects the budget, not the
+modes. It is kept only as evidence that the harness runs and that the seed
+spread is measurable on the FNO too (~2x, tighter than the PINN's 7x).
+
+The matching 12- and 24-mode sweeps and the resolution sweeps were stopped
+before completing and were **not** committed, to avoid shipping partial data.
+Rerun at a fixed, adequate budget (>=250 epochs) before drawing any conclusion
+about mode truncation.

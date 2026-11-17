@@ -44,6 +44,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent        # SCRIPTS/
 ROOT = HERE.parent                            # repository root
 
+sys.path.insert(0, str(ROOT))
+from stoch.runtimes import log_runtime  # noqa: E402  (needs ROOT on sys.path)
+
+RUNTIME_LOG = ROOT / "runs" / "runtimes.jsonl"
+
 
 def script(name: str) -> str:
     """Absolute path of a sibling entry point (hydrology.py, run_2d.py, ...)."""
@@ -358,7 +363,14 @@ def main() -> None:
     }
     for model in normalize_models(args.models):
         print(f"\n[collab_run] === running {model} ({args.preset}) ===")
+        t_task = time.time()
         dispatch[model](args)
+        log_runtime(
+            RUNTIME_LOG, f"collab_run.py:{model}", time.time() - t_task,
+            stage=model, preset=args.preset, device=args.device,
+            gpu=args.gpu, models=" ".join(normalize_models(args.models)),
+            grid=[args.nx, args.ny, args.nt], out_root=str(Path(args.out_root)),
+        )
 
     if args.zip_results:
         zip_results(args)

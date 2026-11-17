@@ -11,9 +11,10 @@ adjoint       : discrete adjoint and gradient checks
 optimize      : pattern search, SLSQP+adjoint, multi-start
 report        : manifests, metrics, figures
 config        : YAML configuration and quick overrides
+runtimes      : machine-written runtime log (runs/runtimes.jsonl)
 """
 
 __all__ = [
     "random_fields", "wells", "objective", "saa", "chance",
-    "adjoint", "optimize", "report", "config",
+    "adjoint", "optimize", "report", "config", "runtimes",
 ]

@@ -49,11 +49,13 @@ from stoch.report import (
     ensure_dir,
     plot_convergence,
     plot_distributions,
+    plot_initial_contamination,
     plot_layout,
     plot_plume,
     save_json,
     write_manifest,
 )
+from stoch.runtimes import log_runtime
 from stoch.saa import Archive, ForwardConfig
 from stoch.wells import place_wells, plume_mask
 
@@ -468,6 +470,7 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
 
         metrics["stages"]["opt"] = {
             "method": result.method,
+            "opt_wall_clock_s": round(float(time.time() - t_stage), 3),
             "n_evaluations": int(problem.n_eval),
             "train": ev_tr.summary(),
             "test": ev_te.summary(),
@@ -498,7 +501,33 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
                 outdir / "figures" / "plume_scenario0.png",
                 creg=cost.creg,
                 title="Final plume under q* (test scenario 0)",
+                q=q_star,
             )
+            # What the optimizer has to work with: the same scenario with every
+            # well off, keeping the full time history so the arrival at the
+            # compliance point can be shown next to the field.
+            t_plot = time.time()
+            prob0 = test.problems[0]
+            res_np = transport_run(
+                grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
+                np.zeros(layout.n_wells), fwd.dt, fwd.nsteps,
+                source_idx=prob0.source_idx, source_rate=prob0.source_rate,
+                source_steps=fwd.source_steps,
+                record_cells=test.compliance_cells, store_fields=True,
+            )
+            plot_initial_contamination(
+                grid, res_np.C_final.reshape(grid.ny, grid.nx), layout.wells,
+                outdir / "figures" / "initial_contamination.png",
+                creg=cost.creg,
+                source_xy=fwd.source_xy,
+                compliance_xy=fwd.compliance_xy,
+                obs_xy=fwd.obs_xy,
+                times=res_np.times,
+                C_compliance=res_np.C_record[:, 0],
+                window_start=float(cfg["compliance"]["window_start"]),
+            )
+            log(f"initial-contamination figure done in {time.time() - t_plot:.1f}s "
+                f"(one no-pump solve, test scenario 0)")
 
     # ---- gates ---------------------------------------------------------
     gates = {}
@@ -544,6 +573,9 @@ def main() -> None:
                     help="Override domain.ny from the config (applied after --quick)")
     ap.add_argument("--stage", default="all",
                     choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"])
+    ap.add_argument("--runtime-log", default=str(ROOT / "runs" / "runtimes.jsonl"),
+                    help="append one JSON record per run to this file "
+                         "(default: runs/runtimes.jsonl; '' disables)")
     args = ap.parse_args()
 
     stage_map = {"all": {"all"}, "gates": {"o1", "o2", "o3", "o4"},
@@ -560,6 +592,7 @@ def main() -> None:
         print(f"[opt] grid override: nx={domain['nx']} ny={domain['ny']}")
     tag = "quick" if args.quick else "full"
     out = Path(args.out) if args.out else (ROOT / "out" / "opt" / f"benchmark_{tag}")
+    t_main = time.time()
     metrics = run(cfg, out, stages)
 
     print("\n=== gates ===")
@@ -572,6 +605,37 @@ def main() -> None:
         print(f"test reliability = {o['test']['reliability']:.3f}   "
               f"cleanup time = {o['test']['mean_tau']:.0f} d")
     print(f"\nresults written to {out}  ({metrics['wall_clock_s']:.1f} s)")
+
+    if args.runtime_log:
+        opt = metrics["stages"].get("opt", {})
+        record = {
+            "stage": args.stage,
+            "config": str(Path(args.config).resolve()),
+            "quick": bool(args.quick),
+            "grid": [int(cfg["domain"]["nx"]), int(cfg["domain"]["ny"])],
+            "nsteps": int(cfg["time"]["nsteps"]),
+            "m_train": int(cfg["saa"]["M_train"]),
+            "m_test": int(cfg["saa"]["M_test"]),
+            "method": cfg["optim"]["method"],
+            "n_starts": int(cfg["optim"]["n_starts"]),
+            "max_evals": int(cfg["optim"].get("max_evals", 0)),
+            "max_iter": int(cfg["optim"].get("max_iter", 0)),
+            "outdir": str(Path(out).resolve()),
+            "wall_clock_in_run_s": round(float(metrics["wall_clock_s"]), 3),
+            "status": "ok",
+        }
+        if opt:
+            record.update({
+                "n_evaluations": int(opt["n_evaluations"]),
+                "s_per_eval": round(
+                    float(opt.get("opt_wall_clock_s", 0.0))
+                    / max(int(opt["n_evaluations"]), 1), 3
+                ),
+                "test_mean_J": round(float(opt["test"]["mean_J"]), 2),
+                "test_reliability": round(float(opt["test"]["reliability"]), 4),
+                "active_wells": int(opt["active_wells"]),
+            })
+        log_runtime(args.runtime_log, __file__, time.time() - t_main, **record)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `libcolab.py` | Notebook helper: `modrun(nx, ny)` → `run_2d.py --mode optimize` | as `run_2d.py` |
 | `nruns.py` | Loop `run_2d.py --quick` over N seeds | minutes |
 | `seed_sweep.py` | Run any command across seeds, report median/IQR, compare arms | per command |
+| `runtimes_report.py` | Read `runs/runtimes.jsonl` as a table or a per-script summary | instant |
 | `collab_run.py` | GPU/Colab dispatcher with `smoke`/`quick`/`full` presets and `--gpu/--nx/--ny` | preset-dependent |
 | `run_colab.sh` | Shell wrapper: GPU check + pip install + `collab_run.py` | preset-dependent |
 | `multi_colab.py` | Drive **several** Colab VMs from your laptop for large runs | hours |
@@ -185,6 +186,14 @@ python3 -u SCRIPTS/run_optimization.py --stage opt --nx 40 --ny 20 \
 | `opt` | the actual multi-start SAA optimization | **> 30 min; 19–33 h** at 3 starts × 1500 evals |
 | `all` | everything above | hours |
 
+The `opt` stage writes `figures/well_layout.png`, `convergence.png`,
+`plume_scenario0.png`, `test_distributions.png` and
+`initial_contamination.png` — the last one is the same test scenario with every
+well **off**: the field the optimizer has to deal with, plus the untreated
+breakthrough curve at the compliance point (when the plume arrives, against
+`creg`). Note the field is zero at `t = 0` by construction (the source injects
+over time), so "initial" means the incoming contamination, not the first step.
+
 `--nx` / `--ny` override `domain.nx`/`domain.ny` **after** the config is loaded,
 so they beat `--quick`'s built-in 30x15. The effective grid is recorded in
 `metrics.json` (`config.domain`), which is how you verify what actually ran.
@@ -309,6 +318,43 @@ Requires the Colab CLI (`pip install google-colab-cli`, then `colab auth`).
 Replica `k` gets `optim.seed = --seed-base + k`; compare `train.mean_J` from
 each `r<k>/artifacts.zip`. Run state lives in `runs/colab_multi/<run-id>/`.
 Use `--gpu none` for the optimizer (CPU-bound), a GPU only for PINN/FNO.
+
+### 4.5 Runtime records — `runs/runtimes.jsonl`
+
+Every entry point appends **one JSON line per run** to `runs/runtimes.jsonl`
+(written by `stoch/runtimes.py`): timestamp, host, script, argv, git revision,
+wall clock in seconds/hours, and the fields that identify the run — grid,
+`nsteps`, `M_train`, method, starts, budget, evaluations, seconds per
+evaluation, outdir, status. It is append-only, one line per run, and safe to
+`tail -f`.
+
+```bash
+./SCRIPTS/runtimes_report.py                     # last 20 runs as a table
+./SCRIPTS/runtimes_report.py --all --summary     # mean wall clock and s/eval per grid
+./SCRIPTS/runtimes_report.py --stage opt --since 2026-11-17
+./SCRIPTS/runtimes_report.py --json | jq -r '[.grid|join("x"), .s_per_eval] | @tsv'
+tail -f runs/runtimes.jsonl                      # while something is running
+```
+
+`run_optimization.py` also takes `--runtime-log PATH` (default
+`runs/runtimes.jsonl`, `''` disables) so a scratch run can keep its own record;
+`multi_colab.py` writes a per-replica `runtimes.jsonl` inside its run
+directory. `RUNTIMES.txt` stays the hand-curated table of canonical
+measurements — the JSONL is the raw record it is distilled from.
+
+Measured cost per objective evaluation (this log's `s_per_eval`, `M_train=40`,
+`nsteps=100`, one core):
+
+| grid | cells | s/eval |
+|---|---|---|
+| 40x20 | 800 | 0.47 |
+| 80x40 | 3 200 | 2.5 |
+| 80x80 | 6 400 | ~5.8 |
+| 160x80 | 12 800 | ~14 |
+
+That is close to `cells^1.2`, not the linear-in-cells guess, which is why the
+old `1.5e-6 * nx * ny * nsteps * M_train` estimate was ~6x pessimistic at
+80x80 and can be used only as an upper bound.
 
 ---
 

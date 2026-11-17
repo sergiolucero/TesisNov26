@@ -12,6 +12,10 @@ Method      : wall clock measured around the whole process (bash date %s%N),
               "in-run" is the wall clock the script itself reports in
               summary.json / metrics.json / the final log line.
               Every invocation used `python3 -u` (see DOCS/HUMAN.md gotcha #4).
+              This file is the curated table; the raw per-run record (host, grid,
+              method, evaluations, seconds per evaluation) is appended by the
+              scripts themselves to runs/runtimes.jsonl -- read it with
+              ./SCRIPTS/runtimes_report.py.
               Output dirs point at /tmp so repo artifacts are untouched.
 
 SUMMARY

@@ -113,6 +113,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from stoch.runtimes import log_runtime  # noqa: E402  (needs ROOT on sys.path)
+
 DEFAULT_OUTDIR = ROOT / "runs" / "colab_multi"
 REMOTE_ROOT = "/content/tesis_{run_id}"
 REMOTE_ZIP = "/content/tesis_{run_id}.zip"
@@ -716,6 +718,23 @@ def launch_one(cli: ColabCLI, plan: dict, replica: dict,
             stop_rc = cli.stream(tag, "stop", "-s", session, logfile=logfile,
                                  timeout=to.get("stop"))
             state["vm"] = "stopped" if stop_rc == 0 else "stop-failed"
+        # One line per replica: where it ran, how long, and what it produced.
+        est = plan.get("estimate") or {}
+        pcfg = plan.get("config") or {}
+        log_runtime(
+            Path(plan["outdir"]) / "runtimes.jsonl", "multi_colab.py", 
+            state["elapsed_h"] * 3600.0,
+            stage=plan.get("opt_stage"), preset=plan.get("preset"),
+            gpu=plan.get("gpu"), replica=state["index"], session=session,
+            models=" ".join(plan.get("models") or []),
+            grid=[est.get("nx"), est.get("ny")], nsteps=est.get("nsteps"),
+            m_train=est.get("m_train"),
+            method=(pcfg.get("optim") or {}).get("method"),
+            n_starts=(pcfg.get("optim") or {}).get("n_starts"),
+            max_evals=(pcfg.get("optim") or {}).get("max_evals"),
+            state=state["state"], vm=state.get("vm"), exit=state.get("exit"),
+            status="ok" if state["state"] == "finished" else state["state"],
+        )
 
 
 def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:

@@ -43,6 +43,7 @@ repository root holds only the packages, configs, docs and outputs.
 | `TEX/` | LaTeX formulation and plans |
 | `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |
 | `optimization_plan.md` | Stochastic optimization execution plan |
+| `Conclusions.md` | **Consolidated findings, with what is trustworthy and what is not** |
 | `Actions.md`, `HUMAN.md`, `GROWTH.md` | Run log, handoff notes, scaling plan |
 
 ## Quick start
@@ -73,8 +74,9 @@ instructions.
 
 1. Phase 3 PINN experiments: tau-ramp / RAR, longer Adam→L-BFGS schedule,
    gradient logging.
-2. Phase 4 FNO: train on the 32-hydrology dataset, test mode/resolution
-   invariance and per-channel normalization.
+2. Phase 4 FNO: the coordinate-channel fix works (1.46% test rel L2, 15x better
+   than the dataset-mean baseline); repeat the mode/resolution sweeps as
+   medians over seeds. See `Conclusions.md`.
 3. Complete the 2D gates G2.1–G2.5, then the 2.5D/3D gates G3.1–G3.6.
 4. Run the full stochastic benchmark with out-of-sample reliability/cost
    certificates and CVaR/cleanup-time reporting.

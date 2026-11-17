@@ -21,8 +21,8 @@ next.
 |---|---|---|
 | `plan.md` | 4-phase debugging plan (1D sandbox → BC → optimizer → FNO) | Phase 1 ✓, Phase 2 ✓, Phase 3 tau-ramp run (negative) — see below |
 | `formulation.tex` / `.pdf` | Math formulation: dimensionless ADE, Ogata–Banks ref, PINN & FNO loss | compiled |
-| `hydrology.py` | Synthetic 1D ADE data generator (Ogata–Banks 1961) | works, verified |
-| `solve_1d_pinn.py` | PINN baseline solver (soft/hard BC, Adam + L-BFGS, config/manifests, checkpoint/resume, batching, tau-ramp) | working |
+| `SCRIPTS/hydrology.py` | Synthetic 1D ADE data generator (Ogata–Banks 1961) | works, verified |
+| `SCRIPTS/solve_1d_pinn.py` | PINN baseline solver (soft/hard BC, Adam + L-BFGS, config/manifests, checkpoint/resume, batching, tau-ramp) | working |
 | `out/scenario.npz` | Single scenario (Pe=20, tau_max=0.5, 256×256) | generated |
 | `out/dataset.npz` | FNO dataset — **as generated: 10 scenarios, 50×100 grid** (v∈[0.05,0.5], D∈[0.1,2.0]); earlier notes saying 32/128×128 were wrong | generated |
 | `out/pinn*/` | PINN runs: soft-BC, hard-BC variants, figures + `model.pt` | see run log |
@@ -34,9 +34,9 @@ next.
 1. **Physics stripped to 1D.** Dimensionless ADE (homogeneous, isotropic,
    non-reactive): `u_tau + u_xi = (1/Pe) u_xixi`, with `u(ξ,0)=0`,
    `u(0,τ)=1`, `u(1,τ)=0`; Pe=20, tau_max=0.5.
-2. **Analytical reference** (`hydrology.py::u_reference`/`C_reference`):
+2. **Analytical reference** (`SCRIPTS/hydrology.py::u_reference`/`C_reference`):
    Ogata–Banks, `tau→0` limit guarded. Verified: C∈[0,1], inlet=1, IC=0.
-3. **PINN solver** (`solve_1d_pinn.py`): MLP (tanh hidden, sigmoid output),
+3. **PINN solver** (`SCRIPTS/solve_1d_pinn.py`): MLP (tanh hidden, sigmoid output),
    autodiff residual, Adam (resampled collocation) + L-BFGS polish, relative-L2
    + region-wise error breakdown.
 4. **Baseline result (soft BC):** rel L2 = **2.43e-2** (full grid), left
@@ -148,7 +148,7 @@ next.
 |---|---|---|---|
 | (prior) | generated `out/scenario.npz`, `out/dataset.npz` | ok | Pe=20 sandbox; dataset actually 10 scenarios (not 32 — corrected) |
 | (prior) | compiled `formulation.tex` | ok | PDF at `formulation.pdf` |
-| (prior) | ran `solve_1d_pinn.py` once | figures only, error not logged | superseded |
+| (prior) | ran `SCRIPTS/solve_1d_pinn.py` once | figures only, error not logged | superseded |
 | today | soft-BC baseline, adam 12k + lbfgs 200 | rel L2 2.43e-2 | `out/pinn/` |
 | today | hard-BC (rational s), adam 10k + lbfgs 250 | rel L2 2.02e-2 | `out/pinn_hardbc/` |
 | today | hard-BC (exp s, eps=1e-3), adam 10k + lbfgs 250 | rel L2 1.35e-2, interior 8e-3 | **best**, `out/pinn_hardbc_exp/` |
@@ -161,3 +161,8 @@ next.
 | today | fleet tooling round 2 | green | added `SCRIPTS/fleet_status.sh` (human + `--json`, non-zero exit on failed checks), `SCRIPTS/herdr-server.service` + bootstrap `--systemd` (service enabled, lingering on), and `[opt]` stage/iteration progress in `run_optimization.py`/`stoch/optimize.py`; quick opt unchanged (q*=[0.1,0,0,9.38], 12.8 s) |
 | today | fleet dashboard (`NewPlan.md` §9) | JSON contract verified, routes checked | new `app.py` route `/fleet` + `templates/fleet.html`: shells out to `fleet_status.sh --json` (15 s timeout) and renders host/tailnet/Herdr/repo/sentinel/disk server-side (no JS, tablet-friendly); `/fleet?role=hub` flags a stopped Herdr server; probe failures (missing script, bad JSON, timeout) render a banner instead of a 500. Linked from `/` and `/plots`; docs in `README.md` + `NewPlan.md` §5/§7/§9. Could not boot Flask here (no flask/jinja on this laptop) — validated the JSON schema, all 22 template field refs, route/`url_for` wiring, and the three error paths against the real script; 32 unit tests still green |
 | today | Phase 3 tau-ramp sweep, 5 paired seeds per arm | NEGATIVE, artifact kept | seed 0 looked like a big win (full 1.42e-2→9.57e-3) but it does not replicate: ramp better on 2/5 seeds, median ramp/base ratio 1.31, permutation p=0.38. Baseline alone spans 1.17e-2…8.14e-2 at fixed settings, so seed variance dominates. Raw numbers in `runs/phase3_tau_ramp.json`; conclusion recorded in Next steps |
+| today | Phase 2 3-seed residual check | structural claim replicates | interior mean |R| 2.13e-2 / 2.01e-2 / 2.35e-2 for seeds 0/1/2 (±8%), inlet 3.98e-1 / 3.72e-1 / 3.49e-1, corner 72.6 / 68.2 / 67.9. The 1/eps = 1.000e3 corner value is identical on every seed, confirming it is structural. The outlet-bias *magnitudes* remain single-seed |
+| today | Phase 4 FNO root-caused and fixed | **0.973 -> 0.0146** | the operator was structurally incapable: input was two spatially constant channels, `fc0` is pointwise and spectral layers multiply Fourier coefficients, so only the DC mode exists and the output is constant by construction (measured output spatial std ~2e-10; profile-only rel L2 = 1.000). Proven with a constant-input test. Fix: append normalized (xi,tau) coordinate channels (`--no-coords` for the ablation). 250 epochs -> test 1.46%, 15x better than the 0.221 mean-field baseline. Regenerated the dataset properly: 32 scenarios at 128x128 (was 10 at 50x100). Added trivial-predictor guards that warn when a run fails to beat all-zeros or mean-field |
+| today | Phase 4 mode + resolution checks | trends as expected | modes 4/12/24 -> 2.79%/2.35%/2.19% (monotone, diminishing); coarse-factor 2/4 (train 64/32, eval 128) -> 4.14%/6.92%, so resolution invariance holds (graceful degradation, no hardcoding). 120 epochs each, single seed — trend only, needs medians before publication |
+| today | full `--stage opt` completed | feasible, budget was 10x too big | cost is ~5 s/eval, so max_evals=1500 x n_starts=3 implies ~6 h — that is what timed out before. Bounded run (`configs/opt/benchmark_bounded.yaml`, 200 evals/1 start/20 iters) finished in **18.8 min**: q*=[14.83,0,...,0] m3/d, train J 419162 / test J 419089, reliability 0.975, cleanup 91 d. Convergence is early: 0.06% gain over the last 75 evals, so max_evals~150 with 2-3 restarts is the right DO-lane budget |
+| today | wrote `Conclusions.md` | consolidated | all four phases plus the stochastic pipeline in one place, every number checked against the stored artifacts, with an explicit "trustworthy vs single-seed vs open" section and the methodology rules the seed-variance finding forces |

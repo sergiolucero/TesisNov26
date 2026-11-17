@@ -159,11 +159,71 @@ Two things to read from this:
 
 The Krylov cost is well behaved (measured at the full geometry, 9 wells):
 24 BiCGSTAB iterations per time step (worst 34) with warm starts, and 345 CG
-iterations for the batched Darcy solve (one-time per archive). With those
-counts, a T4-class GPU spends a handful of seconds on a full `M=40`,
-`nsteps=100` evaluation -- but that is an estimate from the measured iteration
-counts, not a measurement. Run the benchmark script on the runtime you are
-considering paying for.
+iterations for the batched Darcy solve (one-time per archive).
+
+### Measured on a T4 (the estimate above, now replaced by a measurement)
+
+`SCRIPTS/new_high_colab.py --launch --gpu-class turing --accelerator T4
+bench forward --preset paper --verify`, on a rented **Tesla T4 (sm_75,
+15.6 GB, 40 SMs)**, torch 2.14.1+cu130, float32, paper geometry
+(80x40, `nsteps=100`, 9 wells, `M=8`, compass `S=18`):
+
+| candidates `S` | wall clock | ms per (cand·scen) | Mcell·step/s | peak VRAM |
+|---|---|---|---|---|
+| 1 | 1.41 s | 176.7 | 1.8 | 0.01 GB |
+| 18 | 1.46 s | 10.16 | 31.5 | 0.08 GB |
+| 72 | 4.68 s | 8.12 | 39.4 | 0.28 GB |
+| 288 | 17.58 s | 7.63 | **41.9** | 1.11 GB |
+
+Matmul: fp32 **7.0** TFLOP/s, bf16 4.2 TFLOP/s (bf16 *slower* on a T4, as
+expected for a bandwidth-bound workload on Turing). `forward --verify` passed
+at `rel_max = 4.42e-05` against the NumPy reference.
+
+Two things follow that the estimate got only partly right.
+
+**Batching is the whole win, and it saturates.** Going from `S=1` to `S=18`
+(one compass sweep) cuts the per-slice cost **17x**, 176.7 ms -> 10.2 ms; but
+`S=18 -> S=288` adds only 1.3x more (10.2 -> 7.6 ms) while VRAM goes from
+0.08 GB to 1.11 GB. The compass sweep is where the value is; there is little
+left to gain by batching further.
+
+**A full `M=40` evaluation costs 7.3 s, not "a handful of seconds".**
+18 candidates x 40 scenarios x 10.16 ms = **7.3 s per SAA evaluation**. That
+makes the real budgets:
+
+| run | evaluations | T4 wall clock |
+|---|---|---|
+| bounded (1 start, 200 evals) | 200 | **24 min** |
+| paper (3 starts x 1500 evals) | 4500 | **9.1 h** |
+
+Compare **like for like**, at `M=8` and the same 80x40 geometry: the NumPy
+`splu` backend takes 69 s for a sequential compass of 18, the T4 takes 1.46 s
+for the same sweep batched -- a **47x** speedup. At the `M=40` the optimizer
+actually uses, one evaluation is 7.3 s on the T4; the CPU figure it replaces is
+the 33.2 s/eval recorded in `runs/runtimes.jsonl` at 160x80 (contended, and a
+different geometry, so treat that ratio as indicative rather than exact).
+
+So the GPU is worth having, but it does not put the paper run inside one
+session: 9.1 h exceeds a T4 session, which needs `--max-seconds` splitting or
+`SCRIPTS/multi_colab.py` across several VMs.
+
+**The workload is latency bound, not bandwidth bound — contrary to the
+module docstring's premise.** At `S=288` a slice moves 1.58 MB in 7.6 ms, i.e.
+~208 MB/s. The T4's HBM does ~320 GB/s, so the memory floor for that slice is
+about **5 us**, three orders of magnitude below the measured 7.6 ms. The time
+therefore goes into the Krylov iterations (24 BiCGSTAB steps x 100 time steps,
+each a short dependent sparse solve), not into moving bytes. That has a
+consequence for tuning: float32-vs-float64 and other traffic reductions buy
+little here, while reducing the *number* of Krylov iterations (better
+preconditioning, a looser tolerance) or increasing batching further are the
+levers that would actually pay. The `bench` numbers above are the evidence.
+
+**Caveat on `bytes_per_slice`.** Measured 1,583,808 B versus an analytic
+153,600 B -- 10x higher than the model. The analytic value counts one
+`nx*ny*itemsize` field; the measured peak includes the dozen Krylov work
+vectors and allocator fragmentation. The driver uses the *measured* value for
+sizing, which is why `recommended_m_train` stayed at 40 rather than the
+analytic sizing suggesting far more headroom.
 
 ### What must be measured on your runtime
 

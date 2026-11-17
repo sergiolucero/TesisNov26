@@ -39,6 +39,7 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `inspect_residual.py` | PDE-residual maps of the PINN at init and after training | minutes |
 | `run_2d.py` | 2D forward solve **and** the stochastic optimizer | 6 s – 20 s (quick) |
 | `run_optimization.py` | Gate suite (O0–O4) and SAA/CVaR optimization workflow | 2 s – hours |
+| `plot_policy_plume.py` | Re-render the contamination figure from a stored `policy.json` (no rerun); `--all` sweeps every test scenario | seconds – minutes |
 | `libcolab.py` | Notebook helper: `modrun(nx, ny)` → `run_2d.py --mode optimize` | as `run_2d.py` |
 | `nruns.py` | Loop `run_2d.py --quick` over N seeds | minutes |
 | `seed_sweep.py` | Run any command across seeds, report median/IQR, compare arms | per command |
@@ -187,12 +188,19 @@ python3 -u SCRIPTS/run_optimization.py --stage opt --nx 40 --ny 20 \
 | `all` | everything above | hours |
 
 The `opt` stage writes `figures/well_layout.png`, `convergence.png`,
-`plume_scenario0.png`, `test_distributions.png` and
-`initial_contamination.png` — the last one is the same test scenario with every
-well **off**: the field the optimizer has to deal with, plus the untreated
-breakthrough curve at the compliance point (when the plume arrives, against
-`creg`). Note the field is zero at `t = 0` by construction (the source injects
-over time), so "initial" means the incoming contamination, not the first step.
+`plume_scenario0.png`, `test_distributions.png` and `contamination.png` — the
+last one is the one to show anyone who asks what the policy buys: the same test
+scenario with every well **off** (peak concentration, source, compliance and
+observation points, `creg` contour), the same field **under `q*`** with each
+active well labelled in m³/d, and the breakthrough curves at the compliance
+point (untreated dashed, treated solid) against `creg` with the compliance
+window shaded. Each field panel keeps its own colour scale — a shared one makes
+the cleaned panel look empty — and the peaks are stated in the titles and the
+supra-title. Note the field is zero at `t = 0` by construction (the source
+injects over time), so "untreated" means the incoming state at the end of the
+horizon, not the first time step. `SCRIPTS/plot_policy_plume.py --run <dir>`
+re-renders the identical figure from a stored `policy.json` without rerunning
+the optimization.
 
 `--nx` / `--ny` override `domain.nx`/`domain.ny` **after** the config is loaded,
 so they beat `--quick`'s built-in 30x15. The effective grid is recorded in

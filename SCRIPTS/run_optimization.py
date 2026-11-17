@@ -49,7 +49,7 @@ from stoch.report import (
     ensure_dir,
     plot_convergence,
     plot_distributions,
-    plot_initial_contamination,
+    plot_remediation,
     plot_layout,
     plot_plume,
     save_json,
@@ -503,31 +503,46 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
                 title="Final plume under q* (test scenario 0)",
                 q=q_star,
             )
-            # What the optimizer has to work with: the same scenario with every
-            # well off, keeping the full time history so the arrival at the
-            # compliance point can be shown next to the field.
+            # Untreated vs remediated, plus when the plume arrives at the
+            # compliance point: two transport solves on test scenario 0, one
+            # with q* and one with every well off.
             t_plot = time.time()
             prob0 = test.problems[0]
-            res_np = transport_run(
+            res_off = transport_run(
                 grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
                 np.zeros(layout.n_wells), fwd.dt, fwd.nsteps,
                 source_idx=prob0.source_idx, source_rate=prob0.source_rate,
                 source_steps=fwd.source_steps,
                 record_cells=test.compliance_cells, store_fields=True,
             )
-            plot_initial_contamination(
-                grid, res_np.C_final.reshape(grid.ny, grid.nx), layout.wells,
-                outdir / "figures" / "initial_contamination.png",
+            res_on = transport_run(
+                grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
+                q_star, fwd.dt, fwd.nsteps,
+                source_idx=prob0.source_idx, source_rate=prob0.source_rate,
+                source_steps=fwd.source_steps,
+                record_cells=test.compliance_cells, store_fields=True,
+            )
+            plume = plot_remediation(
+                grid,
+                res_off.C_final.reshape(grid.ny, grid.nx),
+                res_on.C_final.reshape(grid.ny, grid.nx),
+                layout.wells,
+                outdir / "figures" / "contamination.png",
                 creg=cost.creg,
+                q=q_star,
                 source_xy=fwd.source_xy,
                 compliance_xy=fwd.compliance_xy,
                 obs_xy=fwd.obs_xy,
-                times=res_np.times,
-                C_compliance=res_np.C_record[:, 0],
+                times=res_on.times,
+                C_comp_off=res_off.C_record[:, 0],
+                C_comp_on=res_on.C_record[:, 0],
                 window_start=float(cfg["compliance"]["window_start"]),
+                scenario=0,
             )
-            log(f"initial-contamination figure done in {time.time() - t_plot:.1f}s "
-                f"(one no-pump solve, test scenario 0)")
+            metrics["stages"]["opt"]["plume_scenario0"] = plume
+            log(f"contamination figure done in {time.time() - t_plot:.1f}s "
+                f"(two solves: q* and no pump, test scenario 0; "
+                f"peak {plume['peak_off']:.3g} -> {plume['peak_on']:.3g} mg/L)")
 
     # ---- gates ---------------------------------------------------------
     gates = {}

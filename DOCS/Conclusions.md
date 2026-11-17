@@ -216,8 +216,9 @@ Scenario 0 is representative (34.2 → 0.583 mg/L, −98.3%, and compliant at
 The plume is **displaced, not erased**: under pumping the residual mass is
 drawn toward the well and the peak sits at `x≈115`, just down-gradient of it,
 while the far field is cleaned. That is the expected capture-zone behaviour and
-is visible in `plume_compare.png`, which plots both cases with independent
-colour scales (a shared scale makes the cleaned panel look empty).
+is visible in `contamination.png`, which plots both cases with independent
+colour scales (a shared scale makes the cleaned panel look empty) and adds the
+breakthrough curves at the compliance point.
 
 Two presentation defects were fixed while producing this. `plot_plume` drew
 every well as an identical dot, so a solution concentrating on one well was
@@ -225,8 +226,9 @@ indistinguishable from an even layout — it now annotates each active well with
 its rate in m³/d and scales the marker, for both the 2D driver and the
 stochastic pipeline. And the comparison panel originally used a shared
 colourbar, which hid the contrast; each panel now carries its own scale and
-stated range. Six tests in `tests/test_plot_plume.py` cover the annotation, the
-all-zero-q path, and short `q` vectors.
+stated range. Eleven tests in `tests/test_plot_plume.py` cover the annotation, the
+all-zero-q path, short `q` vectors, and the merged figure (summary numbers,
+independent colour scales, the breakthrough curves and the case without them).
 
 Note on randomness: `n_kl` resolves to **547** at 95% target variance, so the
 80 scenarios carry genuinely heterogeneous conductivity fields — this is not a

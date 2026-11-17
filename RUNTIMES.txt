@@ -87,6 +87,33 @@ OBSERVATIONS
 * Note the difference in well counts: --quick shrinks wells.n (4 wells,
   total 60 m3/d at --rate 0.3) versus the full config (9 wells, 135 m3/d).
 
+BACKENDS (added 2026-11-16: batched torch backend)
+--------------------------------------------------
+The numbers above are the NumPy/SciPy reference (one core, float64).  The same
+work can now run through physics/fv2d_torch.py + stoch/saa_torch.py, which
+batch S candidates x M scenarios on one device and replace splu with batched
+Krylov solves.  See DOCS/GPU.md and SCRIPTS/bench_backend.py.
+
+Same command, both backends, this 8-core CPU box (no GPU present):
+  run_optimization.py --quick --stage opt                      13.8 s  (numpy)
+  run_optimization.py --quick --stage opt --backend torch      56.7 s  (torch, cpu)
+  -> identical result: q* = [0.1, 0.0, 0.0, 9.38], train J 378906.45,
+     test J 378822.07.  Torch is 4x SLOWER on CPU by design (a CPU has no
+     parallelism for the batch axis); the point is the GPU case, which must be
+     measured on the target runtime with SCRIPTS/bench_backend.py.
+
+Full-benchmark geometry (80x40, nsteps=100, M=40, 9 wells), numpy, one core:
+  16.7 s per SAA evaluation  ->  162 evaluations ~ 45 min, which is why
+  `--stage opt` exceeded the 1800 s timeout in the table above.
+
+Batched-backend parity (tests/test_fv2d_torch.py, tests/test_saa_torch.py):
+  flow/velocity        ~1e-12 relative
+  transport field      ~1e-11 relative (float64, rtol=1e-11)
+  objective terms      ~1e-10 relative
+  mass balance         5.9e-11 (numpy 1.8e-15; float32 ~1e-6)
+  Krylov iterations    8-9 BiCGSTAB iterations per time step (warm-started)
+  28 parity tests, sub-second each.
+
 RESULTS SNAPSHOT (quick config, for reference)
 ---------------------------------------------
 forward   : flow residual 8.3e-16, mass balance 2.0e-17, peak C 12.305 mg/L,

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # run_colab.sh
 # ============
-# Entry point for the ephemeral Google Colab T4 node described in NewPlan.md
+# Entry point for the ephemeral Google Colab T4 node described in DOCS/NewPlan.md
 # (§1 "Burst GPU Compute", §2 bootstrap).
 #
 # This is the thin shell wrapper around `collab_run.py`: it checks the GPU,
 # installs the Python requirements once, and dispatches the requested
 # experiment preset. Everything experiment-specific stays in `collab_run.py`;
-# see Collab.md and SCRIPTS/USAGE.md for the notebook workflow.
+# see DOCS/Collab.md and DOCS/USAGE.md for the notebook workflow.
 #
 # Usage (inside a Colab cell):
 #   !bash SCRIPTS/run_colab.sh                                   # quick preset, dataset+pinn

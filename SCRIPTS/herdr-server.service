@@ -1,6 +1,6 @@
 # SCRIPTS/herdr-server.service
 # ============================
-# systemd *user* unit for the Herdr server on the hub (NewPlan.md §2B/§9).
+# systemd *user* unit for the Herdr server on the hub (DOCS/NewPlan.md §2B/§9).
 #
 # Install (as the hub user, not root):
 #   mkdir -p ~/.config/systemd/user

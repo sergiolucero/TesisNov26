@@ -4,7 +4,7 @@ solve_1d_fno.py
 
 Phase 4: train a 2D Fourier neural operator (FNO) on the 32-scenario 1D ADE
 dataset (`out/dataset.npz`) and run the spectral / resolution / normalization
-checks from `plan.md` Phase 4:
+checks from `DOCS/plan.md` Phase 4:
 
   * frequency truncation  -- controlled by --modes1/--modes2 (k_max)
   * resolution invariance -- train on a coarsened grid (--coarse-factor) and

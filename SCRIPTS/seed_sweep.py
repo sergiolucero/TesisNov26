@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-Phase 3 (Actions.md) showed that at *fixed* hyperparameters the 1D PINN
+Phase 3 (DOCS/Actions.md) showed that at *fixed* hyperparameters the 1D PINN
 baseline's full-grid relative L2 error ranges from 1.17e-2 to 8.14e-2 across
 seeds — a 7x spread. Any experiment measured on a single seed is therefore
 noise: a lucky seed 0 made `--tau-ramp` look like a 32% improvement that did

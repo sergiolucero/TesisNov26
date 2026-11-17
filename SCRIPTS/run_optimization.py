@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end driver for the stochastic pump-and-treat optimization.
 
-Stages follow ``optimization_plan.md``:
+Stages follow ``DOCS/optimization_plan.md``:
 
   O-0  deterministic forward check, design plume and well layout
   O-1  random-field archive (KL, log-normal K, reproducibility)

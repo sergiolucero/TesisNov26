@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SCRIPTS/fleet_status.sh
 # =======================
-# One-shot health snapshot for the fleet described in NewPlan.md (§5).
+# One-shot health snapshot for the fleet described in DOCS/NewPlan.md (§5).
 #
 # Checks, in order: host/load/memory, Tailscale, Herdr, repo state, job
 # sentinels, and disk. Read-only: it never starts, stops or repairs anything.
@@ -64,7 +64,7 @@ json_str() {
 # Collect
 # --------------------------------------------------------------------------
 HOST=$(hostname 2>/dev/null || echo unknown)
-# The tailnet name is what NewPlan.md and the ACL policy refer to
+# The tailnet name is what DOCS/NewPlan.md and the ACL policy refer to
 # (ubuntu-hub, do-relay, ...), and it can differ from the OS hostname.
 TS_HOST=""
 NOW=$(date -u +%FT%TZ)
@@ -85,7 +85,7 @@ if have tailscale; then
   TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
   [[ -n "$TS_IP" ]] && TS_UP=1
   # Tags and the tailnet hostname come from the control plane. Tags matter for
-  # the fleet-acl.hujson policy (NewPlan.md §6); the tailnet hostname is what
+  # the fleet-acl.hujson policy (DOCS/NewPlan.md §6); the tailnet hostname is what
   # that policy and the docs refer to (ubuntu-hub, do-relay, ...), which can
   # differ from the OS hostname.
   ts_self=$(tailscale status --json 2>/dev/null | python3 -c '
@@ -154,7 +154,7 @@ done
 if [[ "$TS_INSTALLED" == "1" && "$TS_UP" == "1" ]]; then :; else FAILS=$((FAILS + 1)); fi
 
 # Untagged nodes are a warning only: fleet-acl.hujson is rolled out in stages,
-# so an untagged node is expected until NewPlan.md §6 is complete.
+# so an untagged node is expected until DOCS/NewPlan.md §6 is complete.
 if [[ "$TS_INSTALLED" == "1" && "$TS_UP" == "1" && -z "$TS_TAGS" ]]; then
   WARNS=$((WARNS + 1))
 fi
@@ -202,7 +202,7 @@ if [[ "$JSON" == "0" ]]; then
     if [[ "$TS_UP" == "1" ]]; then ok "up, tailnet IPv4 $TS_IP"
     else fail "installed but not up (run: sudo tailscale up)"; fi
     if [[ -n "$TS_TAGS" ]]; then ok "tags: $TS_TAGS"
-    else warn "untagged (see SCRIPTS/fleet-acl.hujson and NewPlan.md §6)"; fi
+    else warn "untagged (see SCRIPTS/fleet-acl.hujson and DOCS/NewPlan.md §6)"; fi
   else
     fail "not installed (run: SCRIPTS/fleet_bootstrap.sh --role ${ROLE:-hub})"
   fi
@@ -215,7 +215,7 @@ if [[ "$JSON" == "0" ]]; then
     elif [[ "$ROLE" == "hub" ]]; then warn "server not running (start: herdr server)"
     else info "server not running (expected off-hub)"; fi
   else
-    if [[ "$ROLE" == "hub" ]]; then fail "not installed (see NewPlan.md §2B)"
+    if [[ "$ROLE" == "hub" ]]; then fail "not installed (see DOCS/NewPlan.md §2B)"
     else warn "not installed"; fi
   fi
   echo

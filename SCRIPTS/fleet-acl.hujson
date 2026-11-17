@@ -2,7 +2,7 @@
 // fleet-acl.hujson — Tailscale access policy for the TESIS fleet
 // ============================================================================
 //
-// Implements the NewPlan.md §6 / §9 open item:
+// Implements the §6 / §9 open item in DOCS/NewPlan.md:
 //
 //   "tailnet ACL: tag server:hub, server:relay, client:surface, deny
 //    server-to-server except SSH from the hub"
@@ -33,7 +33,7 @@
 //     fleet-tag.sh therefore re-states this node's current settings explicitly.
 //
 // Tag naming: ACL tags must be lowercase alphanumeric plus hyphens — there is
-// no colon or slash. `server:hub` in NewPlan.md is written here as
+// no colon or slash. `server:hub` in DOCS/NewPlan.md is written here as
 // `tag:server-hub`.
 // ============================================================================
 
@@ -60,7 +60,7 @@
   // Grants. Tailscale prefers `grants` over the legacy `acls`; each grant is
   // "src may reach dst on dst-ports" and implies no other capability.
   //
-  // Ports used by this fleet (NewPlan.md §2, §5):
+  // Ports used by this fleet (DOCS/NewPlan.md §2, §5):
   //   22   SSH (Tailscale SSH)
   //   5001 app.py figure viewer + /fleet dashboard (run_app.sh)
   //   80   do-relay Nginx → 443 redirect
@@ -121,7 +121,7 @@
 
     // --- TRANSITIONAL: remove after every node is tagged ---------------------
     // Deliberately broad so step 1 of the rollout cannot lock you out. Delete
-    // these two blocks once §6 of NewPlan.md is satisfied; they are the
+    // these two blocks once §6 of DOCS/NewPlan.md is satisfied; they are the
     // "autogroup:member for servers" pattern the plan says not to keep.
     {
       "src": ["autogroup:member"],
@@ -137,7 +137,7 @@
   // so "server-to-server except SSH from the hub" already holds when you
   // delete the TRANSITIONAL block above. These entries document the intent so
   // a future edit does not silently re-open them, and they pin the fact that
-  // the relay must never initiate to the hub (NewPlan.md §1: the hub alone
+  // the relay must never initiate to the hub (DOCS/NewPlan.md §1: the hub alone
   // runs the Herdr server and the bare repo).
   //
   // Tailscale SSH is NOT declared here on purpose: on this tailnet it is
@@ -151,13 +151,13 @@
   // *session* semantics (check/accept) on top of the transport rule.
   // ------------------------------------------------------------------------
 
-  // MagicDNS is enabled on this tailnet, so the hostnames in NewPlan.md
+  // MagicDNS is enabled on this tailnet, so the hostnames in DOCS/NewPlan.md
   // (ubuntu-hub, do-relay, surface-ctrl) resolve without IPs. Set them with:
   //   sudo tailscale up --hostname=ubuntu-hub     # or SCRIPTS/fleet_bootstrap.sh --role hub
   //
   // Autogroup note: `autogroup:self` (a user's own devices) is intentionally
   // NOT used for servers. Do not add it to tag:server-* destinations — it is
-  // how a lost phone becomes a jump host. See NewPlan.md §6.
+  // how a lost phone becomes a jump host. See DOCS/NewPlan.md §6.
   //
   // `hosts` stays empty: every node gets a stable MagicDNS name, so no manual
   // name→IP aliases are needed. Add entries only for hosts outside the tailnet.

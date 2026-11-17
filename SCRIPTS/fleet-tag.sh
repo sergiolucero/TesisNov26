@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SCRIPTS/fleet-tag.sh
 # ====================
-# Apply the TESIS fleet ACL tags (NewPlan.md §6) to a node.
+# Apply the TESIS fleet ACL tags (DOCS/NewPlan.md §6) to a node.
 #
 # The policy these tags implement lives in SCRIPTS/fleet-acl.hujson. This
 # script only assigns a tag to the node it runs on; it never edits the policy.

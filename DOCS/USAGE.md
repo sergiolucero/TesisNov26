@@ -1,8 +1,9 @@
-# SCRIPTS — usage
+# SCRIPTS — usage (scripts in `SCRIPTS/`, this file in `DOCS/`)
 
-Every runnable entry point in the project lives in this directory. The
-repository root holds only the `physics/` and `stoch/` packages, `configs/`,
-`tests/`, the docs, and the generated `out/` / `figs/` / `runs/` trees.
+Every runnable entry point in the project lives in `SCRIPTS/`; this file and
+the rest of the write-ups live in `DOCS/`. The repository root holds only
+`README.md`, the `physics/` and `stoch/` packages, `configs/`, `tests/` and
+the generated `out/` / `figs/` / `runs/` trees.
 
 All paths below are relative to the **repository root**, which is what the
 scripts assume:
@@ -24,7 +25,7 @@ python3 -c "import torch, numpy, scipy, yaml, matplotlib; print(torch.__version_
 ```
 
 Prefix long jobs with `python3 -u` so progress lines reach the log immediately
-(`HUMAN.md` gotcha #4 — a killed run otherwise shows nothing).
+(`HUMAN.md` in this directory, gotcha #4 — a killed run otherwise shows nothing).
 
 ---
 

@@ -173,7 +173,8 @@ drive.mount('/content/drive')
 - `SCRIPTS/solve_1d_fno.py` — PyTorch FNO model.
 - `SCRIPTS/run_optimization.py` — stochastic pump-and-treat optimization workflow.
 
-Every script lives in `SCRIPTS/`; see `SCRIPTS/USAGE.md` for the full inventory.
+Every script lives in `SCRIPTS/`; see `USAGE.md` (this directory) for the full
+inventory.
 
 ## Troubleshooting
 

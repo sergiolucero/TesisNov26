@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SCRIPTS/fleet_bootstrap.sh
 # ==========================
-# Idempotent Tailscale bootstrap for the fleet described in NewPlan.md (§1-§2).
+# Idempotent Tailscale bootstrap for the fleet described in DOCS/NewPlan.md (§1-§2).
 #
 # One script, one role per node:
 #
@@ -290,7 +290,7 @@ EOF
 [fleet] next: control plane
   - ssh into the hub:   ssh <user>@ubuntu-hub
   - VS Code Remote-SSH: add ubuntu-hub and do-relay as hosts
-  - keep NewPlan.md and the literature notes here
+  - keep DOCS/NewPlan.md and the literature notes here
 EOF
     ;;
   colab)
@@ -299,7 +299,7 @@ EOF
 [fleet] next: ephemeral GPU node
   - this node is short-lived; do not expect its hostname to persist
   - run the experiments with:  bash run_colab.sh --preset quick
-  - see Collab.md for the notebook steps
+  - see DOCS/Collab.md for the notebook steps
 EOF
     ;;
 esac

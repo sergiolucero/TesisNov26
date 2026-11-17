@@ -11,7 +11,7 @@ Method      : wall clock measured around the whole process (bash date %s%N),
               so numbers include interpreter start-up and imports (~1.0-1.5 s).
               "in-run" is the wall clock the script itself reports in
               summary.json / metrics.json / the final log line.
-              Every invocation used `python3 -u` (see HUMAN.md gotcha #4).
+              Every invocation used `python3 -u` (see DOCS/HUMAN.md gotcha #4).
               Output dirs point at /tmp so repo artifacts are untouched.
 
 SUMMARY

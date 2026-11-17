@@ -21,12 +21,13 @@ uncertainty.
 
 ## Layout
 
-Everything runnable lives in `SCRIPTS/` (see `SCRIPTS/USAGE.md`); the
-repository root holds only the packages, configs, docs and outputs.
+Everything runnable lives in `SCRIPTS/`, and the written-up design, plans and
+findings live in `DOCS/`. The repository root holds only the README, the
+packages, configs and generated outputs.
 
 | Path | Contents |
 |---|---|
-| `SCRIPTS/` | All entry points and operations scripts — **see [`SCRIPTS/USAGE.md`](SCRIPTS/USAGE.md)** |
+| `SCRIPTS/` | All entry points and operations scripts — **see [`DOCS/USAGE.md`](DOCS/USAGE.md)** |
 | `SCRIPTS/hydrology.py` | 1D ADE data generator and Ogata–Banks reference |
 | `SCRIPTS/solve_1d_pinn.py` | 1D PINN solver (soft/hard BC, Adam + L-BFGS) |
 | `SCRIPTS/solve_1d_fno.py` | 1D Fourier neural operator |
@@ -39,12 +40,14 @@ repository root holds only the packages, configs, docs and outputs.
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
-| `NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
+| `DOCS/` | **All project documentation** — see [`DOCS/USAGE.md`](DOCS/USAGE.md) for the scripts |
+| `DOCS/NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
+| `DOCS/plan.md`, `DOCS/2D_plan.md`, `DOCS/3D_plan.md` | Staged verification plans and gates |
+| `DOCS/optimization_plan.md` | Stochastic optimization execution plan |
+| `DOCS/Conclusions.md` | **Consolidated findings, with what is trustworthy and what is not** |
+| `DOCS/Actions.md`, `DOCS/HUMAN.md`, `DOCS/GROWTH.md` | Run log, handoff notes, scaling plan |
+| `DOCS/Collab.md`, `DOCS/Results.md` | Colab GPU workflow, results log |
 | `TEX/` | LaTeX formulation and plans |
-| `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |
-| `optimization_plan.md` | Stochastic optimization execution plan |
-| `Conclusions.md` | **Consolidated findings, with what is trustworthy and what is not** |
-| `Actions.md`, `HUMAN.md`, `GROWTH.md` | Run log, handoff notes, scaling plan |
 
 ## Quick start
 
@@ -67,8 +70,8 @@ python -u SCRIPTS/run_optimization.py --config configs/opt/benchmark_small.yaml
 ```
 
 On this machine use `/root/base/bin/python3`; the default `python3` has no
-PyTorch. See `HUMAN.md` for environment gotchas and `Collab.md` for GPU/Colab
-instructions.
+PyTorch. See `DOCS/HUMAN.md` for environment gotchas and `DOCS/Collab.md` for
+GPU/Colab instructions.
 
 ## Next steps
 
@@ -76,7 +79,7 @@ instructions.
    gradient logging.
 2. Phase 4 FNO: the coordinate-channel fix works (1.46% test rel L2, 15x better
    than the dataset-mean baseline); repeat the mode/resolution sweeps as
-   medians over seeds. See `Conclusions.md`.
+   medians over seeds. See `DOCS/Conclusions.md`.
 3. Complete the 2D gates G2.1–G2.5, then the 2.5D/3D gates G3.1–G3.6.
 4. Run the full stochastic benchmark with out-of-sample reliability/cost
    certificates and CVaR/cleanup-time reporting.

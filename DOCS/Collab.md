@@ -192,6 +192,7 @@ drive.mount('/content/drive')
 - `SCRIPTS/collab_run.py` — Colab-friendly dispatcher for dataset, PINN, FNO, optimization, and tests.
 - `SCRIPTS/run_colab.sh` — shell wrapper that checks the GPU, installs deps, and calls the dispatcher.
 - `SCRIPTS/multi_colab.py` — drives several Colab VMs from your laptop (`launch/status/logs/collect/stop`) for runs too large for one notebook session.
+- `SCRIPTS/new_high_colab.py` — the same stages tuned for the high-end Colab GPUs (A100 = v5, H100/G4 = v6): measures the card, batches the transport sweep and drives the optimizer's `--backend torch`; `--launch` rents and drives the VM for you.
 - `requirements.txt` — Python dependencies.
 - `SCRIPTS/hydrology.py` — Generates 1D ADE scenarios/datasets.
 - `SCRIPTS/solve_1d_pinn.py` — PyTorch PINN model.

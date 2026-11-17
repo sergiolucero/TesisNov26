@@ -47,7 +47,7 @@ path is untouched and remains the reference.
 | `stoch/optimize.py` | `pattern_search_batched`: one compass sweep per batched call |
 | `SCRIPTS/run_optimization.py` | `--backend {numpy,torch}`, `--device`, `--dtype`, `--krylov-rtol/maxiter`, `--[no-]batched-search` |
 | `SCRIPTS/collab_run.py` | `--opt-backend {auto,numpy,torch}`, `--opt-dtype`; the `opt` stage now receives the device |
-| `SCRIPTS/bench_backend.py` | measures both backends on *your* runtime and prints a verdict |
+| `SCRIPTS/bench_backend.py` | measures both backends on *your* runtime (archive build, per-evaluation, compass sweep, agreement, projection) and prints a verdict |
 | `tests/test_fv2d_torch.py`, `tests/test_saa_torch.py` | 28 parity tests (flow, velocity, transport, stencil transpose, objective, summary, optimizer, backend selection) |
 
 ### Why matrices are not batched with `splu`
@@ -132,20 +132,38 @@ Identical answer to the last digit, both matching the value recorded in
 `RUNTIMES.txt`. The batched backend is ~4x slower here because this box has no
 accelerator.
 
-### Batched scaling (CPU, float64, 32x16 grid, 24 steps, 8 scenarios)
+### Batched scaling on one CPU core
 
-| candidates `S` | wall clock | Krylov iterations/solve |
-|---|---|---|
-| 1 | 0.69 s | 17.2 |
-| 2 | 0.73 s | 17.9 |
-| 4 | 1.43 s | 18.5 |
-| 8 | 4.40 s | 19.1 |
+`SCRIPTS/bench_backend.py --device cpu`, float64, `benchmark.yaml`:
 
-The important column is the middle one: **8 candidates cost ~6x one candidate,
-not 8x, and the iteration count barely moves.** That sub-linearity is what a
-GPU converts into throughput -- one compass sweep (18 candidates at the
-benchmark's 9 wells) becomes a single large kernel batch instead of 18 serial
-`M`-scenario Python loops.
+| geometry | backend | archive build | one evaluation | compass of 18 |
+|---|---|---|---|---|
+| 80x40, `nsteps=100`, `M=8` | NumPy `splu` | 0.25 s | 3.85 s | 69 s (18 x 3.85) |
+| 80x40, `nsteps=100`, `M=8` | torch, CPU | 37.2 s | 10.5 s | **168 s** |
+| 30x15, `nsteps=40`, `M=8` (`--quick`) | NumPy `splu` | 0.05 s | 0.11 s | 2.0 s |
+| 30x15, `nsteps=40`, `M=8` (`--quick`) | torch, CPU | 0.18 s | 1.14 s | 2.0 s |
+
+Two things to read from this:
+
+1. **On a CPU the batching is a straight loss** (0.37x the NumPy throughput at
+   the full geometry). The batch axis has nothing to parallelise across, so one
+   batched call costs ~`S` times one candidate, and the Python-level Krylov loop
+   adds overhead that `splu` does not have. This is why batched search is
+   enabled automatically only on an accelerator.
+2. **The arithmetic is unchanged by batching; the parallelism is new.** The
+   compass sweep is 16x one candidate at the full geometry (it is
+   arithmetic-bound there) -- on a GPU that 16x still has to be done, but it is
+   done as *one* batch of `18 x M` systems instead of 18 sequential `M`-system
+   loops on a single core. The comparison that matters is GPU-seconds per
+   batched call versus CPU-seconds for 18 sequential calls.
+
+The Krylov cost is well behaved (measured at the full geometry, 9 wells):
+24 BiCGSTAB iterations per time step (worst 34) with warm starts, and 345 CG
+iterations for the batched Darcy solve (one-time per archive). With those
+counts, a T4-class GPU spends a handful of seconds on a full `M=40`,
+`nsteps=100` evaluation -- but that is an estimate from the measured iteration
+counts, not a measurement. Run the benchmark script on the runtime you are
+considering paying for.
 
 ### What must be measured on your runtime
 
@@ -163,10 +181,19 @@ a full compass sweep, (c) the relative difference in the objective (so a
 at that size -- if it does not, increase `nx*ny`, `time.nsteps` or `saa.M_train`
 rather than upgrading the subscription.
 
-Rule of thumb, from the structure of the work: the batched backend wins when
-`nx*ny >= 10^4` and `nsteps*M >= 10^3`, i.e. exactly the full-benchmark
-geometry (`80x40`, `nsteps=100`, `M_train=40`). At the `--quick` sizes the grid
-is 450 cells and the GPU will look useless; do not judge Pro on the quick run.
+Rule of thumb, from the structure of the work:
+
+* `splu` cost per solve grows **superlinearly** with `nx*ny` (fill-in) while the
+  stencil matvec grows **linearly** in `nnz`. The crossover therefore moves
+  towards the GPU as the grid grows: the batched backend is already competitive
+  at `80x40` (`3.2e3` cells) on paper, and clearly ahead at `160x80`
+  (`1.28e4`, the `benchmark_160x80.yaml` geometry).
+* batching pays off in proportion to `nsteps * M * S`. At `--quick` sizes
+  (450 cells, `nsteps=40`, `M=8`) a GPU will look useless -- do not judge a
+  subscription on the quick run.
+* kernel-launch overhead sets a floor of roughly `15 ms x nsteps x iterations`
+  per batched call, which is why the recommendation is "measure, do not
+  extrapolate".
 
 ## 5. Remaining NumPy-only work
 

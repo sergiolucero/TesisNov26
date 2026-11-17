@@ -96,7 +96,8 @@ Krylov solves.  See DOCS/GPU.md and SCRIPTS/bench_backend.py.
 
 Same command, both backends, this 8-core CPU box (no GPU present):
   run_optimization.py --quick --stage opt                      13.8 s  (numpy)
-  run_optimization.py --quick --stage opt --backend torch      56.7 s  (torch, cpu)
+  run_optimization.py --quick --stage opt --backend torch   22.0-56.7 s (torch, cpu;
+                                                             spread is box load, not code)
   -> identical result: q* = [0.1, 0.0, 0.0, 9.38], train J 378906.45,
      test J 378822.07.  Torch is 4x SLOWER on CPU by design (a CPU has no
      parallelism for the batch axis); the point is the GPU case, which must be

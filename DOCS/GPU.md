@@ -129,8 +129,9 @@ parallelise across `S*M` systems, and the batched loop pays Python overhead that
 | same with `--backend torch --device cpu` | q\\* = [0.1, 0.0, 0.0, 9.38], train J = 378906.45, test J = 378822.07, 56.7 s |
 
 Identical answer to the last digit, both matching the value recorded in
-`RUNTIMES.txt`. The batched backend is ~4x slower here because this box has no
-accelerator.
+`RUNTIMES.txt`. The batched backend is 1.6-4x slower here (22.0 s vs 13.8 s on
+an idle box, 56.7 s on a loaded one) because this machine has no accelerator;
+see `DOCS/Conclusions.md` §9 for what that control does and does not prove.
 
 ### Batched scaling on one CPU core
 
@@ -187,28 +188,42 @@ Two things follow that the estimate got only partly right.
 0.08 GB to 1.11 GB. The compass sweep is where the value is; there is little
 left to gain by batching further.
 
-**A full `M=40` evaluation: 7.3 s if extrapolated from `M=8`, ~1.9 s measured
-directly.** 18 candidates x 40 scenarios x 10.16 ms extrapolates to 7.3 s, but
+**A full `M=40` compass sweep: 7.3 s if extrapolated from `M=8`, ~1.9 s
+measured directly** (i.e. ~0.10 s per SAA evaluation).
+18 candidates x 40 scenarios x 10.16 ms extrapolates to 7.3 s, but
 that 10.16 ms/slice was itself derived at `M=8` where a 1.5 s fixed overhead is
 amortised over only 144 slices. Measuring at `M=40` directly (see "It is the
 fixed overhead" below) gives **1.86 s**. The extrapolated budgets below are
 therefore conservative upper bounds; the real ones are ~4x smaller.
 
-| run | evaluations | T4 wall clock |
-|---|---|---|
-| bounded (1 start, 200 evals) | 200 | **24 min** |
-| paper (3 starts x 1500 evals) | 4500 | **9.1 h** |
+18 candidates are 18 SAA evaluations, so a budget of `max_evals` costs
+`max_evals/18` sweeps:
+
+| run | SAA evaluations | compass sweeps | T4, per-sweep measurement | T4, `ms/slice` extrapolation |
+|---|---|---|---|---|
+| bounded (1 start, 200 evals) | 200 | 12 | **~22 s** | 24 min |
+| paper (3 starts x 1500 evals) | 4500 | 250 | **~7.8 min** | 9.1 h |
+
+The right-hand column is the conservative one and it is ~20x too pessimistic:
+it multiplies a per-slice cost measured at `M=8` (where 1.5 s of fixed overhead
+is spread over only 144 slices) by `M=40`, and then charges it per evaluation
+rather than per sweep. The per-sweep column uses the directly measured 1.86 s
+at `M=40`. See `DOCS/Conclusions.md` section 9.
 
 Compare **like for like**, at `M=8` and the same 80x40 geometry: the NumPy
 `splu` backend takes 69 s for a sequential compass of 18, the T4 takes 1.46 s
 for the same sweep batched -- a **47x** speedup. At the `M=40` the optimizer
-actually uses, one evaluation is 7.3 s on the T4; the CPU figure it replaces is
-the 33.2 s/eval recorded in `runs/runtimes.jsonl` at 160x80 (contended, and a
-different geometry, so treat that ratio as indicative rather than exact).
+actually uses, one sweep is 1.86 s, i.e. **~0.10 s per evaluation**; the CPU
+figure it replaces is the 33.2 s/eval recorded in `runs/runtimes.jsonl` at
+160x80 (contended, and a different geometry, so treat that ratio as indicative
+rather than exact).
 
-So the GPU is worth having, but it does not put the paper run inside one
-session: 9.1 h exceeds a T4 session, which needs `--max-seconds` splitting or
-`SCRIPTS/multi_colab.py` across several VMs.
+So the GPU is worth having and the paper run fits inside one session: minutes,
+not hours, at the measured per-sweep cost. The 9.1 h figure in the conservative
+column is what `--max-seconds` splitting or `SCRIPTS/multi_colab.py` across
+several VMs was being planned for; on the measured basis that machinery is a
+safety net, not a requirement. Against ~21 h for the same budget on one CPU
+core, this is the whole case for renting the GPU.
 
 **The workload is latency bound, not bandwidth bound — contrary to the
 module docstring's premise.** At `S=288` a slice moves 1.58 MB in 7.6 ms, i.e.
@@ -255,7 +270,8 @@ faster card does not fix that; it is why an A100 ties a T4 here.
 
 **Consequence for the plan.** Removing the per-step launches (one batched
 solve for the whole time history, or a persistent kernel) would take the paper
-run from **2.3 h to 0.45 h on the A100** -- a 5x win from software, against the
+run from roughly **8 min to under 2 min on the A100** -- a ~5x win from
+software (the same 81 % overhead share, applied to the corrected basis), against the
 0x that a better card delivered. That, not a bigger GPU, is the next thing to
 try.
 

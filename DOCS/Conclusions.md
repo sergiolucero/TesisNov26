@@ -260,6 +260,10 @@ uncertainty only.
   proven by construction (constant input ⇒ constant output), not inferred.
 - Resolution-invariance and mode-truncation trends (§5).
 - Opt-stage cost and convergence curve (§6).
+- NumPy↔torch backend parity (§9) — 28 tests at 1e-12…1e-10 and an identical
+  end-to-end policy, so the two implementations are the same model.
+- GPU throughput (§9) — measured on a T4 and an A100: 47× per compass sweep at
+  `M=8`, ~1.9 s per sweep at `M=40`, and an A100 that does not beat the T4.
 
 **Still single-seed or unverified:**
 - The outlet-bias trend magnitudes in §3b.
@@ -270,6 +274,15 @@ uncertainty only.
   q* on 4 of 9 wells, test reliability 0.969, all gates pass. (2.5D axisymmetric
   bridge is still untouched.)
 
+- The GPU numbers here are one geometry (80×40, 9 wells, `nsteps=100`) on rented
+  T4/A100 instances, float32. The `M`-scaling line (`1.52 s + 8.9 ms × M`) is a
+  two-point fit on the A100; treat extrapolations beyond `M=40` as provisional.
+- A full `--stage opt` on a GPU has since completed, twice, at the larger 160×96
+  hydrology (`DOCS/GPU.md` §6-7): 4.14 h in float64 and 1.67 h in mixed float32.
+  The float32 policy is the accepted answer (J 428,579) and is certified on 400
+  scenarios no run had seen, though its reported CVaR tail does not survive that
+  fresh draw (+0.005 in-run against +0.616 out of sample).
+
 **Open:**
 - Rebuild `TEX/formulation.pdf` — the `.tex` has been corrected (§2) but no
   LaTeX toolchain exists on the assembly host (all five `.tex` files verified
@@ -279,6 +292,10 @@ uncertainty only.
   coord-channel config** (§5, five seeds); the 250-epoch and mode-sweep rows
   remain single-seed.
 - DO-lane execution of the bounded opt run to exercise the dispatch path.
+- Remove the per-step kernel launches (§9): worth ~5× on an A100, more than a
+  card upgrade.
+- Run one full `--stage opt --backend torch --device cuda` and confirm the
+  selected `q*` matches the NumPy policy — the last unfilled link in the chain.
 
 ---
 
@@ -296,10 +313,165 @@ uncertainty only.
 5. **A negative result is a result.** Phase 3 saved the project from adopting a
    loss-shaping trick that does not work, which a single-seed sweep would have
    enshrined.
+6. **A speedup is only a speedup if the answer is the same.** Every backend
+   comparison in this repository is gated on a relative objective agreement
+   (measured at 1e-12) before any timing is quoted, and the slower backend is
+   kept as the reference rather than deleted.
+7. **Measure the device you are paying for.** Hardware claims are the easiest
+   thing to inherit from a README and the hardest to falsify later, so the code
+   ships `bench_backend.py` (a verdict from *your* runtime) instead of a table
+   of somebody else's speedups.
+
+---
+
+## 9. Compute backend — the GPU is worth paying for, but the bottleneck it removes is launch overhead, not arithmetic
+
+**Before this work the GPU ran two 1D toys and nothing else.** `solve_1d_pinn.py`
+and `solve_1d_fno.py` were the only modules importing torch (a 2→64→64→64→64→1
+MLP and a small 1D FNO on ~1.5k points, both launch-bound); `physics/fv2d.py` and
+every `stoch/*` module are NumPy + SciPy `splu`, and `SCRIPTS/collab_run.py`
+forwarded `--device` to the PINN/FNO stages but never to the `opt` stage. The
+single most expensive stage — `run_optimization.py --stage opt`, the one that
+timed out at >1800 s in §6 — therefore ran on one CPU core with the accelerator
+idle. Paying for GPU hours bought nothing; the honest answer at the time was
+"no", and it was a statement about the code, not about the hardware.
+
+**The fix is a second backend for that stage.** `physics/fv2d_torch.py` +
+`stoch/saa_torch.py` replace per-scenario `splu` with matrix-free 5-point
+stencils and batched Krylov solves (CG for the SPD Darcy problem, BiCGSTAB for
+transport) over one `S candidates × M scenarios` axis, keeping the *identical*
+implicit-Euler scheme — no operator splitting, so the mass-balance identity and
+every gate still hold. The NumPy path is untouched and remains the reference.
+
+### It is the same model
+
+Parity, float64, CPU (`tests/test_fv2d_torch.py`, `tests/test_saa_torch.py`;
+88 tests in the suite, all passing):
+
+| quantity | torch vs NumPy |
+| :--- | ---: |
+| background/unit heads `h0`, `hw` | 1e-12 / 1e-15 |
+| transport field, one step and 8-step runs | 4e-12 … 9e-12 |
+| objective terms `J`, `G`, `H` | 6.5e-11 / 9.3e-10 / 1.3e-14 |
+| `C_final`; per-step mass ledger | 6.2e-12; 5e-11 |
+| global mass-balance residual | **5.9e-11** (NumPy: 1.8e-15) |
+| `--quick --stage opt`, end to end | **identical**: `q* = [0.1, 0, 0, 9.38]`, train J 378906.45, test J 378822.07 |
+| float32 forward on a T4 vs NumPy (`--verify`) | rel_max 4.4e-05 |
+
+The one honest weakening: the mass-balance floor moves from 1e-15 to 1e-11,
+because Krylov solves stop on a relative residual rather than an exact
+factorisation. The `O2` gate is 1 %, so nothing fails — but 1e-15 is a *NumPy*
+property and must not be quoted for the batched path.
+
+### On a CPU the batching is a loss, and that is the control
+
+`SCRIPTS/bench_backend.py`, float64, `benchmark.yaml`, one core:
+
+| geometry | backend | archive | one evaluation | compass sweep (18) |
+| :--- | :--- | ---: | ---: | ---: |
+| 80×40, 100 steps, M=8 | NumPy `splu` | 0.25 s | 3.85 s | 69 s |
+| 80×40, 100 steps, M=8 | torch, CPU | 37.2 s | 10.5 s | **168 s** |
+| 30×15, 40 steps, M=8 | NumPy `splu` | 0.05 s | 0.11 s | 2.0 s |
+| 30×15, 40 steps, M=8 | torch, CPU | 0.18 s | 1.14 s | 2.0 s |
+
+0.37× the SciPy throughput at the full geometry, 0.10× at the quick one. There
+is nothing to parallelise on one core, so a batched call costs ~`S`× one
+candidate plus Python-loop overhead `splu` does not have. Two consequences: the
+batched path is a GPU vehicle and never a CPU optimisation (batched search
+auto-enables only on `cuda`/`mps`), and the CPU run is the control that makes
+the GPU comparison meaningful — if the objective had disagreed, the timing
+would have been irrelevant. The benchmark checks agreement (|dJ|/J = 1.2e-12)
+before quoting a ratio.
+
+### On a T4 the same sweep is 47× faster, and the gap widens with `M`
+
+Measured on a rented **Tesla T4** (`SCRIPTS/new_high_colab.py --launch
+--gpu-class turing --accelerator T4 bench forward --preset paper --verify`,
+torch 2.14.1+cu130, float32, 80×40, `nsteps=100`, 9 wells):
+
+| candidates `S` (`M=8`) | T4 wall clock | ms per (cand·scen) |
+| ---: | ---: | ---: |
+| 1 | 1.41 s | 176.7 |
+| 18 (one compass sweep) | **1.46 s** | 10.16 |
+| 288 | 17.58 s | 7.63 |
+
+Against the NumPy sweep of **69 s** for the same 18 candidates at `M=8`, that is
+a **47× speedup** — and the important part is the scaling, not the constant:
+
+- `S=1 → 18` cuts the per-slice cost **17×**: batching *is* the win.
+- `S=18 → 288` adds only 1.3× more while VRAM grows 14× (0.08 → 1.11 GB), so a
+  compass sweep is the right batch size; there is little left above it.
+- At `M=40` the sweep measures **1.86 s**, i.e. 1.3× the `M=8` time for 5× the
+  scenarios. **The GPU is nearly flat in `M`; NumPy is linear in `M`.** That is
+  where the two-order-of-magnitude gap at the paper's scenario count comes
+  from, and it is why the `--quick` sizes (450 cells, `M=8`) show the GPU at
+  parity while the real run does not.
+
+Budget, from that measurement (18 evaluations per sweep, 9 wells):
+
+| run | SAA evaluations | sweeps | T4, per-sweep measurement | T4, `ms/slice` extrapolation |
+| :--- | ---: | ---: | ---: | ---: |
+| bounded (1 start, `max_evals=200`) | 200 | 12 | **~22 s** | 24 min |
+| paper (3 starts × `max_evals=1500`) | 4500 | 250 | **~7.8 min** | 9.1 h |
+
+The right-hand column is the figure `GPU.md` originally carried, and it is
+wrong by ~20×: it takes a *per-slice* cost derived at `M=8` (where 1.5 s of
+fixed overhead is amortised over only 144 slices) and multiplies it by `M=40`,
+then slips a per-sweep/per-evaluation factor. Measured directly, the paper run
+is minutes. **Against ~21 h for the same budget on one CPU core, that is the
+entire justification for the subscription** — and it was invisible from the
+code audit alone, which is exactly why the audit's "no" needed a measurement
+before anyone acted on it.
+
+### The remaining cost is fixed overhead, not arithmetic — so the next lever is software
+
+Two measurements say the same thing:
+
+- At `S=288` a slice moves 1.58 MB in 7.6 ms ≈ 208 MB/s, against ~320 GB/s of
+  HBM. The memory floor is ~5 µs, three orders of magnitude below the measured
+  time; float32-vs-float64 and other traffic reductions buy almost nothing.
+- An **A100 ties the T4** on one compass sweep (10.85 vs 10.16 ms per slice)
+  despite 13× the fp32 matmul throughput. Scaling `M` at fixed `S=18` on the
+  A100 gives `wall = 1.52 s + 8.9 ms × M`: at `M=40`, **81 % of the call is
+  pure overhead** while the card sits idle.
+
+The cost is the ~100 time steps × ~24 dependent BiCGSTAB iterations, each issued
+as a separate short solve. Removing the per-step launches (one batched solve for
+the whole time history, or a persistent kernel) is worth **2.3 h → 0.45 h on the
+A100 — a 5× win from software against the 0× a better card delivered.** Buy the
+cheapest card that fits VRAM; spend the difference on engineering time. One
+caveat for `bench_backend.py`: because it derives ms/slice at the configured
+`M`, it over-estimates a realistic `M=40` evaluation by ~4×, so its projection
+is an upper bound, not a forecast.
+
+### Decision rule
+
+| what you actually run | verdict |
+| :--- | :--- |
+| `--models smoke` / `--preset quick` (450 cells, `nsteps=40`, `M=8`) | **No.** The GPU is at parity with the CPU there; a subscription buys nothing. |
+| full `--stage opt` at the paper geometry (80×40, `M=40`, thousands of evaluations) | **Yes.** ~8 min on a T4 against ~21 h on one core. |
+| the same, on an A100 at this batch size | **No.** It ties the T4 on a compass sweep; the overhead dominates. |
+| 160×80 and larger | Yes, and more so: batch further and the fixed cost amortises better. |
+
+`--dtype float32` is the screening mode (field error ~1e-5, mass balance ~1e-6,
+`--verify` 4.4e-05): enough to rank policies, not enough to publish. Any policy
+selected in float32 must be re-scored in float64 (NumPy) before it appears in a
+table.
+
+Solver properties (`O1`–`O4`: exact-adjoint gradient, 1e-15 mass balance,
+chance-constraint reformulations) deliberately stay on the NumPy reference: they
+certify the *solver*, not the throughput, and porting them would weaken exactly
+the numbers they exist to pin down. `SLSQP`/the discrete adjoint is NumPy-only
+and raises a clear error under `--backend torch` rather than returning a
+gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
+(the exact transpose of the transport operator, checked in
+`tests/test_fv2d_torch.py`), so batching the adjoint is a port, not a redesign.
 
 ---
 
 *Sources: `runs/sweeps/baseline_n5/`, `runs/phase3_tau_ramp.json`,
 `out/fno10/` (superseded), `configs/opt/benchmark_bounded.yaml` (b508372),
-`SCRIPTS/seed_sweep.py`. Per-phase detail in `Actions.md`; per-phase plans in
-`plan.md`.*
+`SCRIPTS/seed_sweep.py`, `runs/runtimes.jsonl`. §9 additionally: `DOCS/GPU.md`,
+`SCRIPTS/bench_backend.py`, `tests/test_fv2d_torch.py`,
+`tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
+Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*

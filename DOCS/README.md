@@ -19,7 +19,8 @@ plot gallery + single-plot viewer (`/plots`), and fleet health dashboard
   wells, objective/mass balance) implemented; quick and full gate runs exist.
 - **Stochastic optimization layer** implemented: KL random fields, well layout,
   SAA/CVaR chance constraints, discrete adjoint (gradient-checked), pattern
-  search, reporting, and 32 passing unit tests.
+  search, reporting, and 88 passing unit tests (including the
+  NumPy/torch backend parity gates).
 - **Portability**: device/dtype selection, config manifests, resumable
   checkpoints, Dockerfiles, Colab runner, and a Flask figure viewer.
 - **GPU backend**: the 2D flow/transport/SAA stack has a batched PyTorch

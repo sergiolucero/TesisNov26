@@ -617,7 +617,10 @@ def stage_bench(args: argparse.Namespace, tune: Tuning, card: dict[str, Any],
         elapsed = time.perf_counter() - t0
         peak = (torch.cuda.max_memory_allocated(int(card.get("index", 0))) - base_alloc
                 if card.get("cuda") else 0)
-        J = batch.J.detach().float()
+        # .cpu() is required: bench runs on the card, and float() on a CUDA
+        # tensor raises "can't convert cuda:0 device type tensor to numpy".
+        # Caught by a real L4 run -- the CPU smoke test could not reach it.
+        J = batch.J.detach().float().cpu()
         row = {
             "candidates": S,
             "scenarios": m0,
@@ -1032,7 +1035,13 @@ def render_provision(remote_root: str, remote_zip: str) -> str:
         f"  python3 -c \"import zipfile; zipfile.ZipFile('{remote_zip}').extractall('repo')\"",
         "fi",
         "cd repo",
-        "python3 -m pip install -q --upgrade-strategy only-if-needed -r requirements_colab.txt",
+        # Colab already ships numpy/scipy/matplotlib/PyYAML/Flask. A pip
+        # network hiccup must not kill the run: try once, and if it fails only
+        # warn -- the import check below is the real gate.
+        "python3 -m pip install -q --retries 3 --timeout 60 "
+        "--upgrade-strategy only-if-needed -r requirements_colab.txt"
+        " || echo '[high] warning: pip install failed (network?); relying on "
+        "the preinstalled Colab packages'",
         "python3 -c \"import numpy, scipy, yaml; print('[high] deps ok')\"",
         "python3 -c \"import torch; print('[high] torch', torch.__version__, "
         "'cuda', torch.cuda.is_available())\" || echo '[high] torch missing'",
@@ -1051,6 +1060,8 @@ def render_run(remote_root: str, remote_argv: list[str]) -> str:
         f"if [ ! -d {remote_root}/repo ]; then echo '[high] FATAL: repo missing'; exit 3; fi",
         f"cd {remote_root}/repo",
         "export PYTHONUNBUFFERED=1 MPLBACKEND=Agg",
+        # Propagate the traceback switch so a remote failure is debuggable.
+        "export HIGH_DEBUG=" + ("1" if os.environ.get("HIGH_DEBUG") else ""),
         f"trap 'echo \"{MARK_RUN}$?\"' EXIT",
         f"{inner} 2>&1 | tee {remote_root}/run.log",
     ]) + "\n"
@@ -1193,6 +1204,12 @@ def launch(args: argparse.Namespace) -> int:
             status = marker_exit(logfile, MARK_RUN)
             if status not in (None, 0):
                 log(f"run cell exited {status}")
+                # Stop the VM here too. Returning early used to leak a running
+                # session (and its billing) whenever the remote cell failed --
+                # observed with two orphaned L4 sessions after a bench error.
+                if not args.keep:
+                    cli_stream(cli("stop", "-s", session), logfile, 600,
+                               args.dry_run)
                 return 1
         if rc != 0 and name != "download":
             log(f"{name} failed with {rc}; see {logfile}")
@@ -1376,6 +1393,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             results[stage] = {"error": f"{type(exc).__name__}: {exc}",
                               "seconds": round(time.time() - t0, 3)}
             log(f"stage {stage} raised: {type(exc).__name__}: {exc}")
+            # A one-line message is not enough to debug a remote run: the
+            # traceback is the only clue you get back from a rented VM.
+            if os.environ.get("HIGH_DEBUG"):
+                import traceback
+                log("traceback:\n" + traceback.format_exc())
             break
         log(f"stage {stage} done in {results[stage]['seconds']:.1f}s")
 

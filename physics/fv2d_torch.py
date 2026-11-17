@@ -152,6 +152,17 @@ def _flat_norm(t: torch.Tensor) -> torch.Tensor:
     return torch.linalg.vector_norm(t.reshape(t.shape[0], -1), dim=1)
 
 
+def _scalar(t: torch.Tensor) -> float:
+    """Host-side float of a tensor on any device.
+
+    ``float(t)`` works on CPU but raises on a CUDA tensor ("can't convert
+    cuda:0 device type tensor to numpy"). These calls sit in the Krylov
+    convergence tests, so a real GPU run failed immediately in cg_solve while
+    every CPU test passed. ``.item()`` is device-agnostic.
+    """
+    return float(t.detach().item())
+
+
 def _dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Per-batch-element inner product for ``(B, ...)`` tensors."""
     return (a * b).reshape(a.shape[0], -1).sum(dim=1)
@@ -191,7 +202,7 @@ def cg_solve(
 
     it = 0
     for it in range(1, maxiter + 1):
-        if float((_flat_norm(r) / scale).max()) <= rtol:
+        if _scalar((_flat_norm(r) / scale).max()) <= rtol:
             break
         ap = matvec(p)
         alpha = _safe_div(rz, _dot(p, ap))
@@ -203,7 +214,7 @@ def cg_solve(
         p = z + _scale(beta, p) * p
         rz = rz_new
 
-    residual = float((_flat_norm(r) / scale).max())
+    residual = _scalar((_flat_norm(r) / scale).max())
     report = KrylovReport(iterations=it, solves=1, worst_iterations=it,
                           worst_residual=residual,
                           converged=residual <= max(rtol, 10.0 * rtol))
@@ -237,7 +248,7 @@ def bicgstab_solve(
 
     it = 0
     for it in range(1, maxiter + 1):
-        if float((_flat_norm(r) / scale).max()) <= rtol:
+        if _scalar((_flat_norm(r) / scale).max()) <= rtol:
             break
         rho = _dot(rhat, r)
         beta = _safe_div(rho, rho_old) * _safe_div(alpha, omega)
@@ -246,7 +257,7 @@ def bicgstab_solve(
         v = matvec(phat)
         alpha = _safe_div(rho, _dot(rhat, v))
         s = r - _scale(alpha, r) * v
-        if float((_flat_norm(s) / scale).max()) <= rtol:
+        if _scalar((_flat_norm(s) / scale).max()) <= rtol:
             x = x + _scale(alpha, x) * phat
             r = s
             break
@@ -257,7 +268,7 @@ def bicgstab_solve(
         r = s - _scale(omega, r) * t
         rho_old = rho
 
-    residual = float((_flat_norm(r) / scale).max())
+    residual = _scalar((_flat_norm(r) / scale).max())
     report = KrylovReport(iterations=it, solves=1, worst_iterations=it,
                           worst_residual=residual,
                           converged=residual <= max(rtol, 10.0 * rtol))
@@ -891,8 +902,15 @@ def transport_batch(
     if source_idx is not None:
         # The rate may be a scalar or one value per scenario (random source
         # strength); it is broadcast over the (candidate, scenario) batch.
-        rate = torch.as_tensor(np.asarray(source_rate, dtype=float),
-                               dtype=dtype, device=dev).reshape(-1)
+        # Not np.asarray(): source_rate may already be a CUDA tensor, and
+        # np.asarray() goes through Tensor.__array__, which raises "can't
+        # convert cuda:0 device type tensor to numpy". torch.as_tensor accepts
+        # scalar / ndarray / tensor alike and keeps the device.
+        if torch.is_tensor(source_rate):
+            rate = source_rate.detach().to(device=dev, dtype=dtype).reshape(-1)
+        else:
+            rate = torch.as_tensor(np.asarray(source_rate, dtype=float),
+                                   dtype=dtype, device=dev).reshape(-1)
         if rate.numel() == 1:
             rate_b = rate.expand(B)
         elif rate.numel() == M:

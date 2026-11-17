@@ -187,9 +187,12 @@ Two things follow that the estimate got only partly right.
 0.08 GB to 1.11 GB. The compass sweep is where the value is; there is little
 left to gain by batching further.
 
-**A full `M=40` evaluation costs 7.3 s, not "a handful of seconds".**
-18 candidates x 40 scenarios x 10.16 ms = **7.3 s per SAA evaluation**. That
-makes the real budgets:
+**A full `M=40` evaluation: 7.3 s if extrapolated from `M=8`, ~1.9 s measured
+directly.** 18 candidates x 40 scenarios x 10.16 ms extrapolates to 7.3 s, but
+that 10.16 ms/slice was itself derived at `M=8` where a 1.5 s fixed overhead is
+amortised over only 144 slices. Measuring at `M=40` directly (see "It is the
+fixed overhead" below) gives **1.86 s**. The extrapolated budgets below are
+therefore conservative upper bounds; the real ones are ~4x smaller.
 
 | run | evaluations | T4 wall clock |
 |---|---|---|
@@ -217,6 +220,53 @@ consequence for tuning: float32-vs-float64 and other traffic reductions buy
 little here, while reducing the *number* of Krylov iterations (better
 preconditioning, a looser tolerance) or increasing batching further are the
 levers that would actually pay. The `bench` numbers above are the evidence.
+
+### It is the fixed overhead, not the hardware (measured on A100)
+
+A100 vs T4 on the identical full geometry is the decisive comparison, and it
+does **not** favour the bigger card at the batch size the optimizer uses:
+
+| compass `S=18`, `M=8` | T4 | A100-SXM4 |
+|---|---|---|
+| ms per (cand·scen) | 10.16 | 10.85 |
+| best throughput (`S=288`) | 41.9 Mcell·step/s | 234.2 Mcell·step/s |
+| matmul fp32 / bf16 | 7.0 / 4.2 TFLOP/s | 94.0 / 140.1 TFLOP/s |
+
+The A100 has 13x the fp32 matmul throughput and 5.6x the peak batched
+throughput, yet it is **no faster on one compass sweep** (10.85 vs 10.16 ms).
+Scaling `M` at fixed `S=18` on the A100 explains why:
+
+```
+S=18, M      wall      ms/slice
+1            1.413 s   78.50
+4            1.606 s   22.31
+8            1.664 s   11.56
+40           1.856 s    2.58
+
+linear fit:  wall = 1.516 s fixed + 8.9 ms per scenario
+```
+
+**A compass sweep costs 1.52 s of fixed overhead plus 8.9 ms per scenario. At
+`M=40` that is 81% pure overhead** -- the hardware is idle for most of the call.
+The work is a sequence of ~100 time steps x ~24 BiCGSTAB iterations, each a
+short dependent sparse solve issued separately, so the GPU spends its time in
+launch and host<->device synchronisation rather than arithmetic. Buying a
+faster card does not fix that; it is why an A100 ties a T4 here.
+
+**Consequence for the plan.** Removing the per-step launches (one batched
+solve for the whole time history, or a persistent kernel) would take the paper
+run from **2.3 h to 0.45 h on the A100** -- a 5x win from software, against the
+0x that a better card delivered. That, not a bigger GPU, is the next thing to
+try.
+
+**This also corrects the `bench` extrapolation.** `bench` derives ms/slice as
+`wall/(S*M)` at `M=8`, where the 1.5 s fixed cost is spread over only 144
+slices, so it reports 10.85 ms/slice and implies 7.8 s for an `M=40`
+evaluation. Measured directly at `M=40` the same sweep takes **1.86 s**. The
+bench therefore **over-estimates the cost of a realistic evaluation by ~4x**;
+its per-slice figure is only meaningful once `S*M` is large enough to amortise
+the fixed term (S=288 rows above), and `recommended_m_train` should be read
+with that in mind.
 
 **Caveat on `bytes_per_slice`.** Measured 1,583,808 B versus an analytic
 153,600 B -- 10x higher than the model. The analytic value counts one

@@ -1179,12 +1179,18 @@ def launch(args: argparse.Namespace) -> int:
         argv = [binary] + (["--auth", args.colab_auth] if args.colab_auth else [])
         return argv + [str(p) for p in parts]
 
+    # --high-mem requests the bigger shape (A100 80GB instead of 40GB, T4 with
+    # more host RAM). It is not always available: an A100 high-mem request came
+    # back "Service Unavailable" on an account that was otherwise entitled to
+    # the standard A100, so treat it as opportunistic and retry without it.
+    wants_high_mem = accelerator in {"A100", "T4"} and not args.no_high_mem
+
+    def new_argv(high_mem: bool) -> list[str]:
+        return cli("new", "-s", session, "--gpu", accelerator,
+                   *(["--high-mem"] if high_mem else []))
+
     plan = [
-        # --high-mem only where Colab actually offers a bigger shape (A100 80GB
-        # instead of 40GB, T4 with more host RAM); it is ignored elsewhere.
-        ("new", cli("new", "-s", session, "--gpu", accelerator,
-                    *(["--high-mem"] if accelerator in {"A100", "T4"} else [])),
-         900),
+        ("new", new_argv(wants_high_mem), 900),
         ("upload", cli("upload", "-s", session, str(bundle), remote_zip), 3600),
         ("provision", cli("exec", "-s", session, "--timeout", "0", "-f",
                           str(rdir / "provision.py")), 3600),
@@ -1200,6 +1206,10 @@ def launch(args: argparse.Namespace) -> int:
     log(f"local run dir: {rdir}")
     for name, argv, timeout in plan:
         rc = cli_stream(argv, logfile, timeout, args.dry_run)
+        if name == "new" and rc != 0 and wants_high_mem and not args.dry_run:
+            # Retry the standard shape before giving up on the run.
+            log("new with --high-mem failed; retrying the standard shape")
+            rc = cli_stream(new_argv(False), logfile, timeout, args.dry_run)
         if name == "run":
             status = marker_exit(logfile, MARK_RUN)
             if status not in (None, 0):
@@ -1306,6 +1316,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         "stages there")
     g.add_argument("--gpu-class", choices=["v5", "v6", "ada", "turing"],
                    default=None, help="card class to rent (default v6)")
+    g.add_argument("--no-high-mem", action="store_true",
+                   help="do not request the high-memory shape; use when the "
+                        "bigger shape is unavailable on your account")
     g.add_argument("--accelerator", default=None,
                    help="Colab accelerator name: T4|L4|G4|H100|A100 "
                         "(default: the first one the class supports)")

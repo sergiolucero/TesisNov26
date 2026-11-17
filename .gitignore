@@ -21,6 +21,8 @@ do_results/
 *.pyz
 *.zip
 runs/*.pt
+runs/colab_multi/
+configs/opt/benchmark_new.yaml
 
 # LaTeX build products (keep .tex sources)
 *.aux

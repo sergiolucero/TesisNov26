@@ -46,7 +46,8 @@ trap finish EXIT
 
 log() { printf '\n[remote] %s\n' "$*"; }
 
-cd "$(dirname -- "${BASH_SOURCE[0]}")"
+# This script lives in SCRIPTS/; the project root is its parent.
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 log "host=$(hostname) date=$(date -u +%FT%TZ)"
 log "pwd=$PWD"
@@ -104,7 +105,7 @@ mkdir -p out/remote_pinn out/remote_fno out/remote_smoke
 # --------------------------------------------------------------------------
 run_hydrology() {
   log "generating synthetic hydrology data"
-  "$VENV/bin/python" -u hydrology.py \
+  "$VENV/bin/python" -u SCRIPTS/hydrology.py \
     --scenario out/scenario.npz \
     --dataset out/dataset.npz \
     2>&1 | tee out/hydrology.log
@@ -112,7 +113,7 @@ run_hydrology() {
 
 run_pinn() {
   log "training the 1D PINN"
-  "$VENV/bin/python" -u solve_1d_pinn.py \
+  "$VENV/bin/python" -u SCRIPTS/solve_1d_pinn.py \
     --config runs/best_hardbc.json \
     --outdir out/remote_pinn \
     --save-model out/remote_pinn/model.pt \
@@ -122,7 +123,7 @@ run_pinn() {
 
 run_smoke() {
   log "running the PINN smoke test (1 Adam step, 16x16 evaluation)"
-  "$VENV/bin/python" -u solve_1d_pinn.py \
+  "$VENV/bin/python" -u SCRIPTS/solve_1d_pinn.py \
     --hard-bc --eps 1e-3 \
     --adam-steps 1 --lbfgs-steps 0 \
     --N-f 64 --N-ic 16 --N-bc 16 --N-f-fix 64 \
@@ -135,7 +136,7 @@ run_smoke() {
 
 run_fno() {
   log "training the 1D FNO"
-  "$VENV/bin/python" -u solve_1d_fno.py \
+  "$VENV/bin/python" -u SCRIPTS/solve_1d_fno.py \
     --dataset out/dataset.npz \
     --epochs "$FNO_EPOCHS" \
     --outdir out/remote_fno \

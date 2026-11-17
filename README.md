@@ -21,19 +21,24 @@ uncertainty.
 
 ## Layout
 
+Everything runnable lives in `SCRIPTS/` (see `SCRIPTS/USAGE.md`); the
+repository root holds only the packages, configs, docs and outputs.
+
 | Path | Contents |
 |---|---|
-| `hydrology.py` | 1D ADE data generator and Ogata–Banks reference |
-| `solve_1d_pinn.py` | 1D PINN solver (soft/hard BC, Adam + L-BFGS) |
-| `solve_1d_fno.py` | 1D Fourier neural operator |
-| `run_2d.py` | 2D forward/optimization driver |
-| `run_optimization.py` | Stochastic optimization workflow and gates |
+| `SCRIPTS/` | All entry points and operations scripts — **see [`SCRIPTS/USAGE.md`](SCRIPTS/USAGE.md)** |
+| `SCRIPTS/hydrology.py` | 1D ADE data generator and Ogata–Banks reference |
+| `SCRIPTS/solve_1d_pinn.py` | 1D PINN solver (soft/hard BC, Adam + L-BFGS) |
+| `SCRIPTS/solve_1d_fno.py` | 1D Fourier neural operator |
+| `SCRIPTS/run_2d.py` | 2D forward/optimization driver |
+| `SCRIPTS/run_optimization.py` | Stochastic optimization workflow and gates |
+| `SCRIPTS/collab_run.py` | Colab/GPU dispatcher with `smoke`/`quick`/`full` presets |
+| `SCRIPTS/multi_colab.py` | Multi-VM Colab driver (`launch`/`status`/`logs`/`collect`/`stop`) |
+| `SCRIPTS/app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
 | `physics/` | Finite-volume flow/transport and analytical references |
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
-| `app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
-| `SCRIPTS/` | Fleet bootstrap/status/tagging (`fleet_bootstrap.sh`, `fleet_status.sh`, `fleet-tag.sh`, `herdr-server.service`, `fleet-acl.hujson`) and `seed_sweep.py` (multi-seed median/IQR harness) |
 | `NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
 | `TEX/` | LaTeX formulation and plans |
 | `plan.md`, `2D_plan.md`, `3D_plan.md` | Staged verification plans and gates |
@@ -47,17 +52,17 @@ uncertainty.
 python tests/run_tests.py
 
 # 1D PINN (best known configuration)
-python -u solve_1d_pinn.py --hard-bc --eps 1e-3 \
+python -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
   --save-model out/pinn_hardbc_exp/model.pt --outdir out/pinn_hardbc_exp
 
 # 2D quick forward + optimization
-python -u run_2d.py --quick
+python -u SCRIPTS/run_2d.py --quick
 
 # Stochastic optimization gates
-python -u run_optimization.py --config configs/opt/benchmark_small.yaml
+python -u SCRIPTS/run_optimization.py --config configs/opt/benchmark_small.yaml
 
 # Figure viewer + fleet dashboard (http://localhost:5001)
-./run_app.sh start        # / and /plots for figures, /fleet for node health
+./SCRIPTS/run_app.sh start   # / and /plots for figures, /fleet for node health
 ```
 
 On this machine use `/root/base/bin/python3`; the default `python3` has no

@@ -142,13 +142,34 @@ def denormalize(x, mean, std):
     return x * std + mean
 
 
-def build_input(params_norm, nt, nx, device):
-    """Constant parameter function broadcast over the (nt, nx) grid."""
+def build_input(params_norm, nt, nx, device, coords=True):
+    """Parameter function on the (nt, nx) grid, plus optional coordinates.
+
+    The two parameters (v, D) are spatially constant, so a *constant* input is
+    all this operator would have to work with. That is fatal for an FNO: `fc0`
+    is a pointwise lift and every spectral layer multiplies Fourier
+    coefficients, so a constant input has only the DC mode -- the output is then
+    constant by construction (measured: output spatial std ~2e-10). Phase 4
+    initially shipped exactly that and reported rel L2 0.97, i.e. worse than
+    predicting zeros, because the model could not represent a front at all.
+
+    We therefore append the normalized coordinates (xi, tau) as two extra
+    channels. They are non-constant, so the spectral layers have real
+    non-zero modes to act on, which is what lets the operator build a
+    spatially varying output. This is the standard FNO coordinate-channel
+    augmentation (Li et al., 2021).
+    """
     n = params_norm.shape[0]
-    x = np.empty((n, 2, nt, nx), dtype=np.float32)
+    extra = 2 if coords else 0
+    x = np.empty((n, 2 + extra, nt, nx), dtype=np.float32)
     for i in range(n):
         x[i, 0] = params_norm[i, 0]
         x[i, 1] = params_norm[i, 1]
+    if coords:
+        xi = np.linspace(0.0, 1.0, nx, dtype=np.float32).reshape(1, nx)
+        tau = np.linspace(0.0, 1.0, nt, dtype=np.float32).reshape(nt, 1)
+        x[:, 2, :, :] = xi
+        x[:, 3, :, :] = tau
     return torch.tensor(x, device=device)
 
 
@@ -218,16 +239,19 @@ def train_fno(args):
     fields_norm = normalize(fields_t, u_mean, u_std).unsqueeze(1)  # (N,1,nt,nx)
     fields_norm = fields_norm.to(device)
 
-    x_train = build_input(params_norm, nt, nx, device)[train_idx]
+    x_train = build_input(params_norm, nt, nx, device,
+                          coords=not args.no_coords)[train_idx]
     y_train = fields_norm[train_idx]
 
     # Native-resolution inputs/targets for the resolution-invariance check.
-    x_eval = build_input(params_norm, nt_full, nx_full, device)
+    x_eval = build_input(params_norm, nt_full, nx_full, device,
+                         coords=not args.no_coords)
     y_eval_native = torch.tensor(
         normalize(fields, u_mean, u_std), device=device).unsqueeze(1)
 
+    in_ch = 4 if not args.no_coords else 2
     model = FNO2d(modes1=args.modes1, modes2=args.modes2, width=args.width,
-                  in_channels=2, out_channels=1, layers=args.layers).to(device)
+                  in_channels=in_ch, out_channels=1, layers=args.layers).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[fno] model: modes=({args.modes1},{args.modes2}), width={args.width}, "
           f"layers={args.layers}, params={n_params}, device={device}")
@@ -271,6 +295,27 @@ def train_fno(args):
           f"(per-sample [{errs_train.min():.2e}, {errs_train.max():.2e}])")
     print(f"[fno] rel-L2 test  (native eval) = {errs_test.mean():.4e} "
           f"(per-sample [{errs_test.min():.2e}, {errs_test.max():.2e}])")
+
+    # Trivial-predictor baselines. rel L2 is normalized by ||target||, so the
+    # all-zeros predictor scores exactly 1.0 by definition: any model at or
+    # above ~1.0 has learned nothing and must not be reported as a result. The
+    # training-set mean field is the real bar to clear. (Phase 4 regression:
+    # an earlier run reported 0.973, i.e. better than zeros but far worse than
+    # the mean field, and was briefly mistaken for a working operator.)
+    zero_err = rel_l2(np.zeros_like(fields_native[test_idx]),
+                      fields_native[test_idx])
+    mean_field = fields_native[train_idx].mean(axis=0, keepdims=True)
+    mf_pred = np.repeat(mean_field, len(test_idx), axis=0)
+    mf_err = rel_l2(mf_pred, fields_native[test_idx])
+    print(f"[fno] baseline rel-L2: all-zeros {zero_err:.4e} | "
+          f"train-mean-field {mf_err:.4e}")
+    if errs_test.mean() >= 1.0:
+        print("[fno] WARNING: test rel-L2 >= 1.0 -- worse than predicting "
+              "zeros. The operator has learned nothing; do not report this "
+              "number as a result.")
+    elif errs_test.mean() >= mf_err:
+        print("[fno] WARNING: test rel-L2 >= train-mean-field baseline -- the "
+              "operator is no better than predicting the dataset mean.")
     print(f"[fno] resolution check: trained "
           f"{'coarse ' + str(nt) + 'x' + str(nx) if factor > 1 else 'native'}, "
           f"evaluated at {nt_full}x{nx_full}")
@@ -363,6 +408,10 @@ def main():
     ap.add_argument("--train-frac", type=float, default=0.75)
     ap.add_argument("--coarse-factor", type=int, default=1,
                     help="train on a grid coarsened by this factor (resolution test)")
+    ap.add_argument("--no-coords", action="store_true",
+                    help="omit the (xi,tau) coordinate channels (ablation: "
+                         "with only the constant parameter channels the "
+                         "operator can only produce a constant output)")
     ap.add_argument("--no-normalize", action="store_true",
                     help="disable per-channel Gaussian normalization (ablation)")
     ap.add_argument("--seed", type=int, default=0)

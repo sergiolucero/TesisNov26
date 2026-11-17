@@ -19,8 +19,15 @@ Examples
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
+
+# The entry points live in SCRIPTS/; make the repository root importable so
+# `physics`/`stoch` resolve no matter where this script is launched from.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
@@ -49,8 +56,6 @@ from stoch.report import (
 )
 from stoch.saa import Archive, ForwardConfig
 from stoch.wells import place_wells, plume_mask
-
-HERE = Path(__file__).resolve().parent
 
 
 def log(msg: str) -> None:
@@ -529,10 +534,14 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default=str(HERE / "configs/opt/benchmark.yaml"))
+    ap.add_argument("--config", default=str(ROOT / "configs/opt/benchmark.yaml"))
     ap.add_argument("--quick", action="store_true",
                     help="small grid/scenario counts for a smoke run")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--nx", type=int, default=None,
+                    help="Override domain.nx from the config (applied after --quick)")
+    ap.add_argument("--ny", type=int, default=None,
+                    help="Override domain.ny from the config (applied after --quick)")
     ap.add_argument("--stage", default="all",
                     choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"])
     args = ap.parse_args()
@@ -542,8 +551,15 @@ def main() -> None:
                  "o3": {"o3"}, "o4": {"o4"}, "opt": {"opt"}}
     stages = stage_map[args.stage]
     cfg = load_config(args.config, quick=args.quick)
+    if args.nx is not None or args.ny is not None:
+        domain = cfg.setdefault("domain", {})
+        if args.nx is not None:
+            domain["nx"] = int(args.nx)
+        if args.ny is not None:
+            domain["ny"] = int(args.ny)
+        print(f"[opt] grid override: nx={domain['nx']} ny={domain['ny']}")
     tag = "quick" if args.quick else "full"
-    out = Path(args.out) if args.out else (HERE / "out" / "opt" / f"benchmark_{tag}")
+    out = Path(args.out) if args.out else (ROOT / "out" / "opt" / f"benchmark_{tag}")
     metrics = run(cfg, out, stages)
 
     print("\n=== gates ===")

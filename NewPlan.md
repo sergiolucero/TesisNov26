@@ -161,9 +161,9 @@ Every dispatch lane follows the same contract: write a log, write
 
 ```bash
 export DIGITALOCEAN_TOKEN=dop_v1_...        # never commit or echo this
-./deploy_do.sh --sim smoke                  # cheap end-to-end check first
-./deploy_do.sh --sim pinn --keep            # keep the droplet for debugging
-./deploy_do.sh --ip 203.0.113.10 --sim smoke  # reuse an existing droplet
+./SCRIPTS/deploy_do.sh --sim smoke                  # cheap end-to-end check first
+./SCRIPTS/deploy_do.sh --sim pinn --keep            # keep the droplet for debugging
+./SCRIPTS/deploy_do.sh --ip 203.0.113.10 --sim smoke  # reuse an existing droplet
 ```
 
 `deploy_do.sh` packs the worktree, creates the droplet, copies the archive,
@@ -220,7 +220,7 @@ ssh ubuntu-hub 'df -h; free -h; uptime'   # capacity before a heavy run
 For the tablet view, `app.py` serves the same snapshot as a rendered page:
 
 ```bash
-./run_app.sh start                        # http://<tailnet-ip>:5001
+./SCRIPTS/run_app.sh start                        # http://<tailnet-ip>:5001
 curl -sf localhost:5001/fleet             # add ?role=hub on the hub
 ```
 
@@ -271,7 +271,7 @@ suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
 - [ ] `~/tesis.git` bare mirror cloned and fetchable
 - [ ] `run_optimization.py --stage gates` green (~74 s)
 - [ ] `app.py --port 5099` serves `/` (expect 200)
-- [ ] `./run_app.sh start` serves `/fleet` with `RESULT: healthy` or an
+- [ ] `./SCRIPTS/run_app.sh start` serves `/fleet` with `RESULT: healthy` or an
 expected warning banner
 
 **`do-relay`**

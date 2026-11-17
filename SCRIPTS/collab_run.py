@@ -6,10 +6,28 @@ model/experiment to run without remembering each entry-point's arguments.
 
 Examples
 --------
-    python collab_run.py --models smoke
-    python collab_run.py --models pinn --preset quick
-    python collab_run.py --models dataset fno --preset full --fno-epochs 300
-    python collab_run.py --models opt --preset quick --opt-stage gates
+    python SCRIPTS/collab_run.py --models smoke
+    python SCRIPTS/collab_run.py --models pinn --preset quick
+    python SCRIPTS/collab_run.py --models dataset fno --preset full --fno-epochs 300
+    python SCRIPTS/collab_run.py --models opt --preset quick --opt-stage gates
+
+Grid and GPU selection
+----------------------
+    # run the PINN on the second GPU with a 512-point evaluation grid
+    python SCRIPTS/collab_run.py --models pinn --gpu 1 --nx 512
+
+    # 2D optimization on a coarser 40x20 domain grid, first GPU
+    python SCRIPTS/collab_run.py --models opt --preset full --gpu 0 --nx 40 --ny 20
+
+`--nx` / `--ny` override the grid for whatever is running: for the dataset and
+PINN steps they set the spatial (`nx`) and time (`ny` -> `nt`) resolution, and
+for the 2D optimization they override `domain.nx` / `domain.ny` of the
+configuration file.  A bare `python SCRIPTS/collab_run.py --models ... --preset
+...` keeps the preset defaults.
+
+Every stage is launched as a subprocess from the repository root, so run this
+from anywhere: it resolves the root from its own location (`SCRIPTS/..`) and
+chdirs there before dispatching.
 """
 
 from __future__ import annotations
@@ -23,7 +41,13 @@ import time
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent        # SCRIPTS/
+ROOT = HERE.parent                            # repository root
+
+
+def script(name: str) -> str:
+    """Absolute path of a sibling entry point (hydrology.py, run_2d.py, ...)."""
+    return str(HERE / name)
 
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -35,19 +59,60 @@ def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     print(f"[collab_run] done in {time.time() - t0:.1f}s", flush=True)
 
 
-def cuda_report() -> None:
-    """Print the GPU/torch status available to this runtime."""
+def resolve_device(gpu: str | None, device: str) -> str:
+    """Map --gpu onto the --device string handed to the PyTorch scripts."""
+    if gpu is None:
+        return device
+    g = gpu.strip().lower()
+    if g in {"", "auto"}:
+        return device
+    if g in {"cpu", "mps"}:
+        return g
+    if g.startswith("cuda"):
+        return g
+    if g.isdigit():
+        return f"cuda:{g}"
+    raise SystemExit(
+        f"[collab_run] unrecognised --gpu {gpu!r}; "
+        "use auto, cpu, mps, an index (0, 1, ...) or cuda:N"
+    )
+
+
+def cuda_report(device: str) -> bool | None:
+    """Print the GPU/torch status available to this runtime.
+
+    Returns whether CUDA is usable, or None when torch cannot be imported.
+    """
     print(f"[collab_run] project root: {ROOT}")
+    print(f"[collab_run] selected device: {device}")
+    print(f"[collab_run] CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}")
     try:
         import torch
 
         print(f"[collab_run] torch: {torch.__version__}")
-        print(f"[collab_run] cuda available: {torch.cuda.is_available()}")
-        if torch.cuda.is_available():
-            print(f"[collab_run] gpu: {torch.cuda.get_device_name(0)}")
+        available = torch.cuda.is_available()
+        print(f"[collab_run] cuda available: {available}")
+        if available:
             print(f"[collab_run] cuda: {torch.version.cuda}")
+            count = torch.cuda.device_count()
+            for i in range(count):
+                props = torch.cuda.get_device_properties(i)
+                marker = " <= selected" if device == f"cuda:{i}" else ""
+                print(
+                    f"[collab_run]   gpu {i}: {props.name} "
+                    f"{props.total_memory / 1e9:.1f} GB{marker}"
+                )
+            if device.startswith("cuda:") and int(device.split(":", 1)[1]) >= count:
+                raise SystemExit(
+                    f"[collab_run] {device} not available; this runtime exposes "
+                    f"{count} GPU(s) (0..{count - 1})"
+                )
+        return available
+    except SystemExit:
+        raise
     except Exception as exc:  # pragma: no cover - diagnostic only
         print(f"[collab_run] could not import torch: {exc}")
+        return None
 
 
 def ensure_out(root: Path) -> None:
@@ -55,26 +120,42 @@ def ensure_out(root: Path) -> None:
     (ROOT / "figs").mkdir(exist_ok=True)
 
 
+# Preset-default 1D grids: nx = space, nt = time, kept square to match the
+# original presets.  Any --nx/--ny/--nt on the command line wins over these.
+PRESET_GRID = {
+    "smoke": {"nx": 64, "nt": 64, "n_scenarios": 8},
+    "quick": {"nx": 128, "nt": 128, "n_scenarios": 16},
+    "full": {"nx": 256, "nt": 256, "n_scenarios": 32},
+}
+
+
+def grid_1d(args: argparse.Namespace) -> tuple[int, int, int]:
+    """Resolve (nx, nt, n_scenarios) for the 1D hydrology/PINN pipeline.
+
+    In 1D there is no y axis, so ``--ny`` is accepted as the name of the time
+    axis (the second axis of the (nt, nx) fields); ``--nt`` spells it out.
+    """
+    base = PRESET_GRID[args.preset]
+    nx = args.nx if args.nx is not None else base["nx"]
+    nt = args.nt if args.nt is not None else args.ny if args.ny is not None else base["nt"]
+    return nx, nt, base["n_scenarios"]
+
+
 def build_dataset(args: argparse.Namespace) -> None:
     ensure_out(args.out_root)
-    if args.preset == "smoke":
-        nx = nt = 64
-        n_scenarios = 8
-    elif args.preset == "quick":
-        nx = nt = 128
-        n_scenarios = 16
-    else:
-        nx = nt = 256
-        n_scenarios = 32
+    nx, nt, n_scenarios = grid_1d(args)
+    print(f"[collab_run] dataset grid: nx={nx} nt={nt} scenarios={n_scenarios}")
 
     run([
         sys.executable,
-        "hydrology.py",
+        script("hydrology.py"),
         "--scenario", str(args.out_root / "scenario.npz"),
         "--dataset", str(args.dataset),
         "--figdir", str(args.out_root / "figs"),
         "--nx", str(nx),
         "--nt", str(nt),
+        "--dataset-nx", str(nx),
+        "--dataset-nt", str(nt),
         "--n-scenarios", str(n_scenarios),
     ])
 
@@ -88,16 +169,21 @@ def run_pinn(args: argparse.Namespace) -> None:
     lbfgs_steps = 0 if args.preset == "smoke" else args.lbfgs_steps
     n_f = {"smoke": 256, "quick": 1000, "full": 1500}[args.preset]
     n_side = {"smoke": 64, "quick": 128, "full": 150}[args.preset]
+    # The PINN is meshless, so --nx/--ny only set the evaluation grid used for
+    # the reported errors.
+    nx_test, nt_test, _ = grid_1d(args)
 
     cmd = [
         sys.executable,
-        "solve_1d_pinn.py",
+        script("solve_1d_pinn.py"),
         "--device", args.device,
         "--adam-steps", str(adam_steps),
         "--lbfgs-steps", str(lbfgs_steps),
         "--N-f", str(n_f),
         "--N-ic", str(n_side),
         "--N-bc", str(n_side),
+        "--nx-test", str(nx_test),
+        "--nt-test", str(nt_test),
         "--outdir", str(args.out_root / "pinn"),
         "--save-model", str(args.out_root / "pinn" / "model.pt"),
         "--ckpt-every", str(args.ckpt_every),
@@ -118,7 +204,7 @@ def run_fno(args: argparse.Namespace) -> None:
 
     run([
         sys.executable,
-        "solve_1d_fno.py",
+        script("solve_1d_fno.py"),
         "--dataset", str(args.dataset),
         "--device", args.device,
         "--epochs", str(epochs),
@@ -135,12 +221,16 @@ def run_opt(args: argparse.Namespace) -> None:
     ensure_out(args.out_root)
     cmd = [
         sys.executable,
-        "run_optimization.py",
+        script("run_optimization.py"),
         "--config", str(args.opt_config),
         "--stage", args.opt_stage,
         "--out", str(args.out_root / "opt" / f"{args.preset}_{args.opt_stage}"),
     ]
-    if args.preset in {"smoke", "quick"} or args.quick_opt:
+    if args.nx is not None:
+        cmd += ["--nx", str(args.nx)]
+    if args.ny is not None:
+        cmd += ["--ny", str(args.ny)]
+    if (args.preset in {"smoke", "quick"} or args.quick_opt) and not args.no_quick_opt:
         cmd.append("--quick")
     run(cmd)
 
@@ -160,8 +250,12 @@ def zip_results(args: argparse.Namespace) -> None:
             if not folder.exists():
                 continue
             for path in folder.rglob("*"):
-                if path.is_file():
-                    zf.write(path, path.relative_to(ROOT))
+                if not path.is_file():
+                    continue
+                # Names are relative to the *folder*, not to ROOT: --out-root
+                # may legitimately live outside the repo (a Colab scratch dir,
+                # a mounted Drive path), where path.relative_to(ROOT) raises.
+                zf.write(path, Path(folder.name) / path.relative_to(folder))
     print(f"[collab_run] wrote {target} ({target.stat().st_size / 1e6:.2f} MB)")
 
 
@@ -187,6 +281,17 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--preset", choices=["smoke", "quick", "full"], default="quick",
                     help="Runtime preset. smoke is a fast end-to-end check; full uses paper/default sizes.")
     ap.add_argument("--device", default="auto", help="Passed to PyTorch scripts: auto, cuda, cpu, etc.")
+    ap.add_argument("--gpu", default=None,
+                    help="GPU selection: an index (0, 1, ...), cuda:N, cpu, mps or auto. "
+                         "Overrides --device for the PyTorch scripts.")
+    ap.add_argument("--nx", type=int, default=None,
+                    help="Grid points along x. 1D: dataset/eval resolution; "
+                         "opt: domain.nx of the 2D grid. Default: preset value.")
+    ap.add_argument("--ny", type=int, default=None,
+                    help="Grid points along y. opt: domain.ny of the 2D grid; "
+                         "1D: alias for the time axis (see --nt). Default: preset value.")
+    ap.add_argument("--nt", type=int, default=None,
+                    help="1D time grid points (overrides --ny for the 1D pipeline).")
     ap.add_argument("--out-root", type=Path, default=ROOT / "out" / "colab", help="Output directory")
     ap.add_argument("--dataset", type=Path, default=ROOT / "out" / "colab" / "dataset.npz", help="FNO dataset path")
 
@@ -202,21 +307,46 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--opt-config", type=Path, default=ROOT / "configs" / "opt" / "benchmark.yaml")
     ap.add_argument("--opt-stage", choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"], default="gates")
     ap.add_argument("--quick-opt", action="store_true", help="Force --quick for optimization")
+    ap.add_argument("--no-quick-opt", action="store_true",
+                    help="Never pass --quick to the optimizer, even for the smoke/quick "
+                         "presets. Use when the config file already encodes the sizing "
+                         "(e.g. driver scripts such as SCRIPTS/multi_colab.py).")
 
     ap.add_argument("--zip-results", action="store_true", help="Zip out-root and figs after running")
     ap.add_argument("--results-zip", type=Path, default=ROOT / "out" / "colab_results.zip")
     return ap.parse_args()
 
 
+def validate(args: argparse.Namespace) -> None:
+    """Reject grid sizes no downstream model can use."""
+    for name in ("nx", "ny", "nt"):
+        value = getattr(args, name)
+        if value is not None and value < 4:
+            raise SystemExit(f"[collab_run] --{name} must be >= 4 (got {value})")
+    if args.nx is not None and args.ny is not None and args.nx * args.ny < 100:
+        print(
+            f"[collab_run] warning: {args.nx}x{args.ny} is a very coarse domain; "
+            "the hex well layout and source may not resolve"
+        )
+
+
 def main() -> None:
     os.chdir(ROOT)
     args = parse_args()
+    validate(args)
     if "smoke" in args.models:
         args.preset = "smoke"
         # Keep smoke optimization very short unless the user explicitly asks.
         if args.opt_stage == "gates":
             args.opt_stage = "o0"
-    cuda_report()
+    device = resolve_device(args.gpu, args.device)
+    cuda_ok = cuda_report(device)
+    if cuda_ok is False and device.startswith("cuda"):
+        raise SystemExit(
+            f"[collab_run] --gpu/--device asked for {device} but torch reports no "
+            "CUDA device (use --gpu cpu, or pick a GPU runtime)"
+        )
+    args.device = device
     print(f"[collab_run] free disk at root: {shutil.disk_usage(ROOT).free / 1e9:.1f} GB")
 
     dispatch = {

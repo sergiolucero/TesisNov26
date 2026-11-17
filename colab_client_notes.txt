@@ -1,6 +1,6 @@
-0. installed using pip install google-colab-client
+0. installed using pip install google-colab-cli   ('google-colab-client' does not exist on PyPI)
 0.5	pip install keyring
 colab sessions --auth oauth2
 
 1. test creating instances:
-	colab run --gpu T4 psums.py  (L4=8 CPU=10 T4=8 base=15.5 on DO1Gb)
+	colab run --gpu T4 SCRIPTS/psums.py  (L4=8 CPU=10 T4=8 base=15.5 on DO1Gb)

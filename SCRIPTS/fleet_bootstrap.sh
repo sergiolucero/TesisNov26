@@ -271,7 +271,7 @@ case "$ROLE" in
                         herdr status     (server and client state)
   - master bare repo:   git clone --bare <origin> ~/tesis.git
   - colab dispatch:     ./run_colab.sh  (sentinel /tmp/tesis-colab.done)
-  - heavy CPU work:     python -u run_optimization.py --stage gates
+  - heavy CPU work:     python -u SCRIPTS/run_optimization.py --stage gates
   - local inference:    ollama serve
 EOF
     ;;

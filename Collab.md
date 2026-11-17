@@ -1,6 +1,6 @@
 # TESIS Google Colab GPU Run Guide
 
-This project can be run in a Google Colab notebook with a GPU by using the helper script `collab_run.py`.
+This project can be run in a Google Colab notebook with a GPU by using the helper script `SCRIPTS/collab_run.py`.
 
 > Note: Google spells the product **Colab**. This repository also includes this file as `Collab.md` to match the requested name.
 
@@ -53,7 +53,7 @@ If PyTorch is missing for any reason, install the CUDA wheel recommended at <htt
 ## 4. Check the runner and GPU
 
 ```python
-!python collab_run.py --help
+!python SCRIPTS/collab_run.py --help
 !python - <<'PY'
 import torch
 print('torch', torch.__version__)
@@ -65,14 +65,14 @@ PY
 
 ## 5. Run models/experiments
 
-`collab_run.py` dispatches the project entry points and lets you choose one or more models.
+`SCRIPTS/collab_run.py` dispatches the project entry points and lets you choose one or more models.
 
 ### Fast smoke run
 
 Use this first to verify that the environment works:
 
 ```python
-!python collab_run.py --models smoke --zip-results
+!python SCRIPTS/collab_run.py --models smoke --zip-results
 ```
 
 This generates a small dataset, runs short PINN and FNO jobs, runs a short optimization stage, and writes `out/colab_results.zip`.
@@ -81,13 +81,13 @@ This generates a small dataset, runs short PINN and FNO jobs, runs a short optim
 
 ```python
 # Quick GPU PINN run
-!python collab_run.py --models pinn --preset quick --device cuda
+!python SCRIPTS/collab_run.py --models pinn --preset quick --device cuda
 
 # Longer/default PINN run
-!python collab_run.py --models pinn --preset full --device cuda --hard-bc
+!python SCRIPTS/collab_run.py --models pinn --preset full --device cuda --hard-bc
 
 # Custom Adam steps
-!python collab_run.py --models pinn --preset quick --pinn-steps 3000 --device cuda
+!python SCRIPTS/collab_run.py --models pinn --preset quick --pinn-steps 3000 --device cuda
 ```
 
 Outputs are written under `out/colab/pinn/`.
@@ -98,10 +98,10 @@ The FNO needs a dataset. The runner will generate it automatically if missing.
 
 ```python
 # Quick FNO run
-!python collab_run.py --models dataset fno --preset quick --device cuda
+!python SCRIPTS/collab_run.py --models dataset fno --preset quick --device cuda
 
 # Longer/default FNO run
-!python collab_run.py --models dataset fno --preset full --device cuda --fno-epochs 300
+!python SCRIPTS/collab_run.py --models dataset fno --preset full --device cuda --fno-epochs 300
 ```
 
 Outputs are written under `out/colab/fno/`.
@@ -109,20 +109,20 @@ Outputs are written under `out/colab/fno/`.
 ### PINN + FNO
 
 ```python
-!python collab_run.py --models both --preset quick --device cuda --zip-results
+!python SCRIPTS/collab_run.py --models both --preset quick --device cuda --zip-results
 ```
 
 ### Stochastic optimization
 
 ```python
 # Gate checks using smaller quick settings
-!python collab_run.py --models opt --preset quick --opt-stage gates
+!python SCRIPTS/collab_run.py --models opt --preset quick --opt-stage gates
 
 # Final optimization stage, quick settings
-!python collab_run.py --models opt --preset quick --opt-stage opt
+!python SCRIPTS/collab_run.py --models opt --preset quick --opt-stage opt
 
 # Full benchmark configuration
-!python collab_run.py --models opt --preset full --opt-stage all
+!python SCRIPTS/collab_run.py --models opt --preset full --opt-stage all
 ```
 
 Outputs are written under `out/colab/opt/`.
@@ -130,7 +130,7 @@ Outputs are written under `out/colab/opt/`.
 ### Unit tests
 
 ```python
-!python collab_run.py --models tests
+!python SCRIPTS/collab_run.py --models tests
 ```
 
 ## 6. Save outputs from Colab
@@ -138,7 +138,7 @@ Outputs are written under `out/colab/opt/`.
 Zip the output folder:
 
 ```python
-!python collab_run.py --models tests --zip-results
+!python SCRIPTS/collab_run.py --models tests --zip-results
 ```
 
 Or zip results without rerunning models:
@@ -164,12 +164,16 @@ drive.mount('/content/drive')
 
 ## 7. Main files
 
-- `collab_run.py` — Colab-friendly dispatcher for dataset, PINN, FNO, optimization, and tests.
+- `SCRIPTS/collab_run.py` — Colab-friendly dispatcher for dataset, PINN, FNO, optimization, and tests.
+- `SCRIPTS/run_colab.sh` — shell wrapper that checks the GPU, installs deps, and calls the dispatcher.
+- `SCRIPTS/multi_colab.py` — drives several Colab VMs from your laptop (`launch/status/logs/collect/stop`) for runs too large for one notebook session.
 - `requirements.txt` — Python dependencies.
-- `hydrology.py` — Generates 1D ADE scenarios/datasets.
-- `solve_1d_pinn.py` — PyTorch PINN model.
-- `solve_1d_fno.py` — PyTorch FNO model.
-- `run_optimization.py` — stochastic pump-and-treat optimization workflow.
+- `SCRIPTS/hydrology.py` — Generates 1D ADE scenarios/datasets.
+- `SCRIPTS/solve_1d_pinn.py` — PyTorch PINN model.
+- `SCRIPTS/solve_1d_fno.py` — PyTorch FNO model.
+- `SCRIPTS/run_optimization.py` — stochastic pump-and-treat optimization workflow.
+
+Every script lives in `SCRIPTS/`; see `SCRIPTS/USAGE.md` for the full inventory.
 
 ## Troubleshooting
 

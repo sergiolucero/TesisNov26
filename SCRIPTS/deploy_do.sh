@@ -238,7 +238,7 @@ if (( DRY_RUN )); then
   timeout       : ${RUN_TIMEOUT}s
 
   archive       : <tmp>/tesis.tar.gz (excludes caches/logs/do_results)
-  remote job    : nohup bash remote_run.sh > /tmp/tesis-run.log
+  remote job    : nohup bash SCRIPTS/remote_run.sh > /tmp/tesis-run.log
   results       : scp <droplet>:$REMOTE_DIR/out -> $LOCAL_RESULTS/$NAME
 EOF
   exit 0
@@ -492,7 +492,7 @@ nohup env \
   FNO_EPOCHS=$(printf '%q' "$FNO_EPOCHS") \
   PYTHONUNBUFFERED=1 \
   MPLBACKEND=Agg \
-  bash remote_run.sh > $REMOTE_LOG 2>&1 & echo \$!"
+  bash SCRIPTS/remote_run.sh > $REMOTE_LOG 2>&1 & echo \$!"
 REMOTE_PID=$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "$REMOTE_CMD")
 log "remote pid: $REMOTE_PID"
 

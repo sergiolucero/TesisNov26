@@ -266,6 +266,11 @@ def main() -> None:
     ap.add_argument("--C0", type=float, default=1.0)
     ap.add_argument("--nx", type=int, default=256)
     ap.add_argument("--nt", type=int, default=256)
+    ap.add_argument("--dataset-nx", type=int, default=128,
+                    help="spatial points for the multi-scenario FNO dataset "
+                         "(independent of --nx, which sizes the single scenario)")
+    ap.add_argument("--dataset-nt", type=int, default=128,
+                    help="time points for the multi-scenario FNO dataset")
     ap.add_argument("--n-scenarios", type=int, default=32)
     args = ap.parse_args()
 
@@ -277,7 +282,8 @@ def main() -> None:
     _demo_plots(sc, args.figdir)
 
     params, fields, meta = generate_dataset(
-        args.n_scenarios, args.L, args.T, C0=args.C0, nx=128, nt=128, seed=0)
+        args.n_scenarios, args.L, args.T, C0=args.C0,
+        nx=args.dataset_nx, nt=args.dataset_nt, seed=0)
     save_scenarios(args.dataset, meta)
     print(f"[hydrology] dataset params shape {params.shape}, "
           f"fields shape {fields.shape}")

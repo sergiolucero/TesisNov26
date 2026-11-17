@@ -28,8 +28,15 @@ the reproducible entry point that binds them together.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
+
+# The entry points live in SCRIPTS/; make the repository root importable so
+# `physics`/`stoch` resolve no matter where this script is launched from.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
@@ -50,8 +57,6 @@ from stoch.objective import scenario_objective
 from stoch.optimize import project_capacity
 from stoch.random_fields import ScenarioGenerator
 from stoch.report import ensure_dir, plot_layout, plot_plume, save_json
-
-HERE = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +322,7 @@ def main() -> None:
     )
     ap.add_argument("--mode", choices=["forward", "optimize", "all"],
                     default="all")
-    ap.add_argument("--config", default=str(HERE / "configs/opt/benchmark.yaml"))
+    ap.add_argument("--config", default=str(ROOT / "configs/opt/benchmark.yaml"))
     ap.add_argument("--quick", action="store_true",
                     help="small grid/scenario counts for a smoke run")
     ap.add_argument("--out", default=None)
@@ -332,7 +337,7 @@ def main() -> None:
 
     cfg = load_config(args.config, quick=args.quick)
     tag = "quick" if args.quick else "full"
-    root = Path(args.out) if args.out else (HERE / "out" / "run_2d" / tag)
+    root = Path(args.out) if args.out else (ROOT / "out" / "run_2d" / tag)
     root = ensure_dir(root)
     make_plots = not args.no_plot
     t0 = time.time()

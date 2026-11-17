@@ -7,12 +7,12 @@
 # This is the thin shell wrapper around `collab_run.py`: it checks the GPU,
 # installs the Python requirements once, and dispatches the requested
 # experiment preset. Everything experiment-specific stays in `collab_run.py`;
-# see Collab.md for the notebook workflow.
+# see Collab.md and SCRIPTS/USAGE.md for the notebook workflow.
 #
 # Usage (inside a Colab cell):
-#   !bash run_colab.sh                                   # quick preset, dataset+pinn
-#   !bash run_colab.sh --models fno --preset full --fno-epochs 300
-#   COLAB_MODELS="pinn fno" COLAB_PRESET=smoke bash run_colab.sh
+#   !bash SCRIPTS/run_colab.sh                                   # quick preset, dataset+pinn
+#   !bash SCRIPTS/run_colab.sh --models fno --preset full --fno-epochs 300
+#   COLAB_MODELS="pinn fno" COLAB_PRESET=smoke bash SCRIPTS/run_colab.sh
 #
 # Environment variables:
 #   COLAB_PRESET   smoke | quick | full          (default: quick)
@@ -27,7 +27,8 @@
 
 set -Eeuo pipefail
 
-cd "$(dirname -- "${BASH_SOURCE[0]}")"
+# cd to the repository root (this script lives in SCRIPTS/).
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 COLAB_PRESET=${COLAB_PRESET:-quick}
 COLAB_MODELS=${COLAB_MODELS:-"dataset pinn"}
@@ -62,7 +63,7 @@ log "host=$(hostname) date=$(date -u +%FT%TZ)"
 log "preset=$COLAB_PRESET models=$COLAB_MODELS python=$PYTHON"
 
 command -v "$PYTHON" >/dev/null 2>&1 || die "$PYTHON not found; set PYTHON=/usr/bin/python3"
-[[ -f collab_run.py ]] || die "collab_run.py missing; are you in the repository root?"
+[[ -f SCRIPTS/collab_run.py ]] || die "SCRIPTS/collab_run.py missing; are you in the repository root?"
 
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || true
@@ -108,7 +109,7 @@ fi
 read -r -a models <<< "$COLAB_MODELS"
 args=(--models "${models[@]}" --preset "$COLAB_PRESET" "$@")
 # Trailing "$@" wins over the defaults above, so callers can override freely.
-log "running: collab_run.py ${args[*]}"
-"$PYTHON" -u collab_run.py "${args[@]}"
+log "running: SCRIPTS/collab_run.py ${args[*]}"
+"$PYTHON" -u SCRIPTS/collab_run.py "${args[@]}"
 
 log "complete; artifacts under out/colab"

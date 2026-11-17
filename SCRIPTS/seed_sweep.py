@@ -26,16 +26,16 @@ Usage
     ./SCRIPTS/seed_sweep.py \
         --arm base --seeds 0-4 --metric metrics.regions.full \
         --outdir runs/sweeps/base -- \
-        python3 -u solve_1d_pinn.py --hard-bc --eps 1e-3 \
+        python3 -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
             --adam-steps 10000 --lbfgs-steps 250 \
             --outdir {outdir} --save-model {outdir}/model.pt
 
     # two arms, compared on the shared seeds
     ./SCRIPTS/seed_sweep.py --seeds 0-4 --metric metrics.regions.full \
         --outdir runs/sweeps/cmp \
-        --arm base -- python3 -u solve_1d_pinn.py --hard-bc --eps 1e-3 \
+        --arm base -- python3 -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
             --outdir {outdir}/{arm}/s{seed} --save-model {outdir}/{arm}/s{seed}/model.pt \
-        --arm ramp -- python3 -u solve_1d_pinn.py --hard-bc --eps 1e-3 \
+        --arm ramp -- python3 -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
             --tau-ramp --ramp-tau 0.05 --ramp-power 1.0 \
             --outdir {outdir}/{arm}/s{seed} --save-model {outdir}/{arm}/s{seed}/model.pt
 

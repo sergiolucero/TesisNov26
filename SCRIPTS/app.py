@@ -13,8 +13,8 @@ Routes:
     /fleet       fleet health dashboard (``SCRIPTS/fleet_status.sh --json``)
 
 Run:
-    python app.py            # http://localhost:5000
-    python app.py --port 8080
+    python SCRIPTS/app.py            # http://localhost:5000
+    python SCRIPTS/app.py --port 8080
 
 Author: TESIS (groundwater remediation PINN/FNO debugging)
 """
@@ -35,10 +35,12 @@ from flask import (
     url_for,
 )
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(BASE, "out")      # static folder (PINN run outputs)
-FIGS = os.path.join(BASE, "figs")    # data-generator demo figures
-FLEET_STATUS = os.path.join(BASE, "SCRIPTS", "fleet_status.sh")
+BASE = os.path.dirname(os.path.abspath(__file__))   # SCRIPTS/
+ROOT = os.path.dirname(BASE)                        # repository root
+OUT = os.path.join(ROOT, "out")      # static folder (PINN run outputs)
+FIGS = os.path.join(ROOT, "figs")    # data-generator demo figures
+TEMPLATES = os.path.join(ROOT, "templates")
+FLEET_STATUS = os.path.join(BASE, "fleet_status.sh")
 
 # Fleet status is a shell-out with a hard timeout: the dashboard must never
 # hang because a tailnet call or a disk is slow.
@@ -47,7 +49,8 @@ FLEET_TIMEOUT = 15.0
 # File types treated as browsable plots by the /plots gallery.
 PLOT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
 
-app = Flask(__name__, static_folder=OUT, static_url_path="/out")
+app = Flask(__name__, static_folder=OUT, static_url_path="/out",
+            template_folder=TEMPLATES)
 
 
 @app.route("/figs/<path:filename>")

@@ -1,5 +1,9 @@
 RUNTIMES - quick test timings for the PINN/FNO + stochastic remediation code
 ============================================================================
+NOTE        : measured before the scripts moved into SCRIPTS/ on
+              2026-11-16, so the recorded commands read `run_2d.py` where
+              the current path is `SCRIPTS/run_2d.py` etc. The timings are
+              unaffected by the move (same code, same modules).
 Date        : 2026-11-16
 Host        : 1 vCPU container, Python 3.12.3 (/root/base/bin/python3)
               numpy 2.5.4, scipy 1.18.1

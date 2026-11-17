@@ -22,8 +22,13 @@ and VRAM come from ``torch.cuda.get_device_properties`` and are mapped to
 
 (``--assume`` forces the class, e.g. to print a plan for a card you have not
 rented yet.  Colab's TPU ``v5e``/``v6e`` are *not* used here: this is the GPU
-path.  ``DOCS/Collab.md`` is the notebook-level guide; ``SCRIPTS/multi_colab.py``
-is the multi-VM driver that ships the repo to a session.)
+path.  ``DOCS/Collab.md`` is the notebook-level guide and ``DOCS/GPU.md`` records
+the torch-backend measurements; ``SCRIPTS/multi_colab.py`` is the multi-VM
+driver that ships the repo to a session, and ``SCRIPTS/bench_backend.py`` answers
+the neighbouring question *"is the torch backend ahead on this runtime?"*.
+This script assumes it is and asks *"how do I fill the card?"*: the ``bench``
+stage measures throughput and peak memory per batch entry, and the resulting
+bytes/slice is what sizes ``M_train`` for the ``opt`` stage.
 
 What "optimized for v5/v6" means here
 -------------------------------------
@@ -76,10 +81,16 @@ Examples
     python SCRIPTS/new_high_colab.py bench forward --preset smoke --nx 24 --ny 12
 
     # rent the VM from the laptop, run, and pull the artifacts back
-    python SCRIPTS/new_high_colab.py --launch --gpu-class v6 accelerator=H100 \
+    python SCRIPTS/new_high_colab.py --launch --gpu-class v6 --accelerator H100 \
         bench forward opt --zip
     python SCRIPTS/new_high_colab.py --launch --gpu-class v5 --dry-run bench
     python SCRIPTS/new_high_colab.py --launch --keep --session tesis-high   # attach later
+
+``--launch`` rents one VM (``colab new``), uploads the repo bundle, runs the
+stages in the foreground of a ``%%bash`` cell, downloads the artifacts zip and
+releases the VM.  The ``opt`` stage is the long one: ``--max-seconds`` (default
+6 h) caps the remote cell, and ``--keep`` leaves the session up so
+``colab url -s <session>`` can re-attach after a disconnect.
 
 Exit status: 0 when every requested stage succeeded, 1 when a stage failed,
 2 on a usage/preflight error.  Every run appends one record to
@@ -360,6 +371,8 @@ def derive_tuning(cfg: dict, spec: CardSpec, card: dict[str, Any],
     per_slice = float(analytic)
     if measured:
         scale = (nx * ny) / max(int(measured.get("nx", nx)) * int(measured.get("ny", ny)), 1)
+        bench_itemsize = 4 if measured.get("dtype", dtype) == "float32" else 8
+        scale *= itemsize / bench_itemsize
         per_slice = max(per_slice, float(measured["bytes_per_slice"]) * scale)
         notes.append(f"bytes/slice from bench.json ({measured['bytes_per_slice']:.0f} B, "
                      f"scaled x{scale:.2f})")
@@ -513,10 +526,11 @@ def _gemm_probe(torch: Any, card: dict[str, Any], n: int = 2048,
     if not card.get("cuda"):
         return {}
     rates: dict[str, float] = {}
+    device = f"cuda:{int(card.get('index', 0))}"
     for name, dtype in (("fp32", torch.float32), ("bf16", torch.bfloat16)):
         try:
-            a = torch.randn(n, n, dtype=dtype, device="cuda")
-            b = torch.randn(n, n, dtype=dtype, device="cuda")
+            a = torch.randn(n, n, dtype=dtype, device=device)
+            b = torch.randn(n, n, dtype=dtype, device=device)
             for _ in range(2):
                 a @ b
             sync(torch)
@@ -575,9 +589,13 @@ def stage_bench(args: argparse.Namespace, tune: Tuning, card: dict[str, Any],
     log(f"bench: archive resident in {time.perf_counter() - t0:.1f}s "
         f"({archive.describe().get('gpu', 'cpu')})")
 
-    base_alloc = (torch.cuda.memory_allocated() if card.get("cuda") else 0)
+    base_alloc = (torch.cuda.memory_allocated(int(card.get("index", 0)))
+                  if card.get("cuda") else 0)
     q_scale = 0.25 * float(cfg["wells"]["q_max"])
     batches = [int(b) for b in args.bench_batches if int(b) > 0]
+    if not card.get("cuda"):
+        # A CPU transport solve is ~1 s per candidate; keep the sweep short.
+        batches = [b for b in batches if b <= 4] or [1]
     if tune.max_batch > 0:
         cap = max(1, tune.max_batch // m0)
         batches = [b for b in batches if b <= cap] or [1]
@@ -592,12 +610,12 @@ def stage_bench(args: argparse.Namespace, tune: Tuning, card: dict[str, Any],
         Q = np.full((S, nw), q_scale)
         sync(torch)
         if card.get("cuda"):
-            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.reset_peak_memory_stats(int(card.get("index", 0)))
         t0 = time.perf_counter()
         batch = archive.evaluate_many(Q, cost)
         sync(torch)
         elapsed = time.perf_counter() - t0
-        peak = (torch.cuda.max_memory_allocated() - base_alloc
+        peak = (torch.cuda.max_memory_allocated(int(card.get("index", 0))) - base_alloc
                 if card.get("cuda") else 0)
         J = batch.J.detach().float()
         row = {
@@ -1007,7 +1025,7 @@ def bundle_repo(dest: Path) -> Path:
 def render_provision(remote_root: str, remote_zip: str) -> str:
     return "\n".join([
         "%%bash",
-        "set -uo pipefail",
+        "set -euo pipefail",
         "trap 'echo \"" + MARK_PROVISION + "$?\"' EXIT",
         f"mkdir -p {remote_root} && cd {remote_root}",
         "if [ ! -d repo ]; then",
@@ -1029,9 +1047,10 @@ def render_run(remote_root: str, remote_argv: list[str]) -> str:
     inner = "python3 -u SCRIPTS/new_high_colab.py " + shlex.join(remote_argv)
     return "\n".join([
         "%%bash",
+        "set -euo pipefail",
+        f"if [ ! -d {remote_root}/repo ]; then echo '[high] FATAL: repo missing'; exit 3; fi",
         f"cd {remote_root}/repo",
         "export PYTHONUNBUFFERED=1 MPLBACKEND=Agg",
-        "set -o pipefail",
         f"trap 'echo \"{MARK_RUN}$?\"' EXIT",
         f"{inner} 2>&1 | tee {remote_root}/run.log",
     ]) + "\n"
@@ -1098,7 +1117,8 @@ def launch(args: argparse.Namespace) -> int:
     remote_root = f"/content/high_{time.strftime('%Y%m%d%H%M%S')}"
     run_id = remote_root.rsplit("_", 1)[1]
     session = args.session or f"tesis-high-{run_id[-6:]}"
-    rdir = Path(args.out).expanduser() / run_id
+    out = Path(args.out).expanduser()
+    rdir = (out if out.is_absolute() else (ROOT / out).resolve()) / run_id
     rdir.mkdir(parents=True, exist_ok=True)
     logfile = rdir / "cli.log"
 
@@ -1122,8 +1142,13 @@ def launch(args: argparse.Namespace) -> int:
             remote_argv += [flag, str(value)]
     if args.verify:
         remote_argv.append("--verify")
-    if args.hard_bc:
+    if args.hard_bc and "pinn" in stages:
         remote_argv.append("--hard-bc")
+    if args.zip_path:
+        zip_name = Path(args.zip_path).name
+        remote_argv += ["--zip-path", zip_name]
+    else:
+        zip_name = "artifacts.zip"
     if not args.runtime_log:
         remote_argv += ["--runtime-log", ""]
 
@@ -1131,7 +1156,7 @@ def launch(args: argparse.Namespace) -> int:
                                        encoding="utf-8")
     (rdir / "run.py").write_text(render_run(remote_root, remote_argv),
                                  encoding="utf-8")
-    artifacts = f"{remote_root}/out/artifacts.zip"
+    artifacts = f"{remote_root}/out/{zip_name}"
 
     binary = shutil.which(args.colab)
     if binary is None and not args.dry_run:
@@ -1309,7 +1334,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         card["class"] = args.assume
         card["assumed"] = True
     spec = SPECS[card.get("class", "cpu")]
-    args.device = "cpu" if spec.key == "cpu" and not card.get("cuda") else args.device
+    if args.device in {"auto", ""} and spec.key == "cpu" and not card.get("cuda"):
+        # torch.device("auto") is not a device string; resolve it here since the
+        # transport code takes a concrete device.
+        args.device = "cpu"
 
     cfg = load_cfg(args)
     tune = derive_tuning(cfg, spec, card, args, out)

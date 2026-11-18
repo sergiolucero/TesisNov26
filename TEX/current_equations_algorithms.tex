@@ -1,0 +1,240 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\pdd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\pddt}[2]{\frac{\partial^{2} #1}{\partial #2^{2}}}
+\newcommand{\erfc}{\operatorname{erfc}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\Cvar}{\mathrm{CVaR}}
+\newcommand{\E}{\mathbb{E}}
+
+\title{\vspace{-1.2em}Equations and Algorithms Under Test:\\ Groundwater Remediation via PINNs, FNOs, and Stochastic Optimal Control}
+\author{S. Lucero}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-2.5em}
+
+\begin{abstract}
+\noindent This note records the mathematical models and numerical algorithms
+currently exercised in the repository. Two families are active: (i) the
+physics-informed neural network (PINN) and Fourier neural operator (FNO)
+surrogates for the advection--dispersion equation, and (ii) the
+finite-volume / sample-average-approximation (SAA) stochastic optimal control
+pipeline for pump-and-treat remediation. We state the governing equations, the
+learning and optimization objectives, and the solver algorithms exactly as
+they are implemented, so the manuscript can be rebuilt from this single source.
+\end{abstract}
+
+\section{Governing equations}
+\label{sec:pde}
+
+\paragraph{1D advection--dispersion (sandbox).}
+The dimensionless, homogeneous, non-reactive 1D problem used to verify the
+neural surrogates is
+\begin{equation}
+\pdd{u}{\tau}+\pdd{u}{\xi}=\frac{1}{\mathrm{Pe}}\,\pddt{u}{\xi},
+\quad (\xi,\tau)\in(0,1)\times(0,\tau_{\max}],
+\label{eq:ade1d}
+\end{equation}
+with $u(\xi,0)=0$, $u(0,\tau)=1$, $u(1,\tau)=0$, where $\xi=x/L$,
+$\tau=tv/L$ (pore volumes), $u=C/C_0$, and $\mathrm{Pe}=vL/D$. The
+closed-form Ogata--Banks reference \cite{ogata1961solution},
+\begin{equation}
+u_{\mathrm{ref}}(\xi,\tau)=
+\frac12\Bigl[
+\erfc\!\Bigl(\tfrac{(\xi-\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\Bigr)
++e^{\mathrm{Pe}\,\xi}\erfc\!\Bigl(\tfrac{(\xi+\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\Bigr)
+\Bigr],
+\label{eq:ogata}
+\end{equation}
+is the ground truth for the surrogate tests.
+
+\paragraph{2D flow (steady Darcy).}
+The pump-and-treat physics is depth-averaged over a rectangular domain
+$\Omega\subset\R^2$ with cell-centred grid. The steady flow equation is
+\begin{equation}
+-\nabla\cdot\bigl(T(\mathbf{x})\,\nabla h\bigr)
+= b\,W(\mathbf{x})-\sum_{i=1}^{n_w} q_i\,\delta_\varepsilon(\mathbf{x}-\mathbf{x}_i),
+\label{eq:darcy}
+\end{equation}
+with transmissivity $T=K b$ ($K$ hydraulic conductivity, $b$ thickness), head
+$h$~[m], recharge $W$, and extraction rates $q_i\ge0$~[$\mathrm{m^3\,d^{-1}}$].
+Wells are regularized by a normalized Gaussian kernel of width $\varepsilon$
+grid cells,
+\begin{equation}
+\delta_\varepsilon(\mathbf{x}-\mathbf{x}_i)=\frac1{Z_i}
+\exp\!\Bigl(-\tfrac{(x-x_i)^2}{2\sigma_x^2}-\tfrac{(y-y_i)^2}{2\sigma_y^2}\Bigr),
+\qquad \sigma_\bullet=\varepsilon\,\Delta_\bullet .
+\label{eq:well}
+\end{equation}
+Boundary conditions are Dirichlet heads on the $x$-faces and no-flow (or
+Dirichlet) on the $y$-faces. The seepage velocity is
+$\mathbf{v}=-K\,\nabla h/\phi$ with porosity $\phi$.
+
+\paragraph{2D transport (implicit Euler).}
+Concentration obeys the depth-averaged advection--dispersion equation with a
+frozen (background) dispersion tensor and explicit well sinks,
+\begin{equation}
+\phi R\,\pdd{C}{t}
+=\nabla\cdot(\phi\,\mathbf{D}\,\nabla C)
+-\nabla\cdot(\phi\,\mathbf{v}\,C)
+-\sum_i q_i\,C(\mathbf{x}_i)\,\delta_\varepsilon(\mathbf{x}-\mathbf{x}_i)
++s(\mathbf{x},t),
+\label{eq:transport}
+\end{equation}
+with retardation $R$ and source $s$. Time is discretized by implicit Euler,
+and advection uses first-order upwinding, so the transport operator is linear
+in $q$ and amenable to an exact discrete adjoint.
+
+\section{Neural surrogates}
+\label{sec:surrogates}
+
+\paragraph{PINN.}
+The solution of \eqref{eq:ade1d} is approximated by a multilayer perceptron
+$u_\theta(\xi,\tau)$ ($\tanh$ hidden, sigmoid output). The PDE residual
+$\mathcal{R}_\theta=\pdd{u_\theta}{\tau}+\pdd{u_\theta}{\xi}-\tfrac{1}{\mathrm{Pe}}\pddt{u_\theta}{\xi}$
+is formed by automatic differentiation, and $\theta$ minimizes the composite
+loss
+\begin{equation}
+\mathcal{L}(\theta)=\lambda_{\mathrm{PDE}}\mathcal{L}_{\mathrm{PDE}}
++\lambda_{\mathrm{IC}}\mathcal{L}_{\mathrm{IC}}
++\lambda_{\mathrm{BC}}\mathcal{L}_{\mathrm{BC}},
+\label{eq:pinnloss}
+\end{equation}
+where each term is a mean-squared residual over randomly resampled collocation
+points. A \emph{hard} (architectural) ansatz enforces IC and outlet exactly:
+\begin{equation}
+u_\theta(\xi,\tau)=(1-\xi)\,s(\tau)+\xi(1-\xi)\,s(\tau)\,\mathrm{NN}_\theta(\xi,\tau),
+\quad s(\tau)=1-e^{-\tau/\varepsilon},
+\label{eq:hardbc}
+\end{equation}
+with $\varepsilon=10^{-3}$. Optimization is Adam ($\sim\!10^4$ steps with
+collocation resampling) followed by L-BFGS. A known artefact: the inlet ramp
+contributes $s'(0)=1/\varepsilon$, so $\max|\mathcal{R}_\theta|\gtrsim 1/\varepsilon$
+independently of the weights; the entrance corner $(0,0)$ is likewise a
+measure-zero discontinuity excluded from the reported metric.
+
+\paragraph{FNO.}
+The FNO learns the solution operator $\mathcal{G}:a\mapsto u$ for a family of
+hydrologies $a=(v,D)$ or $(\mathrm{Pe})$, discretized as
+$u_j^n\approx\mathcal{G}_\theta(a;\xi_j,\tau_n)$. It is a lifting MLP, $K$
+spectral layers with $k_{\max}$ retained Fourier modes, and a projection MLP
+\cite{li2020fourier}. A structural requirement discovered in Phase~4 is that
+normalized $(\xi,\tau)$ coordinate channels must be appended to the input:
+with only spatially constant channels the input has a single (DC) mode and the
+operator output is constant by construction (measured profile-only error
+$1.0$). With coordinate channels the test relative $L^2$ error reaches
+$\sim\!1.5\times10^{-2}$ at 250 epochs.
+
+\section{Stochastic optimal control problem}
+\label{sec:saa}
+
+Heterogeneity is represented by $M$ random conductivity fields
+$\{K_m\}_{m=1}^M$ (Monte Carlo scenarios). For a policy
+$q\in[0,q_{\max}]^{n_w}$ with plant capacity $Q_{\max}$, the per-scenario cost
+is
+\begin{equation}
+J_m(q)=J_{\mathrm{pump}}+J_{\mathrm{treat}}+J_{\mathrm{res}}+J_{\mathrm{time}},
+\label{eq:cost}
+\end{equation}
+with
+\begin{align}
+J_{\mathrm{pump}}&=c_e\,T\sum_i q_i,
+&
+J_{\mathrm{treat}}&=c_w\sum_i q_i\!\int_0^T C_{\mathrm{well},i}(t)\,dt,\notag\\[2pt]
+J_{\mathrm{res}}&=c_m\!\int_\Omega b R\phi\,C(\mathbf{x},T)\,d\Omega,
+&
+J_{\mathrm{time}}&=c_\tau\,\tau_c+c_{\mathrm{fail}}\,\mathbf{1}_{\{\text{failed}\}}.
+\label{eq:costterms}
+\end{align}
+Here $\tau_c$ is the cleanup time (last time the compliance violation is
+positive), replaced by a differentiable sigmoid surrogate when gradients are
+needed. Two chance constraints bind the policy: a compliance limit at the
+monitoring well,
+\begin{equation}
+G_m(q)=\max_{t\in[t_0,T]}\bigl(C_{\mathrm{comp}}(t)-C_{\mathrm{reg}}\bigr)\le0
+\quad\text{w.p.}\ge1-\alpha,
+\label{eq:G}
+\end{equation}
+and a drawdown limit at observation wells,
+$H_m(q)=\min(h_{\mathrm{obs}}-h_{\min})\ge0$ w.p. $\ge1-\alpha_h$. The
+nonsmooth empirical chance constraint is replaced by the conservative CVaR
+reformulation \cite{rockafellar2000optimization},
+\begin{equation}
+\Cvar_{1-\alpha}(G)=\min_{\eta}\Bigl\{\eta+\tfrac{1}{\alpha M}\sum_m [G_m-\eta]_+\Bigr\}\le0,
+\label{eq:cvar}
+\end{equation}
+and the penalized SAA objective is
+\begin{equation}
+f(q)=\frac1M\sum_m J_m(q)
++\rho_g\,[\Cvar_{1-\alpha}(G)]_+^2
++\rho_h\,[\Cvar_{1-\alpha_h}(-H)]_+^2,
+\label{eq:saa}
+\end{equation}
+with penalty weights $\rho_g,\rho_h$ optionally continued outward.
+
+\section{Numerical algorithms}
+\label{sec:alg}
+
+\paragraph{Finite-volume discretization.}
+Flow \eqref{eq:darcy} is discretized on a cell-centred five-point stencil with
+harmonic-mean face transmissivity, giving a symmetric positive-definite (SPD)
+system $\mathbf{A}\mathbf{h}=\mathbf{b}(q)$. The transport operator in
+\eqref{eq:transport} is assembled as an upwind advection stencil plus a
+frozen-dispersion stencil; the well sink uses the kernel \eqref{eq:well}.
+Implicit Euler gives, per time step,
+\begin{equation}
+\Bigl(\tfrac{\phi R}{\Delta t}\mathbf{I}+\mathbf{A}_{\mathrm{adv}}(q)+\mathbf{A}_{\mathrm{disp}}\Bigr)
+\mathbf{C}^{n+1}=\tfrac{\phi R}{\Delta t}\mathbf{C}^{n}+\mathbf{s}^{n}.
+\label{eq:ie}
+\end{equation}
+
+\paragraph{Batched Krylov solvers (PyTorch backend).}
+The NumPy/SciPy reference uses a sparse LU factorization per scenario per step.
+The GPU backend keeps the identical algebra but changes the execution model to
+matrix-free stencils and batched iterative solves over $S\times M$ systems
+($S$ candidate policies, $M$ scenarios): conjugate gradients (CG) for the SPD
+Darcy system, and BiCGSTAB for the nonsymmetric transport system, both with
+Jacobi preconditioning. The transport loop is warm-started from the previous
+time level, giving $8$--$9$ BiCGSTAB iterations per step at $rtol=10^{-11}$
+(float64) versus $\sim\!17$ cold.
+
+\paragraph{Optimization.}
+The outer loop minimizes \eqref{eq:saa} with capacity projection
+$\mathrm{proj}(q)=\min(q,q_{\max})$, scaled by $Q_{\max}$ if
+$\sum_i q_i>Q_{\max}$. Two deterministic search strategies coexist:
+(i) \emph{compass pattern search}, which probes $q\pm\delta e_i$ one candidate
+at a time and halves the step on failure; and (ii) \emph{batched pattern
+search}, which evaluates the whole compass set
+$\{q\pm\delta e_i\}$ in one batched call and accepts the best strict
+improvement --- on a GPU the marginal cost of the extra candidates is near zero.
+For gradient-based search, SLSQP uses a discrete-adjoint gradient of the
+smooth (CVaR + soft-cleanup) objective, exploiting that the frozen-dispersion
+upwind operator is linear in $q$. Multi-start ($n_{\mathrm{starts}}$ random
+feasible seeds) keeps the best penalized objective. The measured bounded run
+($80\times40$ grid, $M=40$ train / $80$ test, $200$ evaluations) terminates in
+$\sim\!19$ min at $\approx5$ s per evaluation, converging in $\sim\!150$
+evaluations.
+
+\begin{thebibliography}{9}
+\bibitem{ogata1961solution}
+A. Ogata and R. B. Banks, \textit{A solution of the differential equation of
+longitudinal dispersion in porous media}, U.S. Geological Survey Professional
+Paper 411-A, 1961.
+\bibitem{li2020fourier}
+Z. Li, N. Kovachki, K. Azizzadenesheli, B. Liu, K. Bhattacharya, A. Stuart,
+A. Anandkumar, \textit{Fourier Neural Operator for Parametric Partial
+Differential Equations}, ICLR, 2021.
+\bibitem{rockafellar2000optimization}
+R. T. Rockafellar and S. Uryasev, \textit{Optimization of conditional
+value-at-risk}, Journal of Risk, 2:21--41, 2000.
+\end{thebibliography}
+
+\end{document}

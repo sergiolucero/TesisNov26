@@ -12,6 +12,7 @@ venv/
 
 # Generated data and run artifacts
 out/
+out3d_colab/
 figs/
 do_results/
 *.npz

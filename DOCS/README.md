@@ -55,6 +55,7 @@ packages, configs and generated outputs.
 | `DOCS/GPU.md` | GPU audit: what ran on the accelerator, what now does, how to measure it |
 | `DOCS/Actions.md`, `DOCS/HUMAN.md`, `DOCS/GROWTH.md` | Run log, handoff notes, scaling plan |
 | `DOCS/Collab.md`, `DOCS/Results.md` | Colab GPU workflow, results log |
+| `DOCS/SYNCH.md` | Keeping every machine on the same commit (GitHub Actions + Tailscale) |
 | `TEX/` | LaTeX formulation and plans |
 
 ## Quick start

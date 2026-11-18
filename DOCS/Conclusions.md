@@ -158,6 +158,15 @@ cannot silently ship again.
 - *Normalization* — per-channel standard-Gaussian, stats from the training split
   only (no test leakage).
 
+**Five-seed median (new).** The single-seed coord-channel numbers above
+(1.46% at 250 epochs; 2.35% at 120 epochs in the mode sweep) are one draw
+apiece. At 120 epochs across five seeds the coord-channel FNO gives median
+**3.02e-2** (IQR 3.2e-3, range 2.35e-2 … 5.98e-2) —
+`runs/sweeps/fno_coords_120ep/`. So the honest 120-epoch figure is ~3.0%
+with a ~2.5× spread; the single-seed 2.35% was a favourable seed. The
+250-epoch 1.46% still needs its own multi-seed median before it appears in
+the paper.
+
 ---
 
 ## 6. Stochastic optimization — the full run is feasible, and the budget was ~10× too large
@@ -261,8 +270,12 @@ uncertainty only.
 
 **Open:**
 - Rebuild `TEX/formulation.pdf` — the `.tex` has been corrected (§2) but no
-  LaTeX toolchain exists on the assembly host.
-- Apply per-seed medians to the FNO sweep table.
+  LaTeX toolchain exists on the assembly host (all five `.tex` files verified
+  brace-balanced with every `\ref`/`\eqref` resolving; the PDF rebuild belongs
+  on `do-relay`, which has TeX Live).
+- Apply per-seed medians to the FNO sweep table — **done for the 120-epoch
+  coord-channel config** (§5, five seeds); the 250-epoch and mode-sweep rows
+  remain single-seed.
 - DO-lane execution of the bounded opt run to exercise the dispatch path.
 
 ---

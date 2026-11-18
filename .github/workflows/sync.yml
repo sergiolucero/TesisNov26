@@ -1,0 +1,55 @@
+name: fleet-sync
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}        # allow a manual re-sync from the Actions tab
+
+jobs:
+  # 1. Gatekeeper: nothing fans out unless the repo is healthy.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy scipy pyyaml
+      - run: python -u tests/run_tests.py
+
+  # 2. Fan-out: join the tailnet once, then pull on every node.
+  sync:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [ubuntu-hub, do-relay]
+    steps:
+      - name: Join the tailnet (ephemeral CI device)
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          version: latest
+
+      - name: Pull and reinstall on ${{ matrix.node }}
+        env:
+          SSH_KEY: ${{ secrets.FLEET_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/fleet_key
+          chmod 600 ~/.ssh/fleet_key
+          ssh -i ~/.ssh/fleet_key \
+              -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=20 \
+              root@${{ matrix.node }} 'bash -s' <<'EOF'
+          set -euo pipefail
+          cd /root/TESIS || { git clone ubuntu-hub:tesis.git /root/TESIS && cd /root/TESIS; }
+          git fetch --prune origin
+          git checkout main
+          git reset --hard origin/main
+          /root/base/bin/python3 -m pip install -r requirements.txt
+          echo "SYNCED $(hostname) @ $(git rev-parse --short HEAD)"
+          EOF

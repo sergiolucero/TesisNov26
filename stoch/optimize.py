@@ -3,12 +3,23 @@
 The chance constraints are handled by an exact penalty on the CVaR
 reformulation (or on the empirical probability if requested).  The penalty
 weight should be increased in continuation if the final policy is infeasible.
+
+Two search strategies coexist:
+
+* :func:`pattern_search` -- sequential compass search, one candidate per
+  objective evaluation.  This is the NumPy reference path.
+* :func:`pattern_search_batched` -- generalized pattern search that evaluates
+  the whole compass set of a batch-capable archive (see
+  :class:`stoch.saa_torch.TorchArchive`) in one call and accepts the best
+  improvement.  On a GPU the marginal cost of the extra candidates is ~0, so
+  it converges in fewer outer iterations for the same wall clock.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 from scipy.optimize import minimize
@@ -25,10 +36,16 @@ __all__ = [
     "OptResult",
     "project_capacity",
     "pattern_search",
+    "pattern_search_batched",
     "slsqp_adjoint",
     "multi_start",
     "solve_saa",
 ]
+
+
+def torch_clamp_min(x):
+    """``max(x, 0)`` without importing torch at module scope."""
+    return x.clamp(min=0.0)
 
 
 def project_capacity(
@@ -118,6 +135,44 @@ class SAAProblem:
         return float(ev.mean_J + self.rho_g * max(cg, 0.0) ** 2
                      + self.rho_h * max(ch, 0.0) ** 2)
 
+    # -- batched evaluation (GPU archives) --------------------------------
+    @property
+    def supports_batching(self) -> bool:
+        return bool(getattr(self.archive, "supports_batching", False))
+
+    def batch_objective(self, Q):
+        """Penalised objective for ``S`` candidates at once.
+
+        ``Q`` is shaped ``(S, n_wells)``.  Returns ``(f, ev)`` where ``f`` is a
+        length-``S`` NumPy array of the same penalised objective that
+        :meth:`objective` evaluates one candidate at a time, and ``ev`` is the
+        batched evaluation container (per-candidate, per-scenario tensors).
+
+        Requires an archive that supports batching
+        (:class:`stoch.saa_torch.TorchArchive`).
+        """
+        if not self.supports_batching:
+            raise TypeError(
+                f"{type(self.archive).__name__} does not support batched "
+                "evaluation; use pattern_search instead"
+            )
+        from stoch.objective_torch import cvar_batch
+
+        Q = np.atleast_2d(np.asarray(Q, dtype=float))
+        Q = np.stack([project_capacity(row, self.q_max, self.Q_max) for row in Q])
+        ev = self.archive.evaluate_many(Q, self.cost)
+        if self.chance == "exact":
+            cg = -((ev.G <= 0.0).to(ev.J.dtype).mean(dim=1) - (1.0 - self.alpha))
+            ch = -((ev.H >= 0.0).to(ev.J.dtype).mean(dim=1) - (1.0 - self.alpha_h))
+        else:
+            cg = cvar_batch(ev.G, self.alpha)
+            ch = cvar_batch(-ev.H, self.alpha_h)
+        f = (ev.mean_J
+             + self.rho_g * torch_clamp_min(cg) ** 2
+             + self.rho_h * torch_clamp_min(ch) ** 2)
+        self.n_eval += int(Q.shape[0])
+        return f.detach().cpu().numpy(), ev
+
     def penalty(self, ev) -> tuple[float, float]:
         cg, ch = self.chance_values(ev)
         return self.rho_g * max(cg, 0.0) ** 2, self.rho_h * max(ch, 0.0) ** 2
@@ -162,8 +217,15 @@ def pattern_search(
     tol: float = 1e-3,
     max_iter: int = 80,
     max_evals: int = 2000,
+    progress: Optional[Callable[[dict], None]] = None,
 ) -> OptResult:
-    """Compass/coordinate pattern search with capacity projection."""
+    """Compass/coordinate pattern search with capacity projection.
+
+    ``progress`` is called once per outer iteration with a small dict (phase,
+    iteration, evaluations, step, best objective, elapsed seconds) so long
+    runs are visible in the log instead of going silent.
+    """
+    t0 = time.time()
     q0 = project_capacity(q0, problem.q_max, problem.Q_max)
     q = q0.copy()
     best = problem.objective(q)
@@ -171,6 +233,9 @@ def pattern_search(
     hist = [{"eval": 0, "f": best, "q": q.tolist()}]
     nit = 0
     evals = 1
+    if progress is not None:
+        progress({"phase": "search-start", "iteration": 0, "evals": evals,
+                  "step": step, "best": best, "elapsed": time.time() - t0})
     while step > tol and nit < max_iter and evals < max_evals:
         improved = False
         for i in range(problem.n_wells):
@@ -192,8 +257,92 @@ def pattern_search(
         nit += 1
         if not improved:
             step *= 0.5
+        if progress is not None:
+            progress({"phase": "iter", "iteration": nit, "evals": evals,
+                      "step": step, "best": best,
+                      "elapsed": time.time() - t0})
     ev = problem.evaluate(q, keep=False)
     return OptResult(q=q, fun=best, nit=nit, method="pattern", history=hist,
+                     metrics=ev.summary())
+
+
+def pattern_search_batched(
+    problem: SAAProblem,
+    q0: np.ndarray,
+    step0: Optional[float] = None,
+    tol: float = 1e-3,
+    max_iter: int = 80,
+    max_evals: int = 2000,
+    progress: Optional[Callable[[dict], None]] = None,
+) -> OptResult:
+    """Generalized pattern search on a batch-capable (GPU) archive.
+
+    Each outer iteration evaluates the full compass set ``q +/- step * e_i``
+    (``2 * n_wells`` candidates) in a *single* batched call and accepts the
+    best strict improvement; the step is halved when nothing improves.  On a
+    GPU the batch costs about the same as one candidate, so this trades extra
+    arithmetic for far fewer round-trips -- unlike :func:`pattern_search`,
+    which tests candidates one at a time and updates ``q`` immediately.
+
+    Both searches are deterministic and share the acceptance margin
+    (``1e-12``) and the capacity projection, so they converge to the same
+    neighbourhood; the trajectories differ because the iterate is updated once
+    per sweep instead of once per candidate.
+    """
+    if not getattr(problem, "supports_batching", False):
+        raise TypeError(
+            f"{type(problem.archive).__name__} does not support batched "
+            "evaluation; use pattern_search instead"
+        )
+    t0 = time.time()
+    q = project_capacity(q0, problem.q_max, problem.Q_max)
+    best = problem.objective(q)
+    step = step0 if step0 is not None else 0.25 * problem.q_max
+    hist = [{"eval": 0, "f": best, "q": q.tolist()}]
+    nit = 0
+    evals = 1
+    if progress is not None:
+        progress({"phase": "search-start", "iteration": 0, "evals": evals,
+                  "step": step, "best": best, "elapsed": time.time() - t0})
+
+    while step > tol and nit < max_iter and evals < max_evals:
+        cands: list[np.ndarray] = []
+        moves: list[tuple[int, float]] = []
+        for i in range(problem.n_wells):
+            for sgn in (1.0, -1.0):
+                cand = q.copy()
+                cand[i] += sgn * step
+                cand = project_capacity(cand, problem.q_max, problem.Q_max)
+                if np.allclose(cand, q):
+                    continue
+                cands.append(cand)
+                moves.append((i, sgn))
+        if not cands:
+            step *= 0.5
+            nit += 1
+            continue
+
+        budget = max(int(max_evals) - evals, 1)
+        f_batch, _ = problem.batch_objective(np.stack(cands[:budget]))
+        evals += len(f_batch)
+
+        k_best = int(np.argmin(f_batch))
+        improved = bool(f_batch[k_best] < best - 1e-12)
+        if improved:
+            q = cands[k_best]
+            best = float(f_batch[k_best])
+            hist.append({"eval": evals, "f": best, "q": q.tolist()})
+        else:
+            step *= 0.5
+        nit += 1
+        if progress is not None:
+            progress({"phase": "iter", "iteration": nit, "evals": evals,
+                      "step": step, "best": best,
+                      "elapsed": time.time() - t0,
+                      "compass": len(cands), "improved": improved})
+
+    ev = problem.evaluate(q, keep=False)
+    return OptResult(q=q, fun=best, nit=nit, method="pattern-batched", history=hist,
                      metrics=ev.summary())
 
 
@@ -202,14 +351,19 @@ def slsqp_adjoint(
     q0: np.ndarray,
     max_iter: int = 100,
     ftol: float = 1e-8,
+    progress: Optional[Callable[[dict], None]] = None,
 ) -> OptResult:
     """SLSQP with the discrete-adjoint gradient and the capacity constraint."""
+    t0 = time.time()
     q0 = project_capacity(q0, problem.q_max, problem.Q_max)
     hist: list[dict] = []
 
     def fun(q):
         f = problem.objective(q, keep=True)
         hist.append({"eval": len(hist), "f": float(f), "q": np.asarray(q).tolist()})
+        if progress is not None and (len(hist) == 1 or len(hist) % 5 == 0):
+            progress({"phase": "eval", "evals": len(hist), "best": float(f),
+                      "elapsed": time.time() - t0})
         return f
 
     def jac(q):
@@ -236,9 +390,26 @@ def multi_start(
     n_starts: int = 5,
     method: str = "pattern",
     seed: int = 0,
+    progress: Optional[Callable[[dict], None]] = None,
+    batched: Optional[bool] = None,
     **kwargs,
 ) -> OptResult:
-    """Random feasible starts, keep the best penalised objective."""
+    """Random feasible starts, keep the best penalised objective.
+
+    ``batched`` selects the search variant: ``None`` (default) uses the batched
+    compass sweep whenever the archive supports it, ``False`` forces the
+    sequential NumPy path, ``True`` requires batching.
+    """
+    if batched is None:
+        # Batching only pays off on an accelerator: on a CPU the batched sweep
+        # costs ~S times one sequential candidate with no parallelism to win
+        # back, so the sequential path stays the default there.
+        device = getattr(getattr(problem, "archive", None), "device", None)
+        on_accelerator = getattr(device, "type", "cpu") in {"cuda", "mps"}
+        batched = (method == "pattern" and on_accelerator
+                   and getattr(problem, "supports_batching", False))
+    if batched and method != "pattern":
+        raise ValueError("batched search is only implemented for method='pattern'")
     rng = np.random.default_rng(seed)
     best: Optional[OptResult] = None
     results = []
@@ -249,16 +420,23 @@ def multi_start(
             w = rng.random(problem.n_wells) + 0.1
             q0 = w / w.sum() * rng.uniform(0.2, 1.0) * problem.Q_max
         q0 = project_capacity(q0, problem.q_max, problem.Q_max)
+        if progress is not None:
+            progress({"phase": "start", "start": k + 1, "n_starts": n_starts})
         if method == "pattern":
-            kw = {k: v for k, v in kwargs.items()
-                  if k in ("step0", "tol", "max_iter", "max_evals")}
-            r = pattern_search(problem, q0, **kw)
+            kw = {key: val for key, val in kwargs.items()
+                  if key in ("step0", "tol", "max_iter", "max_evals")}
+            kw["progress"] = progress
+            r = (pattern_search_batched if batched else pattern_search)(problem, q0, **kw)
         elif method == "slsqp":
-            kw = {k: v for k, v in kwargs.items() if k in ("max_iter", "ftol")}
+            kw = {key: val for key, val in kwargs.items() if key in ("max_iter", "ftol")}
+            kw["progress"] = progress
             r = slsqp_adjoint(problem, q0, **kw)
         else:
             raise ValueError("method must be 'pattern' or 'slsqp'")
         results.append(r)
+        if progress is not None:
+            progress({"phase": "done", "start": k + 1, "n_starts": n_starts,
+                      "fun": float(r.fun), "nit": int(r.nit)})
         if best is None or r.fun < best.fun:
             best = r
     assert best is not None

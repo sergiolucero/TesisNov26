@@ -1,0 +1,36 @@
+# SCRIPTS/herdr-server.service
+# ============================
+# systemd *user* unit for the Herdr server on the hub (DOCS/NewPlan.md §2B/§9).
+#
+# Install (as the hub user, not root):
+#   mkdir -p ~/.config/systemd/user
+#   cp SCRIPTS/herdr-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now herdr-server.service
+#   loginctl enable-linger "$USER"      # keep it running without an SSH session
+#
+# Or let the bootstrap script do it:
+#   ./SCRIPTS/fleet_bootstrap.sh --role hub --systemd
+#
+# Check / stop:
+#   systemctl --user status herdr-server.service
+#   herdr status
+#   systemctl --user stop herdr-server.service
+
+[Unit]
+Description=Herdr server (terminal workspace manager for AI agents)
+Documentation=https://herdr.dev/tui/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/herdr server
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

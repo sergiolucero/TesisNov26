@@ -1,0 +1,127 @@
+RUNTIMES - quick test timings for the PINN/FNO + stochastic remediation code
+============================================================================
+NOTE        : measured before the scripts moved into SCRIPTS/ on
+              2026-11-16, so the recorded commands read `run_2d.py` where
+              the current path is `SCRIPTS/run_2d.py` etc. The timings are
+              unaffected by the move (same code, same modules).
+Date        : 2026-11-16
+Host        : 1 vCPU container, Python 3.12.3 (/root/base/bin/python3)
+              numpy 2.5.4, scipy 1.18.1
+Method      : wall clock measured around the whole process (bash date %s%N),
+              so numbers include interpreter start-up and imports (~1.0-1.5 s).
+              "in-run" is the wall clock the script itself reports in
+              summary.json / metrics.json / the final log line.
+              Every invocation used `python3 -u` (see DOCS/HUMAN.md gotcha #4).
+              This file is the curated table; the raw per-run record (host, grid,
+              method, evaluations, seconds per evaluation) is appended by the
+              scripts themselves to runs/runtimes.jsonl -- read it with
+              ./SCRIPTS/runtimes_report.py.
+              Output dirs point at /tmp so repo artifacts are untouched.
+
+SUMMARY
+-------
+Test                                             wall(s)   in-run(s)   status
+-----------------------------------------------  --------  ----------  ------
+tests/run_tests.py (32 unit tests, whole suite)       2.08        0.48   OK
+tests/test_adjoint.py  (python -m unittest)           1.36           -   OK
+tests/test_chance.py                                  1.11           -   OK
+tests/test_forward.py                                 1.11           -   OK
+tests/test_objective.py                               1.00           -   OK
+tests/test_random_fields.py                           1.07           -   OK
+tests/test_wells.py                                   1.10           -   OK
+run_2d.py --quick --mode forward                      5.71         2.8    OK
+run_2d.py --quick --mode optimize                    16.20        13.5    OK
+run_2d.py --quick --mode all                         19.68        16.8    OK
+run_2d.py --mode forward (full benchmark.yaml)        5.87         3.2    OK
+run_optimization.py --quick                          15.09        12.7    OK
+run_optimization.py --stage gates (full benchmark)   74.03        71.5    OK
+app.py serve smoke (--port 5099, GET / -> 200)        0.62           -    OK
+run_optimization.py --stage opt (full benchmark)   >1800            -   TIMEOUT
+-----------------------------------------------  --------  ----------  ------
+
+EXACT COMMANDS
+--------------
+# unit tests, whole suite
+/root/base/bin/python3 -u tests/run_tests.py
+
+# unit tests, per module
+for f in tests/test_*.py; do
+  m=$(basename $f .py); /root/base/bin/python3 -u -m unittest tests.$m
+done
+
+# 2D forward + optimization, quick config (32x32 grid)
+/root/base/bin/python3 -u run_2d.py --quick --mode forward  --out /tmp/rt_forward
+/root/base/bin/python3 -u run_2d.py --quick --mode optimize --out /tmp/rt_optimize
+/root/base/bin/python3 -u run_2d.py --quick --mode all      --out /tmp/rt_all
+
+# 2D forward, full benchmark config (80x40 grid, 9 wells)
+/root/base/bin/python3 -u run_2d.py --mode forward --out /tmp/rt_fwd_full
+
+# stochastic pipeline: quick SAA end-to-end
+/root/base/bin/python3 -u run_optimization.py --quick --out /tmp/rt_opt_quick
+
+# stochastic pipeline: verification gates only, full config
+/root/base/bin/python3 -u run_optimization.py --stage gates --out /tmp/rt_gates
+
+# Flask figure viewer smoke test
+/root/base/bin/python3 -u app.py --port 5099 &   # curl -sf http://127.0.0.1:5099/
+kill %1
+
+OBSERVATIONS
+------------
+* The whole unit suite is sub-second of actual test time; ~1.5 s of the 2.08 s
+  is import start-up. All 32 tests pass.
+* The quick SAA path costs ~13-14 s and is dominated by the 40 train / 80 test
+  scenario draws plus pattern search, not by the PDE solves.
+* The full-benchmark forward solve is cheap (3.2 s in-run: 9 wells, 80x40,
+  100 transport steps). Scale tests on the PDE kernel are therefore cheap;
+  the cost lives in the optimization loop.
+* run_optimization.py --stage opt on the full benchmark did NOT finish within
+  1800 s on 1 vCPU (rc=124, killed; only figures/well_layout.png written,
+  identical q* => identical result to the quick run is not yet available).
+  Treat the full opt stage as a long run (overnight class) or reduce
+  saa.M_train/M_test, optim.n_starts or optim.max_evals in the YAML.
+* `run_optimization.py` now logs stage timing and per-iteration optimizer
+  progress ([opt] lines), so a long run no longer looks silent; `fleet_status.sh`
+  shows the same job sentinels and the last log line.
+* Note the difference in well counts: --quick shrinks wells.n (4 wells,
+  total 60 m3/d at --rate 0.3) versus the full config (9 wells, 135 m3/d).
+
+BACKENDS (added 2026-11-16: batched torch backend)
+--------------------------------------------------
+The numbers above are the NumPy/SciPy reference (one core, float64).  The same
+work can now run through physics/fv2d_torch.py + stoch/saa_torch.py, which
+batch S candidates x M scenarios on one device and replace splu with batched
+Krylov solves.  See DOCS/GPU.md and SCRIPTS/bench_backend.py.
+
+Same command, both backends, this 8-core CPU box (no GPU present):
+  run_optimization.py --quick --stage opt                      13.8 s  (numpy)
+  run_optimization.py --quick --stage opt --backend torch      56.7 s  (torch, cpu)
+  -> identical result: q* = [0.1, 0.0, 0.0, 9.38], train J 378906.45,
+     test J 378822.07.  Torch is 4x SLOWER on CPU by design (a CPU has no
+     parallelism for the batch axis); the point is the GPU case, which must be
+     measured on the target runtime with SCRIPTS/bench_backend.py.
+
+Full-benchmark geometry (80x40, nsteps=100, M=40, 9 wells), numpy, one core:
+  16.7 s per SAA evaluation  ->  162 evaluations ~ 45 min, which is why
+  `--stage opt` exceeded the 1800 s timeout in the table above.
+
+Batched-backend parity (tests/test_fv2d_torch.py, tests/test_saa_torch.py):
+  flow/velocity        ~1e-12 relative
+  transport field      ~1e-11 relative (float64, rtol=1e-11)
+  objective terms      ~1e-10 relative
+  mass balance         5.9e-11 (numpy 1.8e-15; float32 ~1e-6)
+  Krylov iterations    8-9 BiCGSTAB iterations per time step (warm-started)
+  28 parity tests, sub-second each.
+
+RESULTS SNAPSHOT (quick config, for reference)
+---------------------------------------------
+forward   : flow residual 8.3e-16, mass balance 2.0e-17, peak C 12.305 mg/L,
+            J = 452600 (G = -1.000, tau = 0 d)
+optimize  : q* = [0.1, 0.0, 0.0, 9.38] (9.5 m3/d), train J 378906.45,
+            test J 378822.07, reliability 1.000, cleanup time 0 d,
+            all gates passed
+full fwd  : flow residual 3.1e-15, mass balance 7.3e-16, peak C 0.003 mg/L,
+            J = 857750 (9 wells, 135 m3/d)
+gates     : O1_reproducible, O2_rel_se_J, O2_mass_balance, O3_adjoint_rel_error,
+            O4_cvar_not_better_than_exact, O4_sigmoid_exact_feasible -- all True

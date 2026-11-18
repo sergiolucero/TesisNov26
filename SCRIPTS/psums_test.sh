@@ -1,1 +1,1 @@
-colab run --gpu $1 psums.py
+colab run --gpu $1 SCRIPTS/psums.py

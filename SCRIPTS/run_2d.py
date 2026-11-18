@@ -28,8 +28,15 @@ the reproducible entry point that binds them together.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
+
+# The entry points live in SCRIPTS/; make the repository root importable so
+# `physics`/`stoch` resolve no matter where this script is launched from.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
@@ -49,9 +56,8 @@ from run_optimization import (
 from stoch.objective import scenario_objective
 from stoch.optimize import project_capacity
 from stoch.random_fields import ScenarioGenerator
+from stoch.runtimes import log_runtime
 from stoch.report import ensure_dir, plot_layout, plot_plume, save_json
-
-HERE = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +202,7 @@ def run_forward(
             grid, C_final, layout.wells, fwd.compliance_xy,
             outdir / "plume_final.png", creg=cost.creg,
             title="Final plume after transport PDE solve",
+            q=q,
         )
         _plot_flow(grid, h.reshape(grid.ny, grid.nx), flow, resp, q,
                    layout.wells, outdir / "flow_field.png")
@@ -317,7 +324,7 @@ def main() -> None:
     )
     ap.add_argument("--mode", choices=["forward", "optimize", "all"],
                     default="all")
-    ap.add_argument("--config", default=str(HERE / "configs/opt/benchmark.yaml"))
+    ap.add_argument("--config", default=str(ROOT / "configs/opt/benchmark.yaml"))
     ap.add_argument("--quick", action="store_true",
                     help="small grid/scenario counts for a smoke run")
     ap.add_argument("--out", default=None)
@@ -332,7 +339,7 @@ def main() -> None:
 
     cfg = load_config(args.config, quick=args.quick)
     tag = "quick" if args.quick else "full"
-    root = Path(args.out) if args.out else (HERE / "out" / "run_2d" / tag)
+    root = Path(args.out) if args.out else (ROOT / "out" / "run_2d" / tag)
     root = ensure_dir(root)
     make_plots = not args.no_plot
     t0 = time.time()
@@ -356,6 +363,14 @@ def main() -> None:
         _print_optimize(om)
 
     summary["wall_clock_s"] = time.time() - t0
+    log_runtime(
+        ROOT / "runs" / "runtimes.jsonl", __file__, summary["wall_clock_s"],
+        stage=f"run_2d:{args.mode}", quick=bool(args.quick), seed=args.seed,
+        config=str(Path(args.config).resolve()), outdir=str(root.resolve()),
+        grid=[int(cfg["domain"]["nx"]), int(cfg["domain"]["ny"])],
+        nsteps=int(cfg["time"]["nsteps"]),
+        status="ok",
+    )
     save_json(root / "summary.json", summary)
     print(f"\nsummary written to {root / 'summary.json'}"
           f"  ({summary['wall_clock_s']:.1f} s)")

@@ -19,7 +19,36 @@ PINNs often struggle because the physics loss and data/BC loss gradients fight e
 - [x] **Scale the PDE variables:** Groundwater flow equations often deal with vastly different scales (e.g., hydraulic conductivity vs. concentration). Non-dimensionalize your inputs (scale everything to [0, 1] or [-1, 1]).
 - [x] **Inspect the residual:** Plot the PDE residual across the spatial domain at initialization. Are there massive spikes at the boundaries or injection wells? 
 
-  ✅ **Result:** trained residual max $|R|=10^3$ is confined to the corner $(0,0)$ (the $s(\tau)$ inlet-smoothing blow-up $1/\varepsilon$); interior mean $|R|=2.1\times10^{-2}$ vs inlet band $3.7\times10^{-1}$, IC band $7.2\times10^{-1}$, corner $7.1\times10^{1}$. No interior spikes. See `out/residual/residual_trained.png`.
+  ✅ **Result (re-derived, seed 0, reproducible):** trained interior mean
+  $|R|=2.13\times10^{-2}$, inlet band $3.98\times10^{-1}$, IC band
+  $7.78\times10^{-1}$, corner $7.26\times10^{1}$.
+  See `out/residual/residual_trained.png`.
+
+  ⚠️ **Correction — the max $|R|=10^3$ is structural, not physical.** It is
+  exactly $1/\varepsilon$, because the hard-BC ansatz multiplies by
+  $s(\tau)=1-e^{-\tau/\varepsilon}$, so $u_\tau$ carries
+  $s'(\tau)\to1/\varepsilon$ as $\tau\to0$. It is therefore the same at
+  initialization and after training, identical for every seed (verified for
+  seeds 0/1/2: $|R(0,0)|=1.0000\times10^{3}$ for all), and it cannot be
+  trained away — it is a property of the ansatz, not a residual. It is a
+  metric artefact of the same family as the corner discontinuity of
+  `formulation.tex` §6, and it is why the *full-grid* residual is not a useful
+  training diagnostic here; the band means above are.
+  `inspect_residual.py` now prints the $1/\varepsilon$ reference next to the
+  measured max and the ratio (observed $=1.000$) so the two are not confused.
+
+  ⚠️ **Correction — "no interior spikes" needs qualifying.** There is no
+  spike, but the interior residual is strongly *outlet-biased*. At fixed
+  $\tau_{\max}=0.5$ the mean $|R|$ rises monotonically with $\xi$: $1.5\times10^{-2}$
+  ($\xi<0.2$) to $2.5\times10^{-1}$ ($\xi>0.8$), a 16× increase; and at
+  $\xi>0.8$ it rises monotonically with $\tau$, $3.0\times10^{-3}$ at
+  $\tau=0.1$ to $2.6\times10^{-1}$ at $\tau=0.5$. The outlet region ($\xi>0.8$,
+  $\tau>0.05$) has mean $|R|=3.4\times10^{-2}$, 2.2× the plume half
+  ($\xi<0.5$, $1.5\times10^{-2}$). The trend is smooth, not a spike, and
+  coincides with $u\to0$ at the outlet: the hard constraint pins $u(1,\tau)=0$
+  while the reference decays smoothly, so the residual per unit $u$ is largest
+  where $u$ is smallest. Worth watching in the 2D extension, where the outlet
+  boundary is a larger share of the domain.
 
 ## Phase 3: Loss Landscape & Optimizer Tuning
 If the losses are unbalanced, the network will ignore the physics to satisfy the boundary data, or vice versa.

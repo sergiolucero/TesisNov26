@@ -73,13 +73,30 @@ def residual_grid(model, Pe, tau_max, nx=256, nt=256, chunk=4096):
     return Xi.numpy(), Tau.numpy(), U.reshape(nt, nx), R.reshape(nt, nx)
 
 
-def residual_stats(Xi, Tau, R, name=""):
-    """Print |R| summary: max location and interior vs boundary breakdown."""
+def residual_stats(Xi, Tau, R, name="", eps=None):
+    """Print |R| summary: max location and interior vs boundary breakdown.
+
+    Also reports the *structural* floor of the metric. The hard-BC ansatz
+    multiplies by s(tau) = 1 - exp(-tau/eps), so u_tau contains s'(tau), which
+    tends to 1/eps as tau -> 0. Hence |R| ~ 1/eps at the entrance corner for
+    ANY weights: it is a property of the ansatz, not a training failure, and it
+    does not shrink as the loss falls. Passing ``eps`` prints that reference
+    value next to the measured max so the two are not confused.
+    """
     print(f"[resid] --- {name} ---")
     absR = np.abs(R)
     imax = np.unravel_index(np.argmax(absR), absR.shape)
     print(f"[resid]   max |R| = {absR[imax]:.3e} at "
           f"(xi,tau) = ({Xi[imax]:.4f}, {Tau[imax]:.4f})")
+    if eps:
+        structural = 1.0 / eps
+        near_corner = (Tau < 1e-2) & (Xi < 1e-2)
+        print(f"[resid]   |R| at the corner is structural: 1/eps = "
+              f"{structural:.3e} from the s(tau) ramp, for any weights.")
+        if near_corner.any():
+            dev = absR[near_corner].max() / structural
+            print(f"[resid]   corner max / (1/eps) = {dev:.3f} "
+                  f"(~1 confirms the corner value is the ramp, not a physics error)")
     print(f"[resid]   mean |R| (full)      = {absR.mean():.3e}")
 
     # interior: away from IC, inlet, outlet by a thin band
@@ -173,7 +190,8 @@ def main():
                                       nx=args.nx, nt=args.nt)
         print(f"[resid] INIT (random weights), u range "
               f"[{u.min():.3f}, {u.max():.3f}]")
-        residual_stats(Xi, Tau, R, "initialization")
+        residual_stats(Xi, Tau, R, "initialization",
+                       eps=args.eps if args.hard_bc else None)
         plot_residual(Xi, Tau, R, "PDE residual at random initialization",
                       args.outdir, "init")
 
@@ -189,7 +207,8 @@ def main():
                                       nx=args.nx, nt=args.nt)
         print(f"[resid] TRAINED ({args.model}), u range "
               f"[{u.min():.3f}, {u.max():.3f}]")
-        residual_stats(Xi, Tau, R, "trained")
+        residual_stats(Xi, Tau, R, "trained",
+                       eps=args.eps if args.hard_bc else None)
         plot_residual(Xi, Tau, R, "PDE residual after training",
                       args.outdir, "trained")
 

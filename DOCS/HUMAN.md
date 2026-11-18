@@ -84,29 +84,29 @@ These are the things that already cost real time. Don't re-learn them.
 cd /root/TESIS
 
 # Train the PINN (best config so far):
-/root/base/bin/python3 -u solve_1d_pinn.py \
+/root/base/bin/python3 -u SCRIPTS/solve_1d_pinn.py \
   --hard-bc --eps 1e-3 --save-model out/pinn_hardbc_exp/model.pt \
   --outdir out/pinn_hardbc_exp
 
 # Inspect the PDE residual on the trained model (the immediate next step):
-PYTHONUNBUFFERED=1 timeout 1200 /root/base/bin/python3 -u inspect_residual.py \
+PYTHONUNBUFFERED=1 timeout 1200 /root/base/bin/python3 -u SCRIPTS/inspect_residual.py \
   --hard-bc --model out/pinn_hardbc_exp/model.pt --outdir out/residual
 # (if too slow/heavy: add --nx 128 --nt 128)
 
 # Generate/refresh data:
-/root/base/bin/python3 -u hydrology.py
+/root/base/bin/python3 -u SCRIPTS/hydrology.py
 
 # Viewer (port 5001):
-./run_app.sh start      # then http://localhost:5001
-./run_app.sh stop
+./SCRIPTS/run_app.sh start      # then http://localhost:5001
+./SCRIPTS/run_app.sh stop
 ```
 
 Config-driven run (new):
 
 ```bash
-/root/base/bin/python3 -u solve_1d_pinn.py --config runs/best.yaml
+/root/base/bin/python3 -u SCRIPTS/solve_1d_pinn.py --config runs/best.yaml
 # override a config value on the CLI:
-/root/base/bin/python3 -u solve_1d_pinn.py --config runs/best.yaml --dtype float64
+/root/base/bin/python3 -u SCRIPTS/solve_1d_pinn.py --config runs/best.yaml --dtype float64
 ```
 
 ## Conventions

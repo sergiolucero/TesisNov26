@@ -13,6 +13,7 @@ venv/
 # Generated data and run artifacts
 out/
 figs/
+do_results/
 *.npz
 *.pt
 *.pth
@@ -20,6 +21,8 @@ figs/
 *.pyz
 *.zip
 runs/*.pt
+runs/colab_multi/
+configs/opt/benchmark_new.yaml
 
 # LaTeX build products (keep .tex sources)
 *.aux
@@ -45,3 +48,30 @@ app.pid
 *.key
 *.pem
 .DS_Store
+
+# Secrets: never commit credentials. .ssh_pass is the pattern historically
+# used with `sshpass -f .ssh_pass` (see NewPlan.md §6 — tailnet SSH + keys,
+# never a stored password).
+.ssh_pass
+.ssh_pass*
+*.pass
+*.secret
+secrets/
+netrc
+.netrc
+
+# Stray artifacts
+# A malformed `--save-model True` once wrote a 3.7 MB torch checkpoint to a
+# file literally named True. Guard against repeat accidents.
+/True
+/False
+
+# Seed-sweep runs (SCRIPTS/seed_sweep.py): keep the summary + per-run manifests
+# (small, they are the record) and ignore models/figures/checkpoints.
+runs/sweeps/**/*.pt
+runs/sweeps/**/*.png
+runs/sweeps/**/*.pdf
+runs/sweeps/**/checkpoint.pt
+
+# Tracked archive snapshots
+!ZIPS/**/*.zip

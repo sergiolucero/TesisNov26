@@ -1,0 +1,78 @@
+domain:
+  lx: 200.0
+  ly: 100.0
+  nx: 80
+  ny: 40
+aquifer:
+  k0: 10.0
+  b: 10.0
+  phi: 0.3
+  R: 1.0
+  alpha_l: 5.0
+  alpha_t: 0.5
+  decay: 0.0
+flow:
+  grad: 0.001
+random_field:
+  sigma: 0.5
+  ell_x: 20.0
+  ell_y: 20.0
+  n_kl: 0
+  target_variance: 0.95
+  random_source: false
+  random_gradient: false
+wells:
+  n: 9
+  method: hex
+  q_max: 50.0
+  Q_max: 200.0
+  eps: 1.5
+  plume_threshold: 0.05
+source:
+  x: 30.0
+  y: 50.0
+  q: 10.0
+  c: 100.0
+  days: 365.0
+compliance:
+  x:
+  - 185.0
+  y:
+  - 50.0
+  creg: 1.0
+  window_start: 0.8
+observation:
+  x:
+  - 100.0
+  y:
+  - 50.0
+  h_min: -10.0
+time:
+  dt: 36.5
+  nsteps: 100
+saa:
+  M_train: 40
+  M_test: 80
+  alpha: 0.05
+  alpha_h: 0.01
+cost:
+  c_e: 1.0
+  c_w: 1.0
+  c_m: 1.0
+  c_tau: 1.0
+  c_fail: 10.0
+  eps_time: 0.05
+  time_mode: soft
+optim:
+  method: pattern
+  n_starts: 1
+  max_iter: 20
+  max_evals: 200
+  rho_g: 1000000.0
+  rho_h: 1000000.0
+  chance: cvar
+  seed: 0
+seed:
+  train: 1000
+  test: 500000
+plot: true

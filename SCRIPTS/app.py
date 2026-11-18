@@ -7,9 +7,14 @@ Minimal Flask viewer for the TESIS groundwater-transport PINN/FNO figures.
 Serves the ``out/`` directory as Flask's static folder and renders a homepage
 that walks through every figure with a short discussion of what to expect.
 
+Routes:
+    /            annotated figure homepage
+    /plots       plot gallery + single-plot viewer
+    /fleet       fleet health dashboard (``SCRIPTS/fleet_status.sh --json``)
+
 Run:
-    python app.py            # http://localhost:5000
-    python app.py --port 8080
+    python SCRIPTS/app.py            # http://localhost:5000
+    python SCRIPTS/app.py --port 8080
 
 Author: TESIS (groundwater remediation PINN/FNO debugging)
 """
@@ -17,18 +22,35 @@ Author: TESIS (groundwater remediation PINN/FNO debugging)
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 
-from flask import Flask, abort, render_template, send_from_directory, url_for
+from flask import (
+    Flask,
+    abort,
+    render_template,
+    request,
+    send_from_directory,
+    url_for,
+)
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(BASE, "out")      # static folder (PINN run outputs)
-FIGS = os.path.join(BASE, "figs")    # data-generator demo figures
+BASE = os.path.dirname(os.path.abspath(__file__))   # SCRIPTS/
+ROOT = os.path.dirname(BASE)                        # repository root
+OUT = os.path.join(ROOT, "out")      # static folder (PINN run outputs)
+FIGS = os.path.join(ROOT, "figs")    # data-generator demo figures
+TEMPLATES = os.path.join(ROOT, "templates")
+FLEET_STATUS = os.path.join(BASE, "fleet_status.sh")
+
+# Fleet status is a shell-out with a hard timeout: the dashboard must never
+# hang because a tailnet call or a disk is slow.
+FLEET_TIMEOUT = 15.0
 
 # File types treated as browsable plots by the /plots gallery.
 PLOT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
 
-app = Flask(__name__, static_folder=OUT, static_url_path="/out")
+app = Flask(__name__, static_folder=OUT, static_url_path="/out",
+            template_folder=TEMPLATES)
 
 
 @app.route("/figs/<path:filename>")
@@ -61,6 +83,61 @@ def _safe_plot_path(relpath: str) -> str | None:
     if not os.path.isfile(os.path.join(OUT, rel)):
         return None
     return rel.replace(os.sep, "/")
+
+
+def _fleet_snapshot(role: str) -> dict:
+    """Run ``SCRIPTS/fleet_status.sh --json`` and parse it.
+
+    Returns the parsed snapshot plus an ``error`` key (None when the script
+    ran). ``fleet_status.sh`` exits 1 when a check fails, but still prints
+    valid JSON, so a non-zero exit is not treated as an error by itself.
+    """
+    cmd = ["bash", FLEET_STATUS, "--json"]
+    if role:
+        cmd += ["--role", role]
+    if not os.path.isfile(FLEET_STATUS):
+        return {"error": f"not found: {FLEET_STATUS}"}
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=FLEET_TIMEOUT,
+            cwd=BASE,
+        )
+    except FileNotFoundError:
+        return {"error": "bash is not available on this host"}
+    except subprocess.TimeoutExpired:
+        return {"error": f"fleet_status.sh timed out after {FLEET_TIMEOUT:g}s"}
+
+    try:
+        snapshot = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        tail = detail[-1] if detail else "no output"
+        return {"error": f"fleet_status.sh produced no JSON ({tail})"}
+
+    snapshot["error"] = None
+    return snapshot
+
+
+@app.route("/fleet")
+def fleet():
+    """Fleet health dashboard fed by ``SCRIPTS/fleet_status.sh --json``.
+
+    Rendered server-side so the tablet needs no JavaScript and a stale tailnet
+    still shows the last successful checks rather than a blank page. Pass
+    ``?role=hub`` to flag a stopped Herdr server as a warning.
+    """
+    role = (request.args.get("role") or os.environ.get("FLEET_ROLE", "")).strip()
+    snapshot = _fleet_snapshot(role)
+    return render_template(
+        "fleet.html",
+        snapshot=snapshot,
+        error=snapshot.get("error"),
+        role=role,
+        status_script=os.path.relpath(FLEET_STATUS, BASE),
+    )
 
 
 @app.route("/plots")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end driver for the stochastic pump-and-treat optimization.
 
-Stages follow ``optimization_plan.md``:
+Stages follow ``DOCS/optimization_plan.md``:
 
   O-0  deterministic forward check, design plume and well layout
   O-1  random-field archive (KL, log-normal K, reproducibility)
@@ -10,17 +10,39 @@ Stages follow ``optimization_plan.md``:
   O-4  chance-constraint reformulations on a toy ray
   opt  SAA optimization (pattern search or SLSQP+adjoint) and test certificate
 
+Backends
+--------
+``--backend numpy`` (default on CPU) is the SciPy reference path: every
+scenario owns a ``splu`` of the transport matrix, the discrete adjoint is
+exact to solver tolerance, and all the O-gates (adjoint vs. central
+differences, mass balance at 1e-15) are defined against it.
+
+``--backend torch`` swaps the scenario archive for
+:class:`stoch.saa_torch.TorchArchive`, which keeps the ensemble on the GPU and
+solves the transport equation with batched Krylov iterations.  The ``opt``
+stage then also evaluates the whole compass set of the pattern search in one
+call.  The gates stay on the NumPy path by design -- they verify solver
+properties, not throughput.
+
 Examples
 --------
     python run_optimization.py --quick
     python run_optimization.py --config configs/opt/benchmark.yaml --stage opt
+    python run_optimization.py --stage opt --backend torch --device cuda --dtype float32
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
+
+# The entry points live in SCRIPTS/; make the repository root importable so
+# `physics`/`stoch` resolve no matter where this script is launched from.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
@@ -42,15 +64,20 @@ from stoch.report import (
     ensure_dir,
     plot_convergence,
     plot_distributions,
+    plot_remediation,
     plot_layout,
     plot_plume,
     save_json,
     write_manifest,
 )
+from stoch.runtimes import log_runtime
 from stoch.saa import Archive, ForwardConfig
 from stoch.wells import place_wells, plume_mask
 
-HERE = Path(__file__).resolve().parent
+
+def log(msg: str) -> None:
+    """Timestamped, flushed progress line (long runs must never look dead)."""
+    print(f"[opt] {time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +139,47 @@ def base_aquifer(cfg: dict, grid: Grid, K=None) -> Aquifer:
         alpha_l=float(a["alpha_l"]), alpha_t=float(a["alpha_t"]),
         decay=float(a["decay"]),
     )
+
+
+def make_archive(grid, aq, wells, scenarios, fwd, backend: str = "numpy",
+                 device: str = "auto", dtype: str = "float64",
+                 rtol: float | None = None, maxiter: int = 4000,
+                 label: str = "archive"):
+    """Build the NumPy reference archive or the batched (GPU) one.
+
+    Both expose ``evaluate(q, cost, keep=...)`` returning a
+    :class:`stoch.saa.SAAEvaluation`, so everything downstream -- reporting,
+    figures, gates, the optimizer -- is backend-agnostic.  The torch archive
+    additionally offers ``evaluate_many`` for batched candidate sweeps.
+    """
+    if backend == "numpy":
+        return Archive(grid, aq, wells, scenarios, fwd)
+    if backend == "torch":
+        # Imported lazily: the NumPy path must keep working on machines where
+        # PyTorch is not installed at all (see DOCS/HUMAN.md).
+        try:
+            from stoch.saa_torch import TorchArchive
+        except ImportError as exc:  # pragma: no cover - environment dependent
+            raise SystemExit(
+                "the torch backend needs PyTorch: pip install torch "
+                f"(import failed: {exc})"
+            ) from exc
+        return TorchArchive(grid, aq, wells, scenarios, fwd, device=device,
+                            dtype=dtype, rtol=rtol, maxiter=maxiter, label=label)
+    raise ValueError(f"unknown backend {backend!r}; use 'numpy' or 'torch'")
+
+
+def resolve_backend(backend: str, device: str) -> str:
+    """``auto`` -> torch when a CUDA/MPS device is actually available."""
+    if backend != "auto":
+        return backend
+    try:
+        from physics.fv2d_torch import resolve_device
+
+        dev = resolve_device(device)
+        return "torch" if dev.type in {"cuda", "mps"} else "numpy"
+    except Exception:
+        return "numpy"
 
 
 def no_pump_field(cfg, grid, aq, fwd, well_xy, q=0.0) -> np.ndarray:
@@ -321,10 +389,16 @@ def stage_o4(cfg, outdir, train, cost):
 # ---------------------------------------------------------------------------
 # Main experiment
 # ---------------------------------------------------------------------------
-def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
+def run(cfg: dict, outdir: Path, stages: set[str],
+        backend: str = "numpy", device: str = "auto",
+        dtype: str = "float64", rtol: float | None = None,
+        maxiter: int = 4000,
+        batched_search: bool | None = None) -> dict:
     t0 = time.time()
     outdir = ensure_dir(outdir)
     ensure_dir(outdir / "figures")
+    log(f"start: out={outdir} stages={sorted(stages)} "
+        f"backend={backend} dtype={dtype} device={device}")
     grid = make_grid(cfg)
     aq = base_aquifer(cfg, grid)
     kl = make_kl(cfg, grid)
@@ -336,13 +410,18 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     fwd = make_forward(cfg)
     cost = make_cost(cfg)
 
-    metrics: dict = {"config": cfg, "stages": {}}
+    metrics: dict = {"config": cfg, "stages": {},
+                     "backend": {"name": backend, "device": device, "dtype": dtype}}
     write_manifest(outdir / "run_config.json", cfg)
 
     # ---- O0: design plume and wells -----------------------------------
+    t_stage = time.time()
+    log("stage O0: deterministic forward checks and well layout")
     Cmean, mask, layout = design_plume(cfg, grid, kl, gen, fwd)
     o0 = stage_o0(cfg, outdir, grid, {})
     metrics["stages"]["O0"] = o0
+    log(f"stage O0 done in {time.time() - t_stage:.1f}s "
+        f"({layout.n_wells} wells, {layout.method})")
 
     # layout figure uses the mean design field
     Kmean = np.mean([gen.sample(9000 + k).K for k in range(5)], axis=0)
@@ -369,24 +448,84 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
     test_scen = [gen.sample(s) for s in seeds_te]
 
     if "o1" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O1: random-field archive and statistics")
         metrics["stages"]["O1"] = stage_o1(cfg, outdir, grid, aq, gen, fwd, layout)
+        log(f"stage O1 done in {time.time() - t_stage:.1f}s")
 
-    train = Archive(grid, aq, layout.wells, train_scen, fwd)
-    test = Archive(grid, aq, layout.wells, test_scen, fwd)
+    t_arch = time.time()
+    train = make_archive(grid, aq, layout.wells, train_scen, fwd, backend=backend,
+                         device=device, dtype=dtype, rtol=rtol, maxiter=maxiter,
+                         label="train")
+    test = make_archive(grid, aq, layout.wells, test_scen, fwd, backend=backend,
+                        device=device, dtype=dtype, rtol=rtol, maxiter=maxiter,
+                        label="test")
+    log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test scenarios "
+        f"in {time.time() - t_arch:.1f}s")
+    if batched_search is None:
+        batched_search = (backend == "torch"
+                          and getattr(train, "device", None) is not None
+                          and getattr(train.device, "type", "cpu") in {"cuda", "mps"})
+    if batched_search:
+        log("batched search enabled: one compass sweep per kernel batch")
+
+    if hasattr(train, "describe"):
+        info = train.describe()
+        metrics["backend"].update({"train": info})
+        log(f"backend: {info}")
+        if not info["flow_krylov"]["converged"]:
+            log("warning: the batched flow solve did not converge; "
+                "raise --krylov-maxiter or use --backend numpy")
 
     if "o2" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O2: objective, cleanup time, SAA convergence")
         o2, ev_te = stage_o2(cfg, outdir, train, test, layout, cost, fwd)
         metrics["stages"]["O2"] = o2
+        log(f"stage O2 done in {time.time() - t_stage:.1f}s")
 
     if "o3" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O3: discrete-adjoint gradient check")
         metrics["stages"]["O3"] = stage_o3(cfg, outdir, train, cost)
+        log(f"stage O3 done in {time.time() - t_stage:.1f}s")
 
     if "o4" in stages or "all" in stages:
+        t_stage = time.time()
+        log("stage O4: chance-constraint reformulations")
         metrics["stages"]["O4"] = stage_o4(cfg, outdir, train, cost)
+        log(f"stage O4 done in {time.time() - t_stage:.1f}s")
 
     # ---- SAA optimization ---------------------------------------------
     if "opt" in stages or "all" in stages:
         opt = cfg["optim"]
+        t_stage = time.time()
+        log(f"stage opt: method={opt['method']} starts={opt['n_starts']} "
+            f"max_iter={opt['max_iter']} max_evals={opt.get('max_evals', 2000)} "
+            f"search={'batched' if batched_search else 'sequential'}")
+
+        def opt_progress(ev: dict) -> None:
+            phase = ev.get("phase")
+            if phase == "start":
+                log(f"opt start {ev['start']}/{ev['n_starts']}")
+            elif phase == "search-start":
+                log(f"  search: f={ev['best']:.6g} step={ev['step']:.3g}")
+            elif phase == "iter":
+                log(f"  iter {ev['iteration']:3d} evals={ev['evals']:5d} "
+                    f"step={ev['step']:.3g} best={ev['best']:.6g} "
+                    f"elapsed={ev['elapsed']:.1f}s")
+            elif phase == "eval":
+                log(f"  eval {ev['evals']:5d} f={ev['best']:.6g} "
+                    f"elapsed={ev['elapsed']:.1f}s")
+            elif phase == "done":
+                log(f"  start {ev['start']}/{ev['n_starts']} done: "
+                    f"f={ev['fun']:.6g} nit={ev['nit']}")
+
+        if opt["method"] != "pattern" and batched_search:
+            log("batched search only applies to method='pattern'; "
+                "falling back to the sequential evaluator")
+            batched_search = False
+
         problem = SAAProblem(
             train, cost,
             q_max=float(cfg["wells"]["q_max"]),
@@ -404,7 +543,10 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
             max_iter=int(opt["max_iter"]),
             max_evals=int(opt.get("max_evals", 2000)),
             seed=int(opt["seed"]),
+            progress=opt_progress,
+            batched=batched_search,
         )
+        log(f"stage opt done in {time.time() - t_stage:.1f}s")
         q_star = result.q
         ev_tr = train.evaluate(q_star, cost, keep=True)
         ev_te = test.evaluate(q_star, cost, keep=True)
@@ -417,6 +559,9 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
 
         metrics["stages"]["opt"] = {
             "method": result.method,
+            "backend": backend,
+            "batched_search": bool(batched_search),
+            "opt_wall_clock_s": round(float(time.time() - t_stage), 3),
             "n_evaluations": int(problem.n_eval),
             "train": ev_tr.summary(),
             "test": ev_te.summary(),
@@ -447,7 +592,48 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
                 outdir / "figures" / "plume_scenario0.png",
                 creg=cost.creg,
                 title="Final plume under q* (test scenario 0)",
+                q=q_star,
             )
+            # Untreated vs remediated, plus when the plume arrives at the
+            # compliance point: two transport solves on test scenario 0, one
+            # with q* and one with every well off.
+            t_plot = time.time()
+            prob0 = test.get_problem(0)
+            res_off = transport_run(
+                grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
+                np.zeros(layout.n_wells), fwd.dt, fwd.nsteps,
+                source_idx=prob0.source_idx, source_rate=prob0.source_rate,
+                source_steps=fwd.source_steps,
+                record_cells=test.compliance_cells, store_fields=True,
+            )
+            res_on = transport_run(
+                grid, prob0.flow.aquifer, prob0.flow, prob0.resp,
+                q_star, fwd.dt, fwd.nsteps,
+                source_idx=prob0.source_idx, source_rate=prob0.source_rate,
+                source_steps=fwd.source_steps,
+                record_cells=test.compliance_cells, store_fields=True,
+            )
+            plume = plot_remediation(
+                grid,
+                res_off.C_final.reshape(grid.ny, grid.nx),
+                res_on.C_final.reshape(grid.ny, grid.nx),
+                layout.wells,
+                outdir / "figures" / "contamination.png",
+                creg=cost.creg,
+                q=q_star,
+                source_xy=fwd.source_xy,
+                compliance_xy=fwd.compliance_xy,
+                obs_xy=fwd.obs_xy,
+                times=res_on.times,
+                C_comp_off=res_off.C_record[:, 0],
+                C_comp_on=res_on.C_record[:, 0],
+                window_start=float(cfg["compliance"]["window_start"]),
+                scenario=0,
+            )
+            metrics["stages"]["opt"]["plume_scenario0"] = plume
+            log(f"contamination figure done in {time.time() - t_plot:.1f}s "
+                f"(two solves: q* and no pump, test scenario 0; "
+                f"peak {plume['peak_off']:.3g} -> {plume['peak_on']:.3g} mg/L)")
 
     # ---- gates ---------------------------------------------------------
     gates = {}
@@ -483,12 +669,37 @@ def run(cfg: dict, outdir: Path, stages: set[str]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default=str(HERE / "configs/opt/benchmark.yaml"))
+    ap.add_argument("--config", default=str(ROOT / "configs/opt/benchmark.yaml"))
     ap.add_argument("--quick", action="store_true",
                     help="small grid/scenario counts for a smoke run")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--nx", type=int, default=None,
+                    help="Override domain.nx from the config (applied after --quick)")
+    ap.add_argument("--ny", type=int, default=None,
+                    help="Override domain.ny from the config (applied after --quick)")
     ap.add_argument("--stage", default="all",
                     choices=["all", "gates", "o0", "o1", "o2", "o3", "o4", "opt"])
+    ap.add_argument("--backend", default="numpy", choices=["numpy", "torch"],
+                    help="scenario-archive backend for the SAA/opt stage: the "
+                         "SciPy reference (numpy) or the batched GPU archive (torch)")
+    ap.add_argument("--device", default="auto",
+                    help="torch device for --backend torch: auto|cuda|cuda:N|cpu|mps")
+    ap.add_argument("--dtype", default="float64", choices=["float32", "float64"],
+                    help="working precision of the torch backend (float32 is a "
+                         "screening mode: ~2x faster, looser Krylov tolerance)")
+    ap.add_argument("--krylov-rtol", type=float, default=None,
+                    help="relative Krylov tolerance (default: 1e-11 float64, "
+                         "1e-6 float32)")
+    ap.add_argument("--krylov-maxiter", type=int, default=4000,
+                    help="max Krylov iterations per time step (torch backend)")
+    ap.add_argument("--batched-search", dest="batched_search", action="store_true",
+                    default=None,
+                    help="force the batched compass sweep (default: on for torch on a GPU)")
+    ap.add_argument("--no-batched-search", dest="batched_search", action="store_false",
+                    help="use the sequential pattern search even with a GPU archive")
+    ap.add_argument("--runtime-log", default=str(ROOT / "runs" / "runtimes.jsonl"),
+                    help="append one JSON record per run to this file "
+                         "(default: runs/runtimes.jsonl; '' disables)")
     args = ap.parse_args()
 
     stage_map = {"all": {"all"}, "gates": {"o1", "o2", "o3", "o4"},
@@ -496,9 +707,26 @@ def main() -> None:
                  "o3": {"o3"}, "o4": {"o4"}, "opt": {"opt"}}
     stages = stage_map[args.stage]
     cfg = load_config(args.config, quick=args.quick)
+    if args.nx is not None or args.ny is not None:
+        domain = cfg.setdefault("domain", {})
+        if args.nx is not None:
+            domain["nx"] = int(args.nx)
+        if args.ny is not None:
+            domain["ny"] = int(args.ny)
+        print(f"[opt] grid override: nx={domain['nx']} ny={domain['ny']}")
     tag = "quick" if args.quick else "full"
-    out = Path(args.out) if args.out else (HERE / "out" / "opt" / f"benchmark_{tag}")
-    metrics = run(cfg, out, stages)
+    out = Path(args.out) if args.out else (ROOT / "out" / "opt" / f"benchmark_{tag}")
+    backend = resolve_backend(args.backend, args.device)
+    if backend != args.backend:
+        print(f"[opt] backend auto-selected: {backend} "
+              f"(device={args.device}, no accelerator available)")
+    if args.backend == "numpy" and args.device not in {"auto", "cpu"}:
+        print(f"[opt] warning: --device {args.device} only applies to --backend torch")
+    t_main = time.time()
+    metrics = run(cfg, out, stages, backend=backend, device=args.device,
+                  dtype=args.dtype, rtol=args.krylov_rtol,
+                  maxiter=args.krylov_maxiter,
+                  batched_search=args.batched_search)
 
     print("\n=== gates ===")
     for k, v in metrics["gates"].items():
@@ -510,6 +738,40 @@ def main() -> None:
         print(f"test reliability = {o['test']['reliability']:.3f}   "
               f"cleanup time = {o['test']['mean_tau']:.0f} d")
     print(f"\nresults written to {out}  ({metrics['wall_clock_s']:.1f} s)")
+
+    if args.runtime_log:
+        opt = metrics["stages"].get("opt", {})
+        record = {
+            "stage": args.stage,
+            "config": str(Path(args.config).resolve()),
+            "quick": bool(args.quick),
+            "grid": [int(cfg["domain"]["nx"]), int(cfg["domain"]["ny"])],
+            "nsteps": int(cfg["time"]["nsteps"]),
+            "m_train": int(cfg["saa"]["M_train"]),
+            "m_test": int(cfg["saa"]["M_test"]),
+            "method": cfg["optim"]["method"],
+            "n_starts": int(cfg["optim"]["n_starts"]),
+            "max_evals": int(cfg["optim"].get("max_evals", 0)),
+            "max_iter": int(cfg["optim"].get("max_iter", 0)),
+            "outdir": str(Path(out).resolve()),
+            "wall_clock_in_run_s": round(float(metrics["wall_clock_s"]), 3),
+            "status": "ok",
+            "backend": metrics["backend"]["name"],
+            "device": str(metrics["backend"]["device"]),
+            "dtype": metrics["backend"]["dtype"],
+        }
+        if opt:
+            record.update({
+                "n_evaluations": int(opt["n_evaluations"]),
+                "s_per_eval": round(
+                    float(opt.get("opt_wall_clock_s", 0.0))
+                    / max(int(opt["n_evaluations"]), 1), 3
+                ),
+                "test_mean_J": round(float(opt["test"]["mean_J"]), 2),
+                "test_reliability": round(float(opt["test"]["reliability"]), 4),
+                "active_wells": int(opt["active_wells"]),
+            })
+        log_runtime(args.runtime_log, __file__, time.time() - t_main, **record)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESIS — Fleet status</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --border: #e3e6ea;
+      --text: #1f2430;
+      --muted: #5b6472;
+      --accent: #0f6f9f;
+      --ok: #1e7d43;
+      --ok-bg: #e8f6ed;
+      --warn: #92600b;
+      --warn-bg: #fff7e6;
+      --fail: #a3242a;
+      --fail-bg: #fdecec;
+      --sidebar-bg: #10212e;
+      --sidebar-text: #c9d4dd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    header { background: var(--sidebar-bg); color: #fff; padding: 1.5rem; }
+    header h1 { margin: 0 0 .3rem; font-size: 1.5rem; }
+    header p { margin: 0; color: var(--sidebar-text); }
+    header a { color: #7fdcff; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+    .banner {
+      border-radius: 10px;
+      padding: .9rem 1.1rem;
+      margin: 0 0 1.5rem;
+      border: 1px solid var(--border);
+      font-weight: 600;
+    }
+    .banner.ok { background: var(--ok-bg); color: var(--ok); border-color: #bfe4cc; }
+    .banner.warn { background: var(--warn-bg); color: var(--warn); border-color: #f0d9a0; }
+    .banner.fail { background: var(--fail-bg); color: var(--fail); border-color: #f2c6c6; }
+    .banner .sub { display: block; font-weight: 400; font-size: .9rem; margin-top: .25rem; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+    }
+    .card h2 {
+      margin: 0 0 .6rem;
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+    }
+    dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: .25rem .8rem; }
+    dt { color: var(--muted); font-size: .9rem; }
+    dd { margin: 0; font-size: .9rem; word-break: break-word; }
+
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+
+    .pill {
+      display: inline-block;
+      padding: .1rem .5rem;
+      border-radius: 999px;
+      font-size: .78rem;
+      font-weight: 600;
+    }
+    .pill.ok { background: var(--ok-bg); color: var(--ok); }
+    .pill.warn { background: var(--warn-bg); color: var(--warn); }
+    .pill.fail { background: var(--fail-bg); color: var(--fail); }
+    .pill.idle { background: #eef1f4; color: var(--muted); }
+
+    .empty { color: var(--muted); }
+    footer { text-align: center; color: var(--muted); font-size: .85rem;
+             padding: 0 1.5rem 2rem; }
+    code { background: #eef1f4; padding: .1rem .35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Fleet status</h1>
+    <p>Live snapshot from <code>{{ status_script }}</code> —
+       <a href="{{ url_for('index') }}">figures</a> ·
+       <a href="{{ url_for('plots') }}">plot browser</a> ·
+       <a href="?role=hub">refresh as hub</a> ·
+       <a href="?">refresh</a></p>
+  </header>
+
+  <div class="wrap">
+    {% if error %}
+    <div class="banner fail">
+      Could not read fleet status
+      <span class="sub">{{ error }} — the dashboard is up but the fleet probe
+        failed. Check that <code>{{ status_script }}</code> is executable.</span>
+    </div>
+    {% else %}
+      {% set fails = snapshot.fails|int %}
+      {% set warns = snapshot.warns|int %}
+      <div class="banner {{ 'fail' if fails else ('warn' if warns else 'ok') }}">
+        {% if fails %}
+          {{ fails }} failing check{{ '' if fails == 1 else 's' }}, {{ warns }} warning{{ '' if warns == 1 else 's' }}
+        {% elif warns %}
+          Healthy, {{ warns }} warning{{ '' if warns == 1 else 's' }}
+        {% else %}
+          Healthy — all checks passed
+        {% endif %}
+        <span class="sub">Snapshot taken {{ snapshot.time }}
+          {% if role %} (role: {{ role }}){% endif %}</span>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Host</h2>
+          <dl>
+            <dt>host</dt><dd>{{ snapshot.host }}</dd>
+            {% if snapshot.os_hostname and snapshot.os_hostname != snapshot.host %}
+            <dt>os host</dt><dd>{{ snapshot.os_hostname }}</dd>
+            {% endif %}
+            <dt>uptime</dt><dd>{{ snapshot.uptime }}</dd>
+            <dt>load</dt><dd>{{ snapshot.load }}</dd>
+            <dt>mem free</dt><dd>{{ snapshot.mem_available_mb }} MB</dd>
+            <dt>disk used</dt><dd>{{ snapshot.disk_used_pct }}%</dd>
+          </dl>
+        </div>
+
+        <div class="card">
+          <h2>Tailscale</h2>
+          {% if snapshot.tailscale.installed and snapshot.tailscale.up %}
+            <span class="pill ok">up</span>
+            <dl style="margin-top:.6rem">
+              <dt>IPv4</dt><dd>{{ snapshot.tailscale.ipv4 }}</dd>
+              <dt>tags</dt>
+              <dd>
+                {% if snapshot.tailscale.tags %}
+                  <span class="pill ok">{{ snapshot.tailscale.tags }}</span>
+                {% else %}
+                  <span class="pill warn">untagged</span>
+                  <span style="color:var(--muted)">see fleet-acl.hujson</span>
+                {% endif %}
+              </dd>
+            </dl>
+          {% elif snapshot.tailscale.installed %}
+            <span class="pill fail">not up</span>
+            <dl style="margin-top:.6rem">
+              <dt>fix</dt><dd><code>sudo tailscale up</code></dd>
+            </dl>
+          {% else %}
+            <span class="pill fail">not installed</span>
+            <dl style="margin-top:.6rem">
+              <dt>fix</dt><dd><code>SCRIPTS/fleet_bootstrap.sh</code></dd>
+            </dl>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h2>Herdr</h2>
+          {% if not snapshot.herdr.installed %}
+            <span class="pill {{ 'fail' if role == 'hub' else 'warn' }}">not installed</span>
+          {% elif snapshot.herdr.server == 'running' %}
+            <span class="pill ok">server running</span>
+          {% else %}
+            <span class="pill warn">server not running</span>
+          {% endif %}
+          <dl style="margin-top:.6rem">
+            <dt>version</dt><dd>{{ snapshot.herdr.version or 'unknown' }}</dd>
+            <dt>server</dt><dd>{{ snapshot.herdr.server }}</dd>
+          </dl>
+        </div>
+
+        <div class="card">
+          <h2>Repository</h2>
+          {% if snapshot.repo.git %}
+            <dl>
+              <dt>path</dt><dd>{{ snapshot.repo.path }}</dd>
+              <dt>branch</dt><dd>{{ snapshot.repo.branch }}</dd>
+              <dt>head</dt><dd>{{ snapshot.repo.head }}</dd>
+              <dt>clean</dt>
+              <dd>
+                {% if snapshot.repo.dirty == '0' %}
+                  <span class="pill ok">yes</span>
+                {% else %}
+                  <span class="pill warn">{{ snapshot.repo.dirty }} changed</span>
+                {% endif %}
+              </dd>
+              <dt>vs upstream</dt>
+              <dd>{{ snapshot.repo.ahead }} ahead / {{ snapshot.repo.behind }} behind</dd>
+            </dl>
+          {% else %}
+            <span class="pill warn">not a git checkout</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Job sentinels</h2>
+        {% if snapshot.jobs %}
+        <table>
+          <thead>
+            <tr><th>job</th><th>state</th><th>exit</th><th>last log line</th></tr>
+          </thead>
+          <tbody>
+            {% for job in snapshot.jobs %}
+            <tr>
+              <td><code>{{ job.job }}</code></td>
+              <td>
+                {% if job.state == 'done' %}
+                  <span class="pill {{ 'ok' if job.exit == '0' else 'fail' }}">done</span>
+                {% else %}
+                  <span class="pill idle">no sentinel</span>
+                {% endif %}
+              </td>
+              <td>{{ job.exit if job.exit is not none else '—' }}</td>
+              <td>{{ job.last or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="empty">No sentinel jobs configured.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <footer>Generated by <code>app.py</code> from
+    <code>{{ status_script }} --json</code> — read-only, nothing is repaired.</footer>
+</body>
+</html>

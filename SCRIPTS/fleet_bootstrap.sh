@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+# SCRIPTS/fleet_bootstrap.sh
+# ==========================
+# Idempotent Tailscale bootstrap for the fleet described in DOCS/NewPlan.md (§1-§2).
+#
+# One script, one role per node:
+#
+#   ubuntu-hub    master control + heavy CPU hub   (herdr, bare repo, Ollama)
+#   do-relay      always-on web/LaTeX droplet      (docker compose stack)
+#   surface-ctrl  Windows tablet control plane     (SSH / VS Code Remote)
+#   colab-t4      ephemeral Colab GPU node         (run_colab.sh)
+#
+# The script only performs safe, repeatable actions: it installs Tailscale if
+# missing, joins the tailnet with the node's hostname, installs Herdr on the
+# hub, and prints the per-role next step. It never touches experiment data and
+# never runs the workloads themselves.
+#
+# Usage:
+#   ./SCRIPTS/fleet_bootstrap.sh --role hub              # ubuntu-hub
+#   ./SCRIPTS/fleet_bootstrap.sh --role relay --dry-run  # do-relay
+#   ./SCRIPTS/fleet_bootstrap.sh --role surface          # surface-ctrl
+#   ./SCRIPTS/fleet_bootstrap.sh --verify                # check this node
+#
+# Auth:
+#   Pass an auth key with --authkey or TS_AUTHKEY. Without one, `tailscale up`
+#   prints a login URL that must be opened in a browser (fine for interactive
+#   nodes, awkward on the headless droplet).
+#
+# Options:
+#   --role ROLE      hub | relay | surface | colab (default: hub)
+#   --hostname NAME  Tailscale hostname (default: role mapping below)
+#   --authkey KEY    Tailscale auth key (default: $TS_AUTHKEY)
+#   --no-ssh         do not enable Tailscale SSH
+#   --herdr          install Herdr (default: only on --role hub)
+#   --no-herdr       skip the Herdr install
+#   --systemd        install + enable the Herdr user service (hub only)
+#   --dry-run        print the commands instead of running them
+#   --verify         only report status; change nothing
+#   -h, --help       this text
+
+set -Eeuo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+ROLE="hub"
+HOSTNAME_ARG=""
+AUTHKEY="${TS_AUTHKEY:-}"
+ENABLE_SSH=1
+HERDR_MODE=auto   # auto | yes | no; auto = yes only for the hub
+SYSTEMD=0         # 1 = install the Herdr user service
+DRY_RUN=0
+VERIFY=0
+
+usage() { sed -n '2,/^set -Eeuo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+log()  { printf '\n[fleet] %s\n' "$*"; }
+warn() { printf '[fleet] warning: %s\n' "$*" >&2; }
+die()  { printf '[fleet] error: %s\n' "$*" >&2; exit 2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Run a command, or print it under --dry-run.
+run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[dry-run] %s\n' "$*"
+  else
+    printf '[fleet] $ %s\n' "$*"
+    "$@"
+  fi
+}
+
+# --------------------------------------------------------------------------
+# Argument parsing (no getopt: this must run on macOS and Git-Bash too)
+# --------------------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --role)      ROLE=${2:-}; shift 2 ;;
+    --hostname)  HOSTNAME_ARG=${2:-}; shift 2 ;;
+    --authkey)   AUTHKEY=${2:-}; shift 2 ;;
+    --no-ssh)    ENABLE_SSH=0; shift ;;
+    --herdr)     HERDR_MODE=yes; shift ;;
+    --no-herdr)  HERDR_MODE=no; shift ;;
+    --systemd)   SYSTEMD=1; shift ;;
+    --dry-run)   DRY_RUN=1; shift ;;
+    --verify)    VERIFY=1; shift ;;
+    -h|--help)   usage; exit 0 ;;
+    *)           die "unknown argument '$1' (try --help)" ;;
+  esac
+done
+
+case "$ROLE" in
+  hub)     DEFAULT_HOST=ubuntu-hub ;;
+  relay)   DEFAULT_HOST=do-relay ;;
+  surface) DEFAULT_HOST=surface-ctrl ;;
+  colab)   DEFAULT_HOST=colab-t4 ;;
+  *)       die "unknown role '$ROLE' (use hub|relay|surface|colab)" ;;
+esac
+NODE_NAME=${HOSTNAME_ARG:-$DEFAULT_HOST}
+
+if [[ "$HERDR_MODE" == "auto" ]]; then
+  [[ "$ROLE" == "hub" ]] && HERDR_MODE=yes || HERDR_MODE=no
+fi
+
+OS=$(uname -s)
+
+log "role=$ROLE node=$NODE_NAME os=$OS dry_run=$DRY_RUN verify=$VERIFY herdr=$HERDR_MODE"
+
+# --------------------------------------------------------------------------
+# Verify mode: report only
+# --------------------------------------------------------------------------
+if [[ "$VERIFY" == "1" ]]; then
+  if ! have tailscale; then
+    die "tailscale is not installed on $NODE_NAME"
+  fi
+  log "tailscale version"
+  tailscale version || true
+  log "tailnet status (first 15 lines)"
+  tailscale status 2>&1 | head -15 || true
+  if ipv4=$(tailscale ip -4 2>/dev/null); then
+    log "tailnet IPv4: $ipv4"
+  else
+    warn "no tailnet IPv4; the node is not up"
+  fi
+  log "expected hostname for role '$ROLE': $DEFAULT_HOST (actual: $(hostname))"
+  if [[ "$HERDR_MODE" == "yes" ]]; then
+    if have herdr; then
+      log "herdr $(herdr --version 2>/dev/null | head -1)"
+      herdr status 2>&1 | head -8 || true
+    else
+      warn "herdr is not installed on $NODE_NAME (or not on PATH)"
+    fi
+  fi
+  exit 0
+fi
+
+# --------------------------------------------------------------------------
+# 1. Install Tailscale if missing
+# --------------------------------------------------------------------------
+install_tailscale() {
+  case "$OS" in
+    Linux)
+      if have apt-get; then
+        log "installing Tailscale from the official script (apt host)"
+      fi
+      if have curl; then
+        run sh -c 'curl -fsSL https://tailscale.com/install.sh | sh'
+      elif have wget; then
+        run sh -c 'wget -qO- https://tailscale.com/install.sh | sh'
+      else
+        die "curl/wget not found; install one and re-run"
+      fi
+      ;;
+    Darwin)
+      if have brew; then
+        run brew install --cask tailscale
+        run open -a Tailscale
+      else
+        die "install Homebrew, or get Tailscale from https://tailscale.com/download/mac"
+      fi
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      if have winget; then
+        run winget install --id tailscale.tailscale -e --accept-package-agreements
+      else
+        die "install winget, or get Tailscale from https://tailscale.com/download/windows"
+      fi
+      ;;
+    *)
+      die "unsupported OS '$OS'; see https://tailscale.com/download"
+      ;;
+  esac
+}
+
+if have tailscale; then
+  log "tailscale already installed: $(tailscale version 2>/dev/null | head -1)"
+else
+  log "tailscale not found"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[dry-run] would install tailscale for %s\n' "$OS"
+  else
+    install_tailscale
+  fi
+fi
+
+# `tailscaled` needs a moment on a fresh install before `tailscale up` works.
+if [[ "$DRY_RUN" != "1" ]] && have tailscale; then
+  for _ in 1 2 3 4 5; do
+    tailscale status >/dev/null 2>&1 && break
+    sleep 2
+  done
+fi
+
+# --------------------------------------------------------------------------
+# 2. Join the tailnet under the fleet hostname
+# --------------------------------------------------------------------------
+UP_ARGS=(up "--hostname=$NODE_NAME")
+[[ "$ENABLE_SSH" == "1" ]] && UP_ARGS+=(--ssh)
+[[ -n "$AUTHKEY" ]] && UP_ARGS+=("--authkey=$AUTHKEY")
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  # Do not leak the key into shell history or CI logs.
+  printf '[dry-run] tailscale %s\n' "${UP_ARGS[*]/--authkey=*/--authkey=REDACTED}"
+else
+  log "joining the tailnet as $NODE_NAME (ssh=$ENABLE_SSH, authkey=${AUTHKEY:+set}${AUTHKEY:-unset})"
+  tailscale "${UP_ARGS[@]}"
+fi
+
+# --------------------------------------------------------------------------
+# 3. Herdr (hub orchestrator)
+# --------------------------------------------------------------------------
+if [[ "$HERDR_MODE" == "yes" ]]; then
+  if have herdr; then
+    log "herdr already installed: $(herdr --version 2>/dev/null | head -1)"
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    printf '[dry-run] would install herdr via https://herdr.dev/install.sh\n'
+  else
+    log "installing herdr (stable channel)"
+    if have curl; then
+      sh -c 'curl -fsSL https://herdr.dev/install.sh | sh'
+    else
+      warn "curl not found; install curl or see https://herdr.dev/tui/docs/install/"
+    fi
+    if have herdr; then
+      log "herdr installed: $(herdr --version 2>/dev/null | head -1)"
+    else
+      warn "herdr is not on PATH; add \$HOME/.local/bin to PATH and re-open the shell"
+    fi
+  fi
+else
+  log "herdr: skipped (role=$ROLE; use --herdr to install)"
+fi
+
+# --------------------------------------------------------------------------
+# 3b. Herdr user service (hub only)
+# --------------------------------------------------------------------------
+if [[ "$SYSTEMD" == "1" ]]; then
+  if [[ "$ROLE" != "hub" ]]; then
+    warn "--systemd targets the hub role; ignoring for role=$ROLE"
+  else
+    UNIT_SRC="$SCRIPT_DIR/herdr-server.service"
+    UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    if [[ ! -f "$UNIT_SRC" ]]; then
+      warn "unit template missing: $UNIT_SRC"
+    elif ! have systemctl; then
+      warn "systemctl not found; copy $UNIT_SRC to $UNIT_DIR manually"
+    else
+      log "installing Herdr user service in $UNIT_DIR"
+      run mkdir -p "$UNIT_DIR"
+      run cp "$UNIT_SRC" "$UNIT_DIR/herdr-server.service"
+      run systemctl --user daemon-reload
+      run systemctl --user enable --now herdr-server.service
+      if [[ "$DRY_RUN" != "1" ]]; then
+        systemctl --user --no-pager status herdr-server.service 2>&1 | head -6 || true
+        if ! loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+          warn "enable lingering so the service survives logout: loginctl enable-linger $(id -un)"
+        fi
+      fi
+    fi
+  fi
+fi
+
+# --------------------------------------------------------------------------
+# 4. Role-specific next step
+# --------------------------------------------------------------------------
+case "$ROLE" in
+  hub)
+    cat <<'EOF'
+
+[fleet] next: hub duties
+  - orchestrator:       herdr            (TUI; starts/attaches the server)
+                        herdr status     (server and client state)
+  - master bare repo:   git clone --bare <origin> ~/tesis.git
+  - colab dispatch:     ./run_colab.sh  (sentinel /tmp/tesis-colab.done)
+  - heavy CPU work:     python -u SCRIPTS/run_optimization.py --stage gates
+  - local inference:    ollama serve
+EOF
+    ;;
+  relay)
+    cat <<'EOF'
+
+[fleet] next: relay duties
+  - docker stack:  docker compose up -d      (TeX Live / Jupyter / Flask)
+  - TeX rebuild:   see TEX/ (latexmk) and deploy_do.sh
+  - remote runs:   ./remote_run.sh           (sentinel /tmp/tesis-run.done)
+EOF
+    ;;
+  surface)
+    cat <<'EOF'
+
+[fleet] next: control plane
+  - ssh into the hub:   ssh <user>@ubuntu-hub
+  - VS Code Remote-SSH: add ubuntu-hub and do-relay as hosts
+  - keep DOCS/NewPlan.md and the literature notes here
+EOF
+    ;;
+  colab)
+    cat <<'EOF'
+
+[fleet] next: ephemeral GPU node
+  - this node is short-lived; do not expect its hostname to persist
+  - run the experiments with:  bash run_colab.sh --preset quick
+  - see DOCS/Collab.md for the notebook steps
+EOF
+    ;;
+esac
+
+log "done. verify from any node with: tailscale status"

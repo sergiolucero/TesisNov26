@@ -1,0 +1,79 @@
+# Full 3D benchmark: seven-point FV flow + implicit-Euler ADE.
+#
+# "Bigger dimensions" relative to the 2D paper grid (80x40): 120x60x30 =
+# 216,000 cells and a 240x120x40 m domain.  Twelve extraction wells are placed
+# in the no-pumping design plume.  The default is a Colab/high-memory run; for
+# a laptop smoke test use --quick or override --nx/--ny/--nz/--steps.
+
+domain:
+  lx: 240.0        # m
+  ly: 120.0
+  lz: 40.0
+  nx: 120          # dx = 2.0 m
+  ny: 60           # dy = 2.0 m
+  nz: 30           # dz = 1.333 m
+
+aquifer:
+  k0: 10.0         # m/d geometric mean (horizontal)
+  phi: 0.30
+  R: 1.0
+  kv_ratio: 0.2    # K_v / K_h
+  alpha_l: 8.0     # m
+  alpha_th: 1.0    # m (horizontal transverse)
+  alpha_tv: 0.2    # m (vertical transverse)
+  decay: 0.0       # 1/d
+
+flow:
+  grad: 1.0e-3     # regional hydraulic gradient
+
+random_field:
+  sigma: 0.5
+  ell_x: 24.0
+  ell_y: 20.0
+  ell_z: 8.0
+  n_kl: 0          # auto: smallest N_KL reaching target_variance
+  target_variance: 0.95
+  random_source: false
+  random_gradient: false
+
+wells:
+  n: 12
+  method: farthest
+  q_max: 50.0      # m^3/d per well
+  Q_max: 300.0     # m^3/d plant capacity
+  eps: 1.5         # horizontal regularisation, grid cells
+  eps_z: 1.5       # vertical regularisation / screened interval
+  plume_threshold: 0.05   # mg/L design-plume contour
+
+source:
+  x: 30.0
+  y: 60.0
+  z: 20.0
+  q: 10.0          # m^3/d release rate
+  c: 100.0         # mg/L source concentration
+  days: 365.0
+
+time:
+  dt: 36.5         # d
+  nsteps: 100      # T = 3650 d
+  design_steps: 20 # no-pumping plume used to place the 12 wells
+
+saa:
+  M_train: 8
+  M_test: 8
+
+optim:
+  method: pattern
+  sweeps: 3
+  max_evals: 150
+  q_start_fraction: 0.5
+  seed: 0
+
+cost:
+  c_e: 0.05        # pumping-cost weight in the mass-normalised objective
+
+seed:
+  train: 1000
+  test: 500000
+
+plot: true

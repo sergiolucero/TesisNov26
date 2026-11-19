@@ -74,7 +74,13 @@ The `colab` CLI is the console script of the **google-colab-cli** package
 Note that ``colab_client_notes.txt`` in this repo says
 ``pip install google-colab-client`` -- that package name does not exist on PyPI,
 ``google-colab-cli`` is the one that installs the `colab` command.
-Authenticate once with ``colab auth`` (or run with ``--auth adc``).
+
+Authentication defaults to **ADC** (Application Default Credentials): every
+CLI call here passes ``--auth adc``, which is what ``COLAB_AUTH`` (or ``--auth``)
+overrides. Set that up once with ``gcloud auth application-default login`` (or
+point ``GOOGLE_APPLICATION_CREDENTIALS`` at a service-account key); the older
+installed-app flow is still reachable via ``--auth oauth2`` after ``colab auth``.
+ADC needs no keyring, so it also works non-interactively on the fleet VMs.
 
 Three details of that CLI this script has to work around, all verified against
 its source:
@@ -97,6 +103,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
@@ -154,6 +161,11 @@ def die(msg: str, code: int = 2) -> None:
     raise SystemExit(code)
 
 
+# Every `colab` invocation authenticates through ADC unless the caller says
+# otherwise (--auth oauth2|none) or exports COLAB_AUTH.
+DEFAULT_AUTH = os.environ.get("COLAB_AUTH", "adc")
+
+
 # --------------------------------------------------------------------------
 # The `colab` CLI
 # --------------------------------------------------------------------------
@@ -187,8 +199,9 @@ class ColabCLI:
             die(
                 f"`{self.binary}` not found on PATH. Install the Colab CLI with\n"
                 "    pip install google-colab-cli\n"
-                "and authenticate once with `colab auth` (oauth2) or\n"
-                "`gcloud auth application-default login` + --auth adc.\n"
+                "then provide ADC with `gcloud auth application-default login`\n"
+                "(ADC is the default; --auth oauth2 uses `colab auth` instead,\n"
+                "--auth none lets the CLI pick its own default).\n"
                 "(colab_client_notes.txt mentions `google-colab-client`; that\n"
                 " package name does not exist on PyPI.)"
             )
@@ -1052,8 +1065,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="echo every CLI call")
         p.add_argument("--colab-bin", default="colab",
                        help="the colab CLI executable (default: colab)")
-        p.add_argument("--auth", default="oauth2",
-                       help="colab global --auth value: oauth2 | adc | none")
+        p.add_argument("--auth", default=DEFAULT_AUTH,
+                       help="colab global --auth value: adc (default, from "
+                            "$COLAB_AUTH) | oauth2 | none")
 
     la = sub.add_parser("launch", help="plan, provision and run the replicas")
     common(la)

@@ -136,6 +136,9 @@ DEFAULT_CONFIG = ROOT / "configs" / "opt" / "benchmark.yaml"
 DEFAULT_OUT = ROOT / "out" / "high"
 RUNTIME_LOG = ROOT / "runs" / "runtimes.jsonl"
 
+# Rent VMs through ADC by default; override with --colab-auth or $COLAB_AUTH.
+DEFAULT_AUTH = os.environ.get("COLAB_AUTH", "adc")
+
 # BiCGSTAB keeps ~10-12 full field-sized vectors alive per (candidate, scenario)
 # slice. Only used when a bench.json measurement is not available yet.
 VEC_FACTOR = 12
@@ -1172,11 +1175,13 @@ def launch(args: argparse.Namespace) -> int:
     binary = shutil.which(args.colab)
     if binary is None and not args.dry_run:
         die(f"`{args.colab}` not found on PATH. `pip install google-colab-cli`, "
-            "then authenticate once with `colab auth` (or pass --auth adc).")
+            "then provide ADC with `gcloud auth application-default login` "
+            "(ADC is the default; --colab-auth oauth2 uses `colab auth`).")
     binary = binary or args.colab
 
     def cli(*parts: str) -> list[str]:
-        argv = [binary] + (["--auth", args.colab_auth] if args.colab_auth else [])
+        use_auth = args.colab_auth and args.colab_auth != "none"
+        argv = [binary] + (["--auth", args.colab_auth] if use_auth else [])
         return argv + [str(p) for p in parts]
 
     # --high-mem requests the bigger shape (A100 80GB instead of 40GB, T4 with
@@ -1328,8 +1333,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     g.add_argument("--max-seconds", type=float, default=6 * 3600.0,
                    help="hard cap on the remote run cell")
     g.add_argument("--colab", default="colab", help="colab CLI binary")
-    g.add_argument("--colab-auth", default=None, choices=[None, "oauth2", "adc"],
-                   help="global --auth value for the colab CLI")
+    g.add_argument("--colab-auth", default=DEFAULT_AUTH,
+                   choices=["adc", "oauth2", "none"],
+                   help="global --auth value for the colab CLI (default: adc, "
+                        "from $COLAB_AUTH; none lets the CLI decide)")
     g.add_argument("--dry-run", action="store_true",
                    help="print the colab command plan without running it")
 

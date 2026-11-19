@@ -1,6 +1,14 @@
 0. installed using pip install google-colab-cli   ('google-colab-client' does not exist on PyPI)
-0.5	pip install keyring
-colab sessions --auth oauth2
+0.5	auth: ADC by default (no keyring needed)
+	gcloud auth application-default login
+	# or point GOOGLE_APPLICATION_CREDENTIALS at a service-account key
+	# every script here passes `--auth adc` (override with COLAB_AUTH or --auth)
 
 1. test creating instances:
-	colab run --gpu T4 SCRIPTS/psums.py  (L4=8 CPU=10 T4=8 base=15.5 on DO1Gb)
+	colab --auth adc sessions
+	colab --auth adc run --gpu T4 SCRIPTS/psums.py  (L4=8 CPU=10 T4=8 base=15.5 on DO1Gb)
+
+2. legacy installed-app flow (only if ADC is unavailable):
+	pip install keyring
+	colab auth
+	colab --auth oauth2 sessions

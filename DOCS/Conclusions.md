@@ -265,8 +265,10 @@ uncertainty only.
 - The outlet-bias trend magnitudes in §3b.
 - FNO mode/resolution numbers were run at 120 epochs (one seed each); they show
   the *trend* correctly but should be medians before appearing in a paper.
-- 3D and 2.5D: untouched here; `3D_plan.md` stands, and full 3D still does not
-  fit the hub (`NewPlan.md` §8).
+- 3D stochastic optimization: validated at three presets (smoke/full/paper) —
+  see `3D_results.md`; the paper preset (32×16×8, 64/128 scenarios) gives
+  q* on 4 of 9 wells, test reliability 0.969, all gates pass. (2.5D axisymmetric
+  bridge is still untouched.)
 
 **Open:**
 - Rebuild `TEX/formulation.pdf` — the `.tex` has been corrected (§2) but no

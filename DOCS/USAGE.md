@@ -40,6 +40,7 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `run_2d.py` | 2D forward solve **and** the stochastic optimizer | 6 s – 20 s (quick) |
 | `run_optimization.py` | Gate suite (O0–O4) and SAA/CVaR optimization workflow (`--backend numpy\|torch`) | 2 s – hours |
 | `plot_policy_plume.py` | Re-render the contamination figure from a stored `policy.json` (no rerun); `--all` sweeps every test scenario | seconds – minutes |
+| `plot_plume_movie.py` | Animate `C(x,y,t)` as GIF/MP4 from `forward_fields.npz` or a stored policy run | seconds – minutes |
 | `bench_backend.py` | Measure NumPy vs batched-GPU backend on *this* runtime and print a verdict | minutes |
 | `libcolab.py` | Notebook helper: `modrun(nx, ny)` → `run_2d.py --mode optimize` | as `run_2d.py` |
 | `nruns.py` | Loop `run_2d.py --quick` over N seeds | minutes |
@@ -58,7 +59,7 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `fleet-tag.sh` | Tag fleet nodes | seconds |
 | `gh_setup.sh` | Git/GitHub auth + remote setup on a node | seconds |
 | `psums.py` | Trivial CPU benchmark (compute-unit sanity check) | seconds |
-| `psums_test.sh` | `colab run --gpu <variant> SCRIPTS/psums.py` wrapper | seconds |
+| `psums_test.sh` | `colab --auth adc run --gpu <variant> SCRIPTS/psums.py` wrapper | seconds |
 | `generate_sample_dataset.py` | Writes a synthetic `out/dataset.npz` (placeholder data) | instant |
 | `generate_structured_sample_dataset.py` | Same, with a proper `scenario{i}_*` layout | instant |
 | `fno10_detailed_error_plots.py` | Error-panel figure **with placeholder arrays** — edit before use | instant |
@@ -257,7 +258,32 @@ total wall       ≈ n_starts × max_evals × seconds_per_eval
 `fun()` call per iteration) is typically an order of magnitude cheaper than the
 default pattern search, which costs `2 × n_wells` evaluations per iteration.
 
-### 3.3 Notebook helpers
+### 3.3 `plot_plume_movie.py` — the plume evolution movie
+
+Renders the stored `C_all` sequence (or solves transport again for a stored
+policy) as an animated GIF. Pillow is enough for `.gif`; `.mp4`/`.mov` needs
+ffmpeg on `PATH`.
+
+```bash
+# fastest: reuse the fields already written by a forward run
+python3 -u SCRIPTS/plot_plume_movie.py \
+    --fields out/run_2d/forward/forward_fields.npz
+
+# rebuild the exact test scenario and animate q*
+python3 -u SCRIPTS/plot_plume_movie.py --run out/opt_run --fps 12
+
+# same scenario with every well off, for the before/after comparison
+python3 -u SCRIPTS/plot_plume_movie.py --run out/opt_run --nopump
+```
+
+Output defaults to `<run>/figures/plume_movie.gif` (or `_nopump.gif`). The
+colour scale is fixed for the whole movie. The auto scale is the larger of the
+final-frame peak and the 99th percentile of all cells, so a one-cell source
+spike cannot turn the late-time plume black; clipping is named on the
+colourbar. Pass `--vmax` to force a scale. `--stride N` drops frames but always
+keeps the final state, and `--scenario` picks a different test realisation.
+
+### 3.4 Notebook helpers
 
 ```python
 # libcolab.py — rewrite the small benchmark grid and run the optimizer
@@ -362,7 +388,10 @@ log home, downloads the artifacts, and stops the VMs.
 ./SCRIPTS/multi_colab.py status | logs -f | collect | stop
 ```
 
-Requires the Colab CLI (`pip install google-colab-cli`, then `colab auth`).
+Requires the Colab CLI (`pip install google-colab-cli`) and ADC:
+`gcloud auth application-default login` (or a service-account key in
+`GOOGLE_APPLICATION_CREDENTIALS`). Every CLI call uses `--auth adc`; override
+with `--auth oauth2` (after `colab auth`) or `COLAB_AUTH=...`.
 Replica `k` gets `optim.seed = --seed-base + k`; compare `train.mean_J` from
 each `r<k>/artifacts.zip`. Run state lives in `runs/colab_multi/<run-id>/`.
 Use `--gpu none` for the optimizer (CPU-bound), a GPU only for PINN/FNO.
@@ -450,7 +479,7 @@ python3 SCRIPTS/new_high_colab.py bench --preset smoke --nx 24 --ny 12 --nsteps 
 python3 SCRIPTS/new_high_colab.py forward --verify
 # long run: cap the remote cell, and remember --keep leaves the VM billing
 python3 SCRIPTS/new_high_colab.py --launch --keep --session tesis-high --max-seconds 21600 opt
-colab url -s tesis-high          # re-attach after a disconnect; `colab stop` when done
+colab --auth adc url -s tesis-high   # re-attach after a disconnect; `colab --auth adc stop` when done
 ```
 
 Gotchas verified on this host: `--launch` needs the `colab` CLI on `PATH`
@@ -517,7 +546,7 @@ python3 -m unittest discover -s tests -p "test_*.py"
 python3 tests/run_tests.py
 
 # compute-unit sanity check on a rented VM
-colab run --gpu T4 SCRIPTS/psums.py
+colab --auth adc run --gpu T4 SCRIPTS/psums.py
 ```
 
 `generate_sample_dataset.py` and `generate_structured_sample_dataset.py` write

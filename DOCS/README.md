@@ -6,6 +6,10 @@ Research code for verifying and scaling PINN/FNO surrogates for groundwater
 contaminant transport, and for stochastic pump-and-treat optimization under
 uncertainty.
 
+**Live viewer:** <http://206.81.4.82:5000> — annotated figure homepage (`/`),
+plot gallery + single-plot viewer (`/plots`), and fleet health dashboard
+(`/fleet`). Locally the same server is at <http://localhost:5000>.
+
 ## Status
 
 - **1D PINN verified** against the Ogata–Banks analytical solution:
@@ -39,6 +43,7 @@ packages, configs and generated outputs.
 | `SCRIPTS/solve_1d_fno.py` | 1D Fourier neural operator |
 | `SCRIPTS/run_2d.py` | 2D forward/optimization driver |
 | `SCRIPTS/run_optimization.py` | Stochastic optimization workflow and gates |
+| `SCRIPTS/plot_plume_movie.py` | Animate the plume evolution from saved fields or a policy run |
 | `SCRIPTS/collab_run.py` | Colab/GPU dispatcher with `smoke`/`quick`/`full` presets |
 | `SCRIPTS/multi_colab.py` | Multi-VM Colab driver (`launch`/`status`/`logs`/`collect`/`stop`) |
 | `SCRIPTS/bench_backend.py` | NumPy vs batched-GPU backend benchmark + verdict |
@@ -74,7 +79,8 @@ python -u SCRIPTS/run_2d.py --quick
 # Stochastic optimization gates
 python -u SCRIPTS/run_optimization.py --config configs/opt/benchmark_small.yaml
 
-# Figure viewer + fleet dashboard (http://localhost:5001)
+# Figure viewer + fleet dashboard — run_app.sh listens on 5001 by default;
+# the public instance at http://206.81.4.82:5000 was started manually on 5000
 ./SCRIPTS/run_app.sh start   # / and /plots for figures, /fleet for node health
 ```
 

@@ -18,6 +18,7 @@ __all__ = [
     "plot_layout",
     "plot_plume",
     "plot_remediation",
+    "animate_plume",
     "plot_convergence",
     "plot_distributions",
     "write_manifest",
@@ -283,6 +284,147 @@ def plot_remediation(
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return summary
+
+
+def animate_plume(
+    grid,
+    C_fields: np.ndarray,
+    times: np.ndarray,
+    wells: np.ndarray,
+    compliance_xy,
+    path: str | Path,
+    creg: float = 1.0,
+    q: np.ndarray | None = None,
+    source_xy=None,
+    obs_xy=(),
+    title: str = "Plume evolution",
+    fps: float = 10.0,
+    stride: int = 1,
+    dpi: int = 100,
+    vmax: float | None = None,
+) -> dict:
+    """Animate a stored sequence of concentration fields.
+
+    ``C_fields`` is the ``(nsteps+1, grid.n)`` array returned by
+    :func:`physics.fv2d.transport_run` when ``store_fields=True`` (or the
+    ``C_all`` entry in ``run_2d.py``'s ``forward_fields.npz``).  The colour
+    scale is fixed to the global peak by default: rescaling every frame would
+    make the plume look static and hide both growth and cleanup.
+
+    ``stride`` subsamples frames but always keeps the final one.  The output
+    format follows the suffix: ``.gif`` uses Pillow, ``.mp4``/``.mov`` needs
+    ffmpeg.  Returns a small summary dict for the caller's log/manifest.
+    """
+    from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter
+    from matplotlib.animation import writers as _writers
+
+    C_fields = np.asarray(C_fields, dtype=float)
+    if C_fields.ndim != 2 or C_fields.shape[1] != grid.n:
+        raise ValueError(
+            f"C_fields must have shape (nsteps+1, {grid.n}); "
+            f"got {C_fields.shape}"
+        )
+    n = C_fields.shape[0]
+    times = np.asarray(times, dtype=float).ravel()
+    if times.size != n:
+        raise ValueError(f"times has length {times.size}, expected {n}")
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+
+    # Always finish on the last state; otherwise a stride can drop the end.
+    frames = np.unique(np.r_[np.arange(0, n, stride), n - 1])
+    peak = float(np.nanmax(C_fields)) if C_fields.size else 0.0
+    if vmax is None:
+        vmax = peak if peak > 0 else 1.0
+    if vmax <= 0:
+        raise ValueError("vmax must be positive")
+
+    suffix = Path(path).suffix.lower()
+    if suffix == ".gif":
+        writer = PillowWriter(fps=fps)
+    elif suffix in {".mp4", ".m4v", ".mov"}:
+        if not _writers.is_available("ffmpeg"):
+            raise RuntimeError(
+                "writing a video needs ffmpeg; install it or use a .gif path"
+            )
+        writer = FFMpegWriter(fps=fps, bitrate=1800)
+    else:
+        raise ValueError(
+            f"unsupported movie suffix {suffix!r}; use .gif, .mp4 or .mov"
+        )
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    field0 = C_fields[frames[0]].reshape(grid.ny, grid.nx)
+    im = ax.imshow(
+        field0, origin="lower", extent=[0, grid.lx, 0, grid.ly],
+        cmap="magma", aspect="equal", vmin=0.0, vmax=vmax,
+        interpolation="nearest",
+    )
+    cbar = fig.colorbar(im, ax=ax, label="C [mg/L]")
+    scale_label = f"C [mg/L], scale 0-{vmax:.3g}"
+    if peak > vmax:
+        scale_label += f" (peak {peak:.3g} clipped)"
+    cbar.set_label(scale_label)
+    cbar.ax.set_ylim(0.0, vmax)
+
+    _draw_wells(ax, wells, q, off_label="wells", ly=grid.ly)
+    _draw_points(ax, source_xy, compliance_xy, obs_xy)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.set_title(title)
+    ax.legend(loc="upper right", fontsize=8)
+    stamp = ax.text(
+        0.02, 0.03, "", transform=ax.transAxes, ha="left", va="bottom",
+        fontsize=9, color="white", zorder=7,
+        bbox=dict(boxstyle="round,pad=0.25", fc="black", alpha=0.55,
+                  ec="none"),
+    )
+    fig.tight_layout()
+
+    contour = {"cs": None}
+
+    def _update(frame_index: int):
+        field = C_fields[frame_index].reshape(grid.ny, grid.nx)
+        im.set_data(field)
+        # A contour at creg only exists once the plume is above the limit;
+        # asking for it on the initial zero field just emits a warning.
+        if contour["cs"] is not None:
+            try:
+                contour["cs"].remove()
+            except AttributeError:  # pragma: no cover - old matplotlib
+                for coll in contour["cs"].collections:
+                    coll.remove()
+            contour["cs"] = None
+        if field.max() >= creg:
+            contour["cs"] = ax.contour(
+                (np.arange(grid.nx) + 0.5) * grid.dx,
+                (np.arange(grid.ny) + 0.5) * grid.dy,
+                field, levels=[creg], colors="w", linewidths=1.2,
+            )
+        stamp.set_text(
+            f"t = {times[frame_index]:.0f} d    "
+            f"frame {frame_index + 1}/{n}"
+        )
+        return im, stamp
+
+    anim = FuncAnimation(
+        fig, _update, frames=frames, interval=1000.0 / fps, blit=False,
+    )
+    anim.save(str(path), writer=writer, dpi=dpi)
+    plt.close(fig)
+
+    return {
+        "path": str(path),
+        "n_frames": int(len(frames)),
+        "n_steps": int(n),
+        "stride": int(stride),
+        "fps": float(fps),
+        "vmax": float(vmax),
+        "peak": peak,
+        "duration_s": float(len(frames) / fps),
+    }
 
 
 def plot_convergence(history: list[dict], path: str | Path) -> None:

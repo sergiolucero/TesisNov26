@@ -1414,6 +1414,8 @@ def main() -> None:
     ap.add_argument("--nx", type=int, default=None)
     ap.add_argument("--ny", type=int, default=None)
     ap.add_argument("--nz", type=int, default=None)
+    ap.add_argument("--n-starts", type=int, default=None,
+                    help="override the preset's number of pattern-search starts")
     ap.add_argument("--out", default=None, help="output directory")
     ap.add_argument("--no-plots", dest="plots", action="store_false",
                     help="skip matplotlib figures")
@@ -1431,6 +1433,8 @@ def main() -> None:
         overrides["ny"] = args.ny
     if args.nz is not None:
         overrides["nz"] = args.nz
+    if args.n_starts is not None:
+        overrides["n_starts"] = args.n_starts
     cfg = build_config(args.preset, overrides)
 
     n_cells = cfg["nx"] * cfg["ny"] * cfg["nz"]

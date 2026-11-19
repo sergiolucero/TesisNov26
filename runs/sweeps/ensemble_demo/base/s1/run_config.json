@@ -1,0 +1,50 @@
+{
+  "config": {
+    "N_bc": 150,
+    "N_f": 1500,
+    "N_f_fix": 3000,
+    "N_ic": 150,
+    "adam_steps": 10000,
+    "batch_size": null,
+    "ckpt_every": 0,
+    "ckpt_path": null,
+    "device": "auto",
+    "dtype": "float32",
+    "eps": 0.001,
+    "grad_accum": 1,
+    "hard_bc": true,
+    "hidden": 64,
+    "layers": 4,
+    "lbfgs_lr": 0.5,
+    "lbfgs_steps": 250,
+    "lr": 0.001,
+    "nt_test": 256,
+    "nx_test": 256,
+    "outdir": "runs/sweeps/ensemble_demo\\base\\s1",
+    "pe": 20.0,
+    "ramp_power": 1.0,
+    "ramp_tau": 0.05,
+    "resume": null,
+    "save_model": "runs/sweeps/ensemble_demo\\base\\s1/model.pt",
+    "seed": 1,
+    "tau_max": 0.5,
+    "tau_ramp": false,
+    "w_bc": 10.0,
+    "w_ic": 10.0,
+    "w_pde": 1.0
+  },
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "git_sha": "e2914b4",
+  "metrics": {
+    "regions": {
+      "full": 0.038111264254392686,
+      "left_layer": 0.009421918002981602,
+      "tau,xi>0.005": 0.03713209258681558,
+      "tau,xi>0.02": 0.03653475825579101,
+      "tau,xi>0.05": 0.03635835332279203,
+      "tau,xi>0.1": 0.037436092091722904
+    },
+    "rel_l2_full": 0.038111259949181464
+  }
+}

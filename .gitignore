@@ -76,3 +76,9 @@ runs/sweeps/**/checkpoint.pt
 
 # Tracked archive snapshots
 !ZIPS/**/*.zip
+
+# Static GitHub Pages snapshot (site/) is committed on purpose. The broad
+# `out/` / `out3d_colab/` rules above would otherwise also ignore the copies
+# under site/plots/, so re-include the whole site/ tree last.
+!site/
+!site/**

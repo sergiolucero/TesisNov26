@@ -1,0 +1,122 @@
+[
+  {
+    "rel": "out/figs/field.png",
+    "src": "plots/out/figs/field.png",
+    "group": "out/figs"
+  },
+  {
+    "rel": "out/figs/profiles.png",
+    "src": "plots/out/figs/profiles.png",
+    "group": "out/figs"
+  },
+  {
+    "rel": "out3d_colab/figures/convergence.png",
+    "src": "plots/out3d_colab/figures/convergence.png",
+    "group": "out3d_colab/figures"
+  },
+  {
+    "rel": "out3d_colab/figures/test_distribution.png",
+    "src": "plots/out3d_colab/figures/test_distribution.png",
+    "group": "out3d_colab/figures"
+  },
+  {
+    "rel": "out3d_colab/figures/well_layout.png",
+    "src": "plots/out3d_colab/figures/well_layout.png",
+    "group": "out3d_colab/figures"
+  },
+  {
+    "rel": "out3d_colab/run_smoke/figures/convergence.png",
+    "src": "plots/out3d_colab/run_smoke/figures/convergence.png",
+    "group": "out3d_colab/run_smoke/figures"
+  },
+  {
+    "rel": "out3d_colab/run_smoke/figures/test_distribution.png",
+    "src": "plots/out3d_colab/run_smoke/figures/test_distribution.png",
+    "group": "out3d_colab/run_smoke/figures"
+  },
+  {
+    "rel": "out3d_colab/run_smoke/figures/well_layout.png",
+    "src": "plots/out3d_colab/run_smoke/figures/well_layout.png",
+    "group": "out3d_colab/run_smoke/figures"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s0/comparison.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s0/comparison.png",
+    "group": "runs/sweeps/ensemble_demo/base/s0"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s0/loss.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s0/loss.png",
+    "group": "runs/sweeps/ensemble_demo/base/s0"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s0/profiles.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s0/profiles.png",
+    "group": "runs/sweeps/ensemble_demo/base/s0"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s1/comparison.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s1/comparison.png",
+    "group": "runs/sweeps/ensemble_demo/base/s1"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s1/loss.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s1/loss.png",
+    "group": "runs/sweeps/ensemble_demo/base/s1"
+  },
+  {
+    "rel": "runs/sweeps/ensemble_demo/base/s1/profiles.png",
+    "src": "plots/runs/sweeps/ensemble_demo/base/s1/profiles.png",
+    "group": "runs/sweeps/ensemble_demo/base/s1"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s0/fno_loss.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s0/fno_loss.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s0"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s0/fno_prediction.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s0/fno_prediction.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s0"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s1/fno_loss.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s1/fno_loss.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s1"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s1/fno_prediction.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s1/fno_prediction.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s1"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s2/fno_loss.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s2/fno_loss.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s2"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s2/fno_prediction.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s2/fno_prediction.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s2"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s3/fno_loss.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s3/fno_loss.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s3"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s3/fno_prediction.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s3/fno_prediction.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s3"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s4/fno_loss.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s4/fno_loss.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s4"
+  },
+  {
+    "rel": "runs/sweeps/fno_coords_120ep/fno/s4/fno_prediction.png",
+    "src": "plots/runs/sweeps/fno_coords_120ep/fno/s4/fno_prediction.png",
+    "group": "runs/sweeps/fno_coords_120ep/fno/s4"
+  }
+]

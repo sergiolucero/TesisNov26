@@ -210,6 +210,38 @@
       </div>
 
       <div class="card">
+        <h2>Repo size by filetype</h2>
+        {% if snapshot.repo_size and snapshot.repo_size.by_ext %}
+        <p class="empty" style="margin:.2rem 0 .8rem">
+          {{ snapshot.repo_size.files }} files ·
+          {{ snapshot.repo_size.total_bytes|filesizeformat }} total
+          (working tree, excluding <code>.git</code>)
+        </p>
+        <table>
+          <thead>
+            <tr><th>filetype</th><th>files</th><th>size</th><th>share</th></tr>
+          </thead>
+          <tbody>
+            {% for row in snapshot.repo_size.by_ext %}
+            <tr>
+              <td><code>{{ row.ext }}</code></td>
+              <td>{{ row.files }}</td>
+              <td>{{ row.bytes|filesizeformat }}</td>
+              <td>
+                {% if snapshot.repo_size.total_bytes > 0 %}
+                  {{ (100 * row.bytes / snapshot.repo_size.total_bytes)|round(1) }}%
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="empty">No repo size data.</p>
+        {% endif %}
+      </div>
+
+      <div class="card">
         <h2>Job sentinels</h2>
         {% if snapshot.jobs %}
         <table>

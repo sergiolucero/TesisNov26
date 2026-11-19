@@ -75,6 +75,41 @@ DISK_PCT=$(df -Pk "$REPO" 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}' |
 [[ -n "${MEM_AVAIL_MB:-}" ]] || MEM_AVAIL_MB="?"
 [[ -n "${DISK_PCT:-}" ]] || DISK_PCT="?"
 
+# Repo content size by file type (working tree, excluding .git). Aggregated
+# once so the dashboard can show where the checkout's disk footprint goes
+# (checkpoints vs figures vs sources) without walking the tree itself.
+REPO_SIZE_TOTAL=0
+REPO_SIZE_FILES=0
+REPO_SIZE_TOP=10
+REPO_SIZE_LINES=""
+if [[ -d "$REPO" ]]; then
+  size_out=$(find "$REPO" -type f -not -path "$REPO/.git/*" -printf '%s\t%f\n' 2>/dev/null \
+    | awk 'BEGIN { FS = "\t" }
+        {
+          sz = $1 + 0
+          name = tolower($2)
+          if (match(name, /\.[^.]*$/) && RSTART > 1) {
+            ext = substr(name, RSTART)
+          } else {
+            ext = "(none)"
+          }
+          bytes[ext] += sz
+          count[ext] += 1
+          total += sz
+          files += 1
+        }
+        END {
+          printf "TOTAL\t%d\t%d\n", files, total
+          for (e in bytes) printf "%s\t%d\t%d\n", e, count[e], bytes[e]
+        }' || true)
+  if [[ -n "$size_out" ]]; then
+    REPO_SIZE_TOTAL=$(printf '%s\n' "$size_out" | awk -F'\t' '$1 == "TOTAL" { print $3 }')
+    REPO_SIZE_FILES=$(printf '%s\n' "$size_out" | awk -F'\t' '$1 == "TOTAL" { print $2 }')
+    REPO_SIZE_LINES=$(printf '%s\n' "$size_out" | awk -F'\t' '$1 != "TOTAL"' \
+      | sort -t $'\t' -k3 -nr | head -n "$REPO_SIZE_TOP" || true)
+  fi
+fi
+
 TS_INSTALLED=0
 TS_IP=""
 TS_UP=0
@@ -302,6 +337,14 @@ printf '"herdr":{"installed":%s,"version":%s,"server":%s},' \
 printf '"repo":{"git":%s,"path":%s,"branch":%s,"head":%s,"dirty":%s,"ahead":%s,"behind":%s},' \
   "$GIT_OK" "$(json_str "$REPO")" "$(json_str "$GIT_BRANCH")" "$(json_str "$GIT_LAST")" \
   "$(json_str "$GIT_DIRTY")" "$(json_str "$GIT_AHEAD")" "$(json_str "$GIT_BEHIND")"
+repo_size_json=""
+while IFS=$'\t' read -r ext n b; do
+  [[ -z "$ext" ]] && continue
+  [[ -n "$repo_size_json" ]] && repo_size_json+=","
+  repo_size_json+="{\"ext\":$(json_str "$ext"),\"files\":$n,\"bytes\":$b}"
+done <<<"$REPO_SIZE_LINES"
+printf '"repo_size":{"total_bytes":%d,"files":%d,"by_ext":[%s]},' \
+  "$REPO_SIZE_TOTAL" "$REPO_SIZE_FILES" "$repo_size_json"
 printf '"jobs":[%s],' "$jobs_json"
 printf '"fails":%d,"warns":%d' "$FAILS" "$WARNS"
 printf '}\n'

@@ -228,9 +228,10 @@ curl -sf localhost:5001/fleet             # add ?role=hub on the hub
 server-side, so it needs no JavaScript; a failed probe shows a banner rather
 than an error page.
 
-`fleet_status.sh` reports host/load/disk, Tailscale, Herdr, repo state, and
-job sentinels; it exits non-zero on a failed sentinel, a down tailnet, or
-disk ≥ 95%. Pass `--role hub` on the hub so a stopped Herdr server is flagged.
+`fleet_status.sh` reports host/load/disk, Tailscale, Herdr, repo state
+(including size by filetype), and job sentinels; it exits non-zero on a failed
+sentinel, a down tailnet, or disk ≥ 95%. Pass `--role hub` on the hub so a
+stopped Herdr server is flagged.
 
 Expected runtime envelope on the 1 vCPU hub container (`RUNTIMES.txt`): unit
 suite 2 s, `run_2d.py --quick` forward 6 s / optimize 16 s, stochastic gates
@@ -339,8 +340,9 @@ on the hub.
       see the rollout order at the top of `fleet-acl.hujson`.
 - [x] wire `fleet_status.sh --json` into the relay dashboard / tablet view:
       `app.py` route `/fleet` (`templates/fleet.html`) runs the probe with a
-      15 s timeout and renders host/tailnet/Herdr/repo/sentinel/disk state
-      server-side, so the tablet needs no JavaScript. `?role=hub` flags a
-      stopped Herdr server; a failed probe renders a banner instead of a 500.
+      15 s timeout and renders host/tailnet/Herdr/repo(+size-by-filetype)/
+      sentinel/disk state server-side, so the tablet needs no JavaScript.
+      `?role=hub` flags a stopped Herdr server; a failed probe renders a
+      banner instead of a 500.
 - [ ] rotate the DO token and store it in the password manager; audit
       `deploy_do.sh` excludes before the next burst run

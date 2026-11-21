@@ -56,3 +56,11 @@ single-file runner reproduces across machines and runtimes.
 - On Colab the same preset calibrates at ~14.9 s/eval on a 2-core runtime; use
   `colab run --timeout 0 full3D_colab_run.py --preset paper --budget 20 --n-starts 2 --zip`
   (CPU runtime — the workload is sparse LU, not GEMM, so a GPU buys nothing).
+
+**Local CPU rerun after the merge (2026-11-21).** The paper preset was re-run on
+the assembled tree on a 4-core laptop (`python full3D_colab_run.py --preset paper
+--budget 15 --n-starts 2`, 1014.8 s, 49 evaluations) and reproduced this document
+exactly: `q* = [12.5, 12.5, 12.5, 12.5, 0×5]`, test `J = 547,665.31`, reliability
+`0.96875`, mass-balance error `9.7e-15`, all six gates true. That is a third
+machine and a different BLAS after the 3D and opt branches were merged, so the
+agreement is not just the same binary.

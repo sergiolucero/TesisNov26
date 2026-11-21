@@ -400,6 +400,21 @@
     "group": "out3d_colab/figures"
   },
   {
+    "rel": "out3d_colab/run_paper/figures/convergence.png",
+    "src": "plots/out3d_colab/run_paper/figures/convergence.png",
+    "group": "out3d_colab/run_paper/figures"
+  },
+  {
+    "rel": "out3d_colab/run_paper/figures/test_distribution.png",
+    "src": "plots/out3d_colab/run_paper/figures/test_distribution.png",
+    "group": "out3d_colab/run_paper/figures"
+  },
+  {
+    "rel": "out3d_colab/run_paper/figures/well_layout.png",
+    "src": "plots/out3d_colab/run_paper/figures/well_layout.png",
+    "group": "out3d_colab/run_paper/figures"
+  },
+  {
     "rel": "out3d_colab/run_smoke/figures/convergence.png",
     "src": "plots/out3d_colab/run_smoke/figures/convergence.png",
     "group": "out3d_colab/run_smoke/figures"

@@ -67,10 +67,22 @@ test) is the reported result for this geometry. The reasons not to keep searchin
 are the ones above: the two independent backends land 1.2% apart on *different*
 well subsets, a fresh draw reproduces J to 0.02% (§2.2), and the compass search
 had already passed the point where the step size, not the budget, decides the
-outcome. If the flat direction ever has to be resolved, the experiment is a
-*different* one — several replicas with offset scenario seeds compared on
-out-of-sample J — not more evaluations at seed 0, which is exactly what the
-crashed two-start run (`DOCS/GPU.md` §6) established.
+outcome.
+
+The obvious next experiment — replicas with offset scenario seeds — has since
+been measured and does not work, for a reason worth stating plainly: **J barely
+depends on the conductivity realization.**  The accepted policy scores 428,664.8
+on scenarios 7000-7019 and 428,647.9 on 37000-37019, disjoint draws that differ by
+0.004%; at M=400 the same comparison moves 0.02%.  Replicas seeded differently
+therefore re-derive the same policy, and two such runs launched against this
+config reproduced the accepted run's first three compass sweeps digit for digit
+before being stopped.  So the flat direction is *not* sampling noise that more
+seeds would average out — it is the cost model (pumping cost against cleanup
+time), which admits several near-equal policies, and the 1.2% gap between the two
+backends is decided by float32 noise in the fine compass steps, not by which
+aquifers were drawn.  Resolving *that* would need a deliberate tie-break rule or a
+finer step in float64, and it would not change the answer by more than the 1.2%
+already measured.
 
 ### 2.2 Out-of-sample certificate with Wilson intervals
 

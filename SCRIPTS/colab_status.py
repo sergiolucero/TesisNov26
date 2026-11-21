@@ -67,6 +67,16 @@ TAIL_BYTES = 160 * 1024        # enough for the last iterations, cheap to parse
 LIVE_TIMEOUT = 8.0             # `colab sessions` must never hang the dashboard
 QUIET_SECONDS = 10 * 60        # no output for this long -> "quiet", not "running"
 STARTING_SECONDS = 5 * 60      # a plan without any CLI activity is still starting
+# The driver (`multi_colab.py`) authenticates with ADC unless COLAB_AUTH says
+# otherwise.  This tool must agree: a live-log pull with different credentials
+# from the run it is observing fails in a way that looks like the run's fault.
+DEFAULT_AUTH = "adc"
+
+
+def _default_auth() -> str:
+    return os.environ.get("COLAB_AUTH", DEFAULT_AUTH)
+
+
 REMOTE_LOG_TIMEOUT = 30.0      # `colab download` of a remote log, per replica
 REMOTE_LOG_MAX = 400 * 1024    # tail of the remote log that is re-parsed
 REMOTE_LOG_STATES = {"running", "quiet", "starting", "provisioning"}
@@ -760,7 +770,7 @@ def live_sessions(binary: str = "colab", auth: str | None = None,
 # Remote logs (filesystem API, never the kernel)
 # ---------------------------------------------------------------------------
 def remote_log_text(session: str, remote_path: str, *, binary: str = "colab",
-                    auth: str | None = "oauth2",
+                    auth: str | None = None,
                     timeout: float = REMOTE_LOG_TIMEOUT,
                     max_bytes: int = REMOTE_LOG_MAX) -> tuple[str | None, str]:
     """Fetch one remote file with ``colab download``; return ``(text, error)``.
@@ -779,6 +789,8 @@ def remote_log_text(session: str, remote_path: str, *, binary: str = "colab",
         return None, f"`{binary}` is not on PATH"
     if not session:
         return None, "no session name in plan.json"
+    if auth is None:
+        auth = _default_auth()
     with tempfile.TemporaryDirectory(prefix="colab-status-") as tmp:
         target = Path(tmp) / "remote.log"
         command = [found]
@@ -795,6 +807,12 @@ def remote_log_text(session: str, remote_path: str, *, binary: str = "colab",
         if proc.returncode != 0 or not target.is_file():
             noise = ((proc.stderr or "") + (proc.stdout or "")).strip()
             last = noise.splitlines()[-1] if noise else f"exit {proc.returncode}"
+            low = last.lower()
+            if "auth" in low or "credential" in low:
+                last += (" -- this tool authenticates like the driver "
+                         f"(COLAB_AUTH={auth}); run "
+                         "`gcloud auth application-default login`, or set "
+                         "COLAB_AUTH=oauth2 if the run used `colab auth`")
             return None, last[:300]
         try:
             raw = target.read_bytes()
@@ -832,7 +850,7 @@ def _with_remote_logs(plan: dict, results: dict[int, dict], run_dir: Path,
         text, _err = remote_log_text(
             rep.get("session") or "", remote,
             binary=os.environ.get("COLAB_BIN", "colab"),
-            auth=os.environ.get("COLAB_AUTH", "oauth2"),
+            auth=_default_auth(),
             timeout=log_timeout,
         )
         if text and text.strip():
@@ -924,7 +942,7 @@ def collect_runs(root: Path = ROOT, limit: int = 8, live: bool = False,
     if live:
         snapshot["live"] = live_sessions(
             os.environ.get("COLAB_BIN", "colab"),
-            os.environ.get("COLAB_AUTH", "oauth2"),
+            _default_auth(),
             live_timeout,
         )
     return snapshot
@@ -962,7 +980,7 @@ def log_text(kind: str, run_id: str, replica: int = 0, root: Path = ROOT,
                 text, err = remote_log_text(
                     rep.get("session") or "", remote_path,
                     binary=os.environ.get("COLAB_BIN", "colab"),
-                    auth=os.environ.get("COLAB_AUTH", "oauth2"),
+                    auth=_default_auth(),
                 )
                 if text is not None:
                     return text, f"{rep['log_path']} (remote)\n"

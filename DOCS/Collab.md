@@ -213,6 +213,15 @@ inventory.
   `python3 SCRIPTS/multi_colab.py logs -f --source remote` (or click
   `tail (VM)` on `/runs`). Do **not** reach for `colab exec '!tail run.log'`:
   that cell queues behind the run and answers only when the run is over.
+- **Every `colab` call hangs or times out on auth** (including
+  `colab_status.py --live` / `--live-logs`, and `multi_colab.py launch` before it
+  uploads anything): the driver now authenticates with **ADC**, which is not
+  configured from a fresh checkout. Either run
+  `gcloud auth application-default login` once, or export `COLAB_AUTH=oauth2` to
+  reuse the token `colab auth` already stored. `SCRIPTS/colab_status.py` reads the
+  same variable, so the dashboard and the driver cannot drift to different
+  credentials -- if they do, the live-log pull fails in a way that looks like the
+  run's fault.
 - If `torch.cuda.is_available()` is `False`, restart Colab with **Runtime → Change runtime type → GPU**.
 - If installation upgrades PyTorch to a CPU-only build, reinstall the CUDA PyTorch wheel from the official PyTorch instructions.
 - If a full run exceeds Colab limits, use `--preset quick`, lower `--pinn-steps`, or lower `--fno-epochs`.

@@ -512,7 +512,9 @@ for `/fleet` (15 s timeout so the page never hangs). `/runs` reads
 touches the network when you ask it to: `?live=1` runs `colab sessions`, and
 `?live_logs=1` pulls a live replica's `run.log` off the VM (bounded per
 replica, one retry) — without it a run in flight only shows the frozen local
-header, since the streaming `exec` returns nothing until the run ends.
+header, since the streaming `exec` returns nothing until the run ends. Both
+paths authenticate like the driver: ADC unless `COLAB_AUTH` says otherwise
+(`COLAB_AUTH=oauth2` reuses the `colab auth` token).
 `run_app.sh` keeps its pid/log in `SCRIPTS/app.pid` / `SCRIPTS/app.log`.
 
 `/api/colab` (alias `/runs.json`) is the same snapshot as JSON for scripts and

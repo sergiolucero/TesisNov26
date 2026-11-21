@@ -97,18 +97,25 @@ already measured.
 
 ### 2.2 Out-of-sample certificate with Wilson intervals
 
-Combining the two runs would be wrong (different scenarios), so each policy was
-re-evaluated on 400 fresh scenarios (`SCRIPTS/check_tail.py --m-scen 400`):
+A run reports the tail of *its own* sample. The question this section answers is
+what survives when the sample is replaced, and it is answered with
+`SCRIPTS/check_tail.py`, which rebuilds scenarios through the run's own
+constructors and re-solves the reported `q*` on the NumPy reference backend.
+
+**The run's own continuation first.** Re-evaluating each policy on 400 scenarios
+continuing from its train seed:
 
 | policy | violations | reliability | 95% Wilson CI | gate 0.94 |
 | :--- | ---: | ---: | :--- | :--- |
 | float64 `q*` (3 wells) | 1/400 | 0.998 | **[0.986, 1.000]** | PASS |
 | float32 `q*` (2 wells) | 7/400 | 0.983 | **[0.964, 0.991]** | PASS |
 
-The interval is the point of this table. A bare `0.975` at M = 40 is consistent
-with a true reliability anywhere in ~[0.87, 1.00]; `399/400` is not. Sample-size
-ladders are non-monotone (the same single violating scenario enters the tail at
-different rates), which is why a single M is never quoted without the interval:
+The first 100 of those 400 *are* the training fields, so this is closer to a
+backend-agreement check than to new evidence. The interval is still the point: a
+bare `0.975` at M = 40 is consistent with a true reliability anywhere in
+~[0.87, 1.00]; `399/400` is not. Sample-size ladders are non-monotone (the same
+violating scenario enters the tail at different rates), which is why a single M is
+never quoted without the interval:
 
 | M | 40 | 60 | 100 | 200 | 300 | 400 |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -119,10 +126,8 @@ different rates), which is why a single M is never quoted without the interval:
 | reliability | 1.000 | 1.000 | 0.990 | 0.985 | 0.980 | 0.983 |
 | Wilson low | 0.912 | 0.940 | 0.946 | 0.957 | 0.957 | 0.964 |
 
-**A fully independent draw.** The 400 scenarios above continue from the run's
-train seed, so the first 100 of them *are* the training fields and the first
-ladder column is the run checking itself. Re-running with `--seed-base 900000`
-(nothing the optimizer ever saw, float32 policy) gives
+**A fully independent draw.** With `--seed-base 900000` (nothing the optimizer
+ever saw, float32 policy):
 
 | M | violations | reliability | 95% Wilson CI | gate 0.94 |
 | :--- | ---: | ---: | :--- | :--- |
@@ -130,20 +135,77 @@ ladder column is the run checking itself. Re-running with `--seed-base 900000`
 | 200 | 5/200 | 0.975 | [0.943, 0.989] | PASS |
 | 400 | 9/400 | 0.978 | [0.958, 0.988] | PASS |
 
-with J = 428,509 (0.02% from the reported 428,592) and CVaR-5%(G) = +0.616 rather
-than +0.005. So the certificate holds on unseen scenarios, and the tail is worse
-than the run claimed: the run's own CVaR ≈ 0 is a training-set statement, while a
-fresh draw puts the mean of the worst 5% at +0.6 m³. The 100-scenario sample is
-the useful part of this table -- it is the sample size the search itself used, and
-it is *not* enough to certify anything: 4 violations out of 100 straddles the gate
-and only the larger draws resolve it.
+J = 428,509 (0.02 % from the reported 428,592) and CVaR-5 %(G) = +0.616 rather
+than +0.005: the certificate holds on unseen scenarios, and the tail is worse than
+the run claimed. The 100-scenario row is the useful one -- it is the sample size
+the search itself used, and it is *not* enough to certify anything.
 
-Both policies clear the 0.94 gate with certainty, but not equally: the float64
-policy violates in 1 of 400 scenarios, the float32 policy in 7 of 400. A point
-estimate of 0.975 at M = 40 cannot distinguish them -- both look identical there
--- and the difference only becomes visible at M ≥ 200. **That is the argument for
-large out-of-sample evaluation**: policy ranking is not resolvable at the sample
-size the search itself used.
+#### Five policies on one common fresh draw
+
+Each policy's `q*` re-solved on the same 400 unseen scenarios
+(`runs/tail_calibration/*.json`, seed base 900000). This is the calibration
+experiment: policies deliberately spanning the safety range, from a policy
+selected on only 16 scenarios to one that pumps all nine wells.
+
+| policy | in-run train rel | J (fresh) | mean G | CVaR-5 %(G) ± s.e. | reliability [95 % CI] | gate |
+| :--- | ---: | ---: | ---: | :--- | :--- | :--- |
+| `20261118-041443` (M=16, 4 wells) | 1.000 | 423,041 | −0.697 | +1.865 ± 0.41 | 365/400 = 0.912 [0.881, 0.936] | **FAIL** |
+| `20261120-111849` (accepted, 2 wells) | 0.990 | 428,509 | −0.872 | +0.616 ± 0.47 | 391/400 = 0.978 [0.958, 0.988] | PASS |
+| `20261118-114831` (float64, 3 wells) | 0.990 | 433,924 | −0.903 | +0.251 ± 0.32 | 392/400 = 0.980 [0.961, 0.990] | PASS |
+| `20261118-052228` (6 wells) | 1.000 | 577,917 | −1.000 | −1.000 ± 0.00 | 400/400 = 1.000 [0.990, 1.000] | PASS |
+| `20261118-091111` (9 wells) | 1.000 | 821,250 | −1.000 | −1.000 ± 0.00 | 400/400 = 1.000 [0.990, 1.000] | PASS |
+
+Three readings:
+
+1. **The audit discriminates.** The M = 16 policy reported reliability 1.000 on
+   its own sixteen scenarios and fails on 400 unseen ones (0.912, interval
+   entirely below the 0.94 gate). An out-of-sample certificate is not a
+   formality that everything passes.
+2. **Safety costs money, and the first 2 % costs the most.** Going from the
+   accepted policy to the float64 one buys a smaller tail estimate for +1.3 % of
+   J; going to "no failures at all" costs +35 % (6 wells) or +92 % (9 wells).
+   The two safe policies also saturate the compliance metric at its floor
+   (`mean G = −1.000`, standard deviation 0): once the plume never reaches
+   `x = 185 m`, `G` cannot reward them further, so their `CVaR = −1.000` is a
+   cap, not a measurement of safety margin.
+3. **Reliability separates policies; the tail does not.** 0.980 against 0.978 is
+   not a difference at M = 400 (intervals overlap almost completely), and neither
+   is 0.616 against 0.251 -- see below.
+
+#### The tail does not transport; reliability does
+
+The accepted policy re-solved on three disjoint 400-scenario draws:
+
+| seed base | J | mean G | CVaR-5 %(G) | tail draws | s.e. | reliability [95 % CI] |
+| ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| 900000 | 428,509 | −0.872 | **+0.616** | 20 | ±0.47 | 0.978 [0.958, 0.988] |
+| 950000 | 428,605 | −0.901 | **+0.254** | 20 | ±0.21 | 0.975 [0.955, 0.986] |
+| 990000 | 428,579 | −0.890 | **+0.334** | 20 | ±0.24 | 0.978 [0.958, 0.988] |
+
+J reproduces to 0.02 % and reliability to 0.003. The CVaR number moves by a
+factor of 2.4 -- and the three values are **statistically indistinguishable**:
+their spread (0.36) is smaller than the standard error of any one of them. That
+is arithmetic, not bad luck. `CVaR-5 %` averages the worst 5 % of draws, which at
+`M = 400` is 20 scenarios; those 20 are the most variable ones in the set, and
+`sd(tail)/sqrt(20)` is 0.2-0.5. A tail mean estimated from 20 extreme draws has
+about a third of a unit of uncertainty in it, so it cannot resolve differences
+smaller than that.
+
+Hence the reporting rule this thesis adopts:
+
+- **Certify with reliability and its Wilson interval.** It is a binomial
+  proportion estimated from all 400 draws: stable, transportable, and comparable
+  across policies and backends.
+- **Quote CVaR with its standard error**, and only as a statement about where the
+  policy sits relative to the constraint (`CVaR ≈ 0` on the search sample), never
+  as a validated number. The run's `+0.005` and the fresh draw's `+0.62` are the
+  same policy; they differ by which twenty scenarios were drawn.
+- **Do not rank policies by tail value** at `M = 400`. Rank by reliability, and
+  say the tail is unresolved.
+
+`check_tail.py` prints the tail block (`n_tail`, tail mean/s.d./s.e., range) and
+writes it to `--json`, so this uncertainty travels with the number instead of
+being reconstructed later from memory.
 
 ### 2.3 Effect of the policy on the plume
 

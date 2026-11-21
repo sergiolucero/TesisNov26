@@ -42,6 +42,10 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `plot_policy_plume.py` | Re-render the contamination figure from a stored `policy.json` (no rerun); `--all` sweeps every test scenario | seconds – minutes |
 | `plot_plume_movie.py` | Animate `C(x,y,t)` as GIF/MP4 from `forward_fields.npz` or a stored policy run | seconds – minutes |
 | `bench_backend.py` | Measure NumPy vs batched-GPU backend on *this* runtime and print a verdict | minutes |
+| `check_tail.py` | Re-solve a finished policy on fresh scenarios (NumPy reference) and print reliability + Wilson, CVaR with its standard error, and a sample-size ladder | ~1.5 min per 100 scenarios |
+| `bench_krylov_fusion.py` | Is the batched transport launch-bound? baseline vs fused vs relaxed residual check, with the objective difference | minutes |
+| `probe_krylov.py` | Reproduce the float32 NaN-objective failure on demand (batched transport diagnostic) | seconds |
+| `make_figures.py` | Regenerate `FIGURES/` from finished runs and the certificate JSONs (`--only <name>`) | ~3 min |
 | `libcolab.py` | Notebook helper: `modrun(nx, ny)` → `run_2d.py --mode optimize` | as `run_2d.py` |
 | `nruns.py` | Loop `run_2d.py --quick` over N seeds | minutes |
 | `seed_sweep.py` | Run any command across seeds, report median/IQR, compare arms | per command |
@@ -613,6 +617,31 @@ arrays with `np.random` — replace the load section before trusting any figure
 it produces.
 
 ---
+
+### 7.3 Certifying a policy (`check_tail.py`)
+
+A run's reported tail describes the sample it optimized on. `check_tail.py`
+re-solves the reported `q*` on scenarios it rebuilds through `run_optimization`'s
+own constructors, and prints three things that have to be read together:
+
+```bash
+python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip \
+    --m-scen 400 --seed-base 900000 --json runs/tail_calibration/<run>_seed900000.json
+```
+
+- **reliability** with a 95 % Wilson interval and a PASS/FAIL/INCONCLUSIVE verdict
+  against the `1 - alpha - 1%` gate;
+- **`CVaR±s.e.`** with the tail block (`n_tail`, tail mean/s.d./s.e., range).
+  `CVaR` averages the worst `alpha` fraction -- ~20 of the most variable draws at
+  `M=400` -- so its standard error is `sd(tail)/sqrt(n_tail)`, typically 0.2-0.5.
+  Quote it with that error or not at all (`DOCS/Results.md` §2.2);
+- the **ladder** (`--ladder`), i.e. the same statistics re-scored on the first
+  `M=16…400` scenarios, which is how a policy that only *looked* safe at `M=16`
+  gets caught.
+
+`--seed-base` matters: without it the scenario set is the run's own
+`seed.train + i`, which re-runs the training fields (a backend cross-check, not
+fresh evidence). Tracked outputs live in `runs/tail_calibration/`.
 
 ### 7.4 Krylov solver knobs
 

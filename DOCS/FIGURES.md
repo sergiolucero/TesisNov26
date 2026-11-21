@@ -7,7 +7,7 @@ paths — `run_optimization`'s config builders, `stoch.saa.Archive`,
 numbers are the measured costs in `fig7`, and the panel says so.
 
 ```
-python3 SCRIPTS/make_figures.py                 # all seven (~3 min on CPU)
+python3 SCRIPTS/make_figures.py                 # all eight (~3 min on CPU)
 python3 SCRIPTS/make_figures.py --only plume    # one figure
 ```
 
@@ -21,6 +21,7 @@ python3 SCRIPTS/make_figures.py --only plume    # one figure
 | `fig5_chance.png` | tail of the constraint | **(a)** distribution of $G$ over $M=40$ out-of-sample scenarios at $q^\star$: 39 scenarios sit at the $\sim-1$ floor (fully captured), one violates; the priced CVaR-5% is $\approx 0$, i.e. the policy sits exactly on the constraint. **(b)** cleanup time: 39/40 at 0 d, one at the horizon cap (the violating scenario). |
 | `fig6_certificate.png` | reliability vs evidence | Empirical reliability with 95% Wilson intervals against sample size for both certified policies. At $M\le100$ the intervals are too wide to separate them and the lower bound dips below the 0.94 gate; at $M=400$ they separate (0.998 vs 0.983). This is the argument for evaluating on more scenarios than the search used. |
 | `fig7_compute.png` | measured cost | **(a)** seconds per 18-candidate sweep, grouped by geometry so every comparison is like-for-like: at 80×40 float32 the T4 does 1.5 s against NumPy's 69 s (47×), but at 160×96 float64 the T4 is 680 s against NumPy's 662 s — *no gain* — and only the A100 (106 s) wins, by 6.4×. Float32 and float64 sit on opposite sides of the launch-overhead/throughput boundary, which is why "buy a GPU" is not one decision. **(b)** T4 float32 cost per candidate·scenario vs batch size: the 17× comes from batching, not from the card. All numbers measured, `DOCS/GPU.md`. |
+| `fig8_tail_spread.png` | which statistic transports | Same policy, three disjoint 400-scenario draws. **(a)** CVaR-5%(G) with $\pm$1 s.e.: 0.62, 0.25, 0.33 — the bars overlap, because the average is over ~20 of the *most variable* draws, so `sd(tail)/sqrt(20)` is 0.2–0.5. **(b)** Reliability with its 95% Wilson interval over all 400 draws: 0.978, 0.975, 0.978, every interval clear of the 0.94 gate. The tail a run reports is a property of its sample; the proportion is a property of the policy. |
 
 ## Provenance per figure
 
@@ -30,8 +31,9 @@ python3 SCRIPTS/make_figures.py --only plume    # one figure
 | fig2 | `configs/opt/hydrology_gpu.yaml` + `stages.O0.well_xy` of run 20261118-114831 |
 | fig3, fig3b, fig5 | `stoch.saa.Archive.evaluate` on 40 test scenarios (seeds 700000…) with $q^\star$ from run 20261118-114831 |
 | fig4 | `runs/colab_multi/20261118-114831/r0/history.md` and `…/20261120-111849/r0/history.md` |
-| fig6 | `out/cert/f64_M400.json`, `out/cert/f32_M400.json` (`check_tail.py --ladder --json`) |
+| fig6 | `out/cert/f64_M400.json`, `out/cert/f32_M400.json` (`check_tail.py --ladder --json`; `out/` is scratch, regenerate) |
 | fig7 | `DOCS/GPU.md` tables (measured on rented T4/A100) |
+| fig8 | `runs/tail_calibration/20261120-111849_seed{900000,950000,990000}.json` (tracked, `check_tail.py --m-scen 400 --seed-base … --json`) |
 
 ## Where they are used
 

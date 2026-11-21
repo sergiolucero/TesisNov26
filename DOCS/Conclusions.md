@@ -301,6 +301,17 @@ uncertainty only.
   The float32 policy is the accepted answer (J 428,579) and is certified on 400
   scenarios no run had seen, though its reported CVaR tail does not survive that
   fresh draw (+0.005 in-run against +0.616 out of sample).
+- ~~Certify the tail~~ — **done, and it is the wrong statistic to certify**
+  (2026-11-21). Five policies re-solved on one common 400-scenario draw
+  (`runs/tail_calibration/`, `DOCS/Results.md` §2.2): the M=16 policy that
+  reported reliability 1.000 on its own sample **fails** out of sample (0.912,
+  CI [0.881, 0.936]), so the audit discriminates. But the accepted policy's
+  CVaR-5 % takes three values on three disjoint draws (+0.616, +0.254, +0.334)
+  whose spread (0.36) is smaller than their own standard errors (±0.21…±0.47),
+  because `CVaR-5 %` averages 20 of the most variable draws at M=400. Reliability
+  over the same draws is 0.978/0.975/0.978 and J reproduces to 0.02 %. **Certify
+  with reliability plus its Wilson interval; quote CVaR with its standard error
+  and never rank policies by it.**
 
 **Open:**
 - ~~Rebuild `TEX/formulation.pdf`~~ — **done** (2026-11-21). A user-level TinyTeX

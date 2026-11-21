@@ -103,6 +103,78 @@ the run reports for its own training scenarios.  The tail statistic a run prints
 is a statement about the sample it optimized on; only a fresh draw says what the
 policy costs an aquifer.
 
+\subsection{Which statistic can be certified}
+
+A tail reported by a run is an average of the worst $\alpha$ fraction of that
+run's own scenarios.  At $\alpha=0.05$ and $n=400$ that is $\approx20$ draws, and
+they are the \emph{most variable} draws in the set, so the standard error of the
+tail mean is $\operatorname{sd}(\text{tail})/\sqrt{20}$, not
+$\operatorname{sd}(G)/\sqrt{n}$.  Re-solving five policies on one common draw of
+\num{400} unseen scenarios makes the consequence concrete
+(Table~\ref{tab:policy-ladder}).
+
+\begin{table}[htbp]
+\centering
+\caption{Five policies re-solved on the same \num{400} unseen scenarios.  The
+policy selected on only sixteen scenarios reported reliability $1.000$ on its own
+sample and fails here; the two policies that pump six or nine wells are safe
+beyond question and much more expensive.  The tail column carries its standard
+error because it cannot be read to better than that.}
+\label{tab:policy-ladder}
+\begin{tabular}{lccccc}
+\toprule
+policy & $\mathbf{q}^\star$ wells & $J$ & $\mathrm{CVaR}_{5\%}(G)\pm$s.e. & reliability [95\% CI] & gate \\
+\midrule
+$M_{\text{train}}=16$            & $4$ & $\num{423041}$ & $+1.865\pm0.41$ & $0.912\ [0.881,0.936]$ & fail \\
+accepted (float32)               & $2$ & $\num{428509}$ & $+0.616\pm0.47$ & $0.978\ [0.958,0.988]$ & pass \\
+float64                          & $3$ & $\num{433924}$ & $+0.251\pm0.32$ & $0.980\ [0.961,0.990]$ & pass \\
+six wells                        & $6$ & $\num{577917}$ & $-1.000\pm0.00$ & $1.000\ [0.990,1.000]$ & pass \\
+nine wells                       & $9$ & $\num{821250}$ & $-1.000\pm0.00$ & $1.000\ [0.990,1.000]$ & pass \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three readings follow.  First, the audit discriminates: a policy whose own
+sixteen scenarios showed no violation fails decisively on \num{400} unseen ones,
+so the certificate is a test, not a formality.  Second, safety costs money and the
+first two percent costs the most: $+1.3\%$ of $J$ buys a smaller tail estimate,
+while removing every observed violation costs $+35\%$ (six wells) or $+92\%$
+(nine wells) --- and those two policies saturate the compliance metric at its
+floor ($\bar G=-1$), so their $\mathrm{CVaR}=-1$ is a cap rather than a measured
+margin.  Third, the tail does not order policies: $0.616$ against $0.251$ is not
+a difference (see below), and $0.980$ against $0.978$ is not one either.
+
+Re-solving the accepted policy on three disjoint draws separates the two
+statistics (Table~\ref{tab:tail-draws}).
+
+\begin{table}[htbp]
+\centering
+\caption{The same policy on three disjoint \num{400}-scenario draws.  The cost
+reproduces to $0.02\%$ and the reliability to $0.003$; the tail moves by a factor
+of $2.4$ and its spread is smaller than the standard error of any single value,
+i.e.\ the three estimates are one estimate measured three times.}
+\label{tab:tail-draws}
+\begin{tabular}{rcrcc}
+\toprule
+seed base & $J$ & $\bar G$ & $\mathrm{CVaR}_{5\%}(G)$ & reliability [95\% CI] \\
+\midrule
+$900000$ & $\num{428509}$ & $-0.872$ & $+0.616$ ($\pm0.47$) & $0.978\ [0.958,0.988]$ \\
+$950000$ & $\num{428605}$ & $-0.901$ & $+0.254$ ($\pm0.21$) & $0.975\ [0.955,0.986]$ \\
+$990000$ & $\num{428579}$ & $-0.890$ & $+0.334$ ($\pm0.24$) & $0.978\ [0.958,0.988]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The reporting rule adopted here is therefore: \emph{certify with reliability and
+its Wilson interval}, because a binomial proportion estimated from all $\num{400}$
+draws is stable, transportable across draws and backends, and comparable between
+policies; \emph{quote $\mathrm{CVaR}$ with its standard error} and only as a
+statement about where a policy sits relative to the constraint, never as a
+validated number; and \emph{never rank policies by tail value} at the sample sizes
+that are affordable.  The run's $+0.005$ and the fresh draw's $+0.62$ describe the
+same policy and differ only in which twenty scenarios were drawn --- which is
+precisely the sense in which an in-sample tail is not a validation.
+
 \subsection{Effect on the plume}
 
 Evaluated on $80$ held-out scenarios (medians), the float64 policy lowers the peak
@@ -120,7 +192,11 @@ The search is dominated by repeated transport solves and was run on a rented GPU
 Two measurements frame the cost: batching a whole compass sweep into one kernel
 call is worth $47\times$ at $80\times40$ on a T4, and moving from float64 to a
 mixed-precision float32 recurrence (float32 operator, float64 Krylov recurrence)
-is worth $2.46\times$ at $160\times96$.  The workload is latency-bound in float32
+is worth $2.46\times$ at $160\times96$.  A third lever removes the per-iteration
+kernel launches themselves: passing the stencil coefficients as arguments lets the
+whole BiCGSTAB iteration be compiled into one call, which measured $2.2\times$ at
+$80\times40$ and $2.8\times$ at $160\times96$ on an A100 with the objective
+unchanged ($1.3\times10^{-7}$, float32).  The workload is latency-bound in float32
 and fp64-throughput-bound in float64, so the choice of accelerator is
 regime-dependent rather than monotone in price; see \texttt{DOCS/GPU.md} for the
 audit and the honest ``do not rent a GPU for this'' cases.

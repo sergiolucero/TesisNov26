@@ -20,6 +20,7 @@ fig3_plume             no pumping vs certified policy, fields + compliance trace
 fig4_convergence       search trajectory of the two certified runs
 fig5_chance            out-of-sample distributions of G and cleanup time
 fig6_certificate       reliability vs sample size with Wilson intervals
+fig8_tail_spread       tail vs proportion: which statistic transports
 fig7_compute           measured cost per compass sweep by backend/card
 
 Design notes: all figures are 300 dpi PNG with a fixed style (no LaTeX needed),
@@ -52,6 +53,7 @@ RUN_F64 = "runs/colab_multi/20261118-114831/r0"
 RUN_F32 = "runs/colab_multi/20261120-111849/r0"
 CERT_F64 = "out/cert/f64_M400.json"
 CERT_F32 = "out/cert/f32_M400.json"
+TAIL_CAL = "runs/tail_calibration"    # one check_tail.py JSON per (policy, draw)
 CONFIG = "configs/opt/hydrology_gpu.yaml"
 
 # ---------------------------------------------------------------- house style
@@ -541,6 +543,68 @@ def fig_certificate(out: Path) -> None:
     _save(fig, out, "fig6_certificate")
 
 
+
+# ------------------------------------------------------------------- figure 8
+def fig_tail(out: Path) -> None:
+    """Two statistics of the same four draws, on very different footings.
+
+    Panel (a) is CVaR-5% with its standard error -- the average of ~20 of the
+    most variable draws in each sample -- and panel (b) is reliability with its
+    Wilson interval, estimated from all 400.  The tail moves; the proportion does
+    not.  That is why the thesis certifies with reliability and only quotes the
+    tail with an error bar.
+    """
+    cal = ROOT / TAIL_CAL
+    if not cal.is_dir():
+        print(f"  (skipping tail: {TAIL_CAL} missing)")
+        return
+    draws = []
+    for f in sorted(cal.glob("20261120-111849_seed*.json")):
+        d = json.loads(f.read_text())
+        draws.append((int(d["seed_base"]), d))
+    if not draws:
+        print(f"  (skipping tail: no accepted-policy draws in {TAIL_CAL})")
+        return
+    x = np.arange(len(draws), dtype=float)
+    labels = [f"{b}" for b, _ in draws]
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.1))
+    ax = axes[0]
+    val = np.array([d["cvar"] for _, d in draws])
+    se = np.array([d["tail"]["tail_se"] for _, d in draws])
+    ax.errorbar(x, val, yerr=se, fmt="o", ms=5, lw=1.4, capsize=4,
+                color=C_POLICY, label="CVaR-5%(G) $\\pm$ 1 s.e.")
+    ax.axhline(0.0, color="k", ls=COMPLIANCE_LS, lw=1.0,
+               label="constraint value")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("fresh draw (seed base)")
+    ax.set_ylabel("CVaR-5%(G)")
+    ax.set_title("(a) the tail is a 20-draw average")
+    ax.set_ylim(-0.15, max(val + se) * 1.25)
+    ax.legend(loc="upper right", fontsize=7.5)
+
+    ax = axes[1]
+    rel = np.array([d["reliability"] for _, d in draws])
+    lo = np.array([d["wilson"][0] for _, d in draws])
+    hi = np.array([d["wilson"][1] for _, d in draws])
+    ax.errorbar(x, rel, yerr=np.vstack([rel - lo, hi - rel]), fmt="o", ms=5,
+                lw=1.4, capsize=4, color=C_ACCENT,
+                label="reliability, 95% Wilson")
+    ax.axhline(0.94, color=C_GATE, ls=COMPLIANCE_LS, lw=1.1,
+               label="gate  $1-\\alpha-1\\%$")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("fresh draw (seed base)")
+    ax.set_ylabel("empirical reliability")
+    ax.set_title("(b) the proportion is a 400-draw estimate")
+    ax.set_ylim(min(0.935, float(lo.min()) - 0.005), 1.0)
+    ax.legend(loc="upper left", fontsize=7.5, framealpha=0.95)
+
+    fig.tight_layout()
+    _save(fig, out, "fig8_tail_spread")
+
+
 # ------------------------------------------------------------------- figure 7
 def fig_compute(out: Path) -> None:
     """Measured cost, not a model: numbers from DOCS/GPU.md's benchmark tables.
@@ -608,6 +672,7 @@ FIGS = {
     "chance": ("fig5_chance", fig_chance),
     "certificate": ("fig6_certificate", lambda out, cfg: fig_certificate(out)),
     "compute": ("fig7_compute", lambda out, cfg: fig_compute(out)),
+    "tail": ("fig8_tail_spread", lambda out, cfg: fig_tail(out)),
 }
 
 

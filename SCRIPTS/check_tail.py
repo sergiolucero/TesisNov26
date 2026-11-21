@@ -118,6 +118,28 @@ def wilson_interval(k: int, n: int, z: float = 1.959963985) -> tuple[float, floa
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
+def tail_stats(values, alpha: float) -> dict:
+    """How much of the CVaR number is actually sample.
+
+    ``CVaR`` averages the worst ``alpha`` fraction of scenarios, which at
+    ``alpha=0.05`` and ``M=400`` means ~20 draws -- and those 20 are the *most
+    variable* ones in the set (the failure tail), not a random 20.  So the
+    standard error of the tail mean is not the standard error of the overall
+    mean: it is ``sd(tail) / sqrt(n_tail)``, and it is large.  Reporting it is
+    the difference between "the tail got worse" and "the tail was resampled".
+    """
+    x = np.asarray(values, dtype=float).ravel()
+    _, w = cvar_and_weights(x, alpha)
+    tail = x[w > 0]
+    n = int(tail.size)
+    sd = float(tail.std(ddof=1)) if n > 1 else float("nan")
+    return {"n_tail": n, "tail_mean": float(tail.mean()) if n else float("nan"),
+            "tail_sd": sd,
+            "tail_se": float(sd / math.sqrt(n)) if n > 1 else float("nan"),
+            "tail_min": float(tail.min()) if n else float("nan"),
+            "tail_max": float(tail.max()) if n else float("nan")}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -166,6 +188,11 @@ def main() -> int:
           f"CVaR{args.alpha:.0%} {cvar:.3f}  reliability {n_ok}/{len(G)} = "
           f"{n_ok / len(G):.3f}  95% CI [{lo:.3f}, {hi:.3f}]  "
           f"gate {gate:.3f} -> {'PASS' if lo >= gate else ('FAIL' if hi < gate else 'INCONCLUSIVE')}")
+    ts = tail_stats(G, args.alpha)
+    print(f"[check_tail] tail draws: n={ts['n_tail']}  mean {ts['tail_mean']:.3f} "
+          f"+/- {ts['tail_se']:.3f} (sd {ts['tail_sd']:.3f}, "
+          f"range {ts['tail_min']:.3f}..{ts['tail_max']:.3f})  "
+          f"-> the CVaR number is a {ts['tail_se']:.2f}-standard-error estimate")
     for tag in ("train", "test"):
         s = opt.get(tag) or {}
         if s:
@@ -194,7 +221,8 @@ def main() -> int:
             {"config": cfg_path, "q_star": q.tolist(), "alpha": args.alpha,
              "seed_base": b["seed_base"],
              "J": float(ev.mean_J), "mean_G": float(G.mean()), "cvar": float(cvar),
-             "reliability": n_ok / len(G), "wilson": [lo, hi], "ladder": summary},
+             "reliability": n_ok / len(G), "wilson": [lo, hi],
+             "tail": ts, "ladder": summary},
             indent=2))
         print(f"[check_tail] wrote {args.json}")
     return 0

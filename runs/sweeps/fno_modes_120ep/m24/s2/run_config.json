@@ -1,0 +1,43 @@
+{
+  "config": {
+    "batch_size": 8,
+    "coarse_factor": 1,
+    "dataset": "out/dataset.npz",
+    "device": "auto",
+    "epochs": 120,
+    "layers": 4,
+    "lr": 0.001,
+    "modes1": 24,
+    "modes2": 24,
+    "no_coords": false,
+    "no_normalize": false,
+    "outdir": "runs/sweeps/fno_modes_120ep/m24/s2",
+    "save_model": "",
+    "seed": 2,
+    "train_frac": 0.75,
+    "width": 20
+  },
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "metrics": {
+    "rel_l2_test_mean": 0.026136692613363266,
+    "rel_l2_test_per_sample": [
+      0.01963099092245102,
+      0.022377287968993187,
+      0.012968463823199272,
+      0.02966788038611412,
+      0.04626689851284027,
+      0.039786092936992645,
+      0.015545995905995369,
+      0.022849930450320244
+    ]
+  },
+  "normalization": {
+    "D_mean": 0.8598710203034449,
+    "D_std": 0.5581064085959508,
+    "u_mean": 0.590770423412323,
+    "u_std": 0.4288513660430908,
+    "v_mean": 0.27412970145261656,
+    "v_std": 0.12006325308004578
+  }
+}

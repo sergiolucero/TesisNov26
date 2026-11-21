@@ -1,0 +1,100 @@
+% ======================================================================
+% 01-intro.tex
+% ======================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Three numbers illustrate why this article is about software rather than
+physics.
+
+The first is a Fourier neural operator (FNO) with relative $L^2$ error
+$0.973$. It had been recorded as a weak result. It was not weak: because the
+metric is normalized by the target norm, a predictor of all zeros scores exactly
+$1.0$, so the operator was \emph{worse than predicting nothing}. The input was
+two spatially constant parameter channels; a pointwise lift followed by spectral
+layers that multiply Fourier coefficients can only produce a constant output.
+The architecture was structurally incapable of representing a front, and no
+amount of training could fix it.
+
+The second is a physics-informed neural network (PINN) reported at
+$1.35\times10^{-2}$ full-grid error and $8.0\times10^{-3}$ in the interior. It
+was the best of five seeds. At fixed hyperparameters the same configuration
+spans $1.17\times10^{-2}$ to $8.14\times10^{-2}$---a factor of seven---and the
+median interior error is $1.42\times10^{-2}$, not below the $10^{-2}$ target the
+result was said to meet.
+
+The third is a claimed $5\times$ GPU speedup that had never been measured. When
+the launch count was finally instrumented, one evaluation issued $4{,}022$
+batched matrix--vector products, $1.7\times$ the number the optimization plan
+had assumed. The speedup may still be real; the point is that it was being
+\emph{planned} as if it were a result.
+
+None of these is a modelling failure. Each is a failure of the process that
+decides what counts as evidence: a metric without a baseline, a run without
+repetition, a claim without an instrument. The response could have been a
+refactor. Instead, this project accumulated \emph{gates}: a trivial-predictor
+guard that makes an FNO worse than zeros fail fast; a seed-sweep harness that
+refuses to compare unpaired runs; a backend-parity suite that treats a numerical
+disagreement as a bug; an artifact-first remote runner that keeps the results of
+a run that dies. The gates are the reusable code.
+
+\paragraph{Why AI matters here.}
+Writing research software is usually a choice between doing the experiment and
+doing the software hygiene, and the experiment wins. The standard remedies---
+version control, tests, continuous integration, documented environments---are
+well known \citep{wilson2014best,sandve2013ten}, but they are labour, and the
+labour is repetitive rather than creative. An agent that can read the repository,
+run the test, read the failure, edit the file, rerun, and write down what
+happened changes the marginal cost of that labour. Recent work on agents that
+act through tools and on benchmarks built from real repository issues makes the
+same point from the other direction: the hard part is not generating a patch,
+it is closing the loop against an executable check
+\citep{yao2023react,jimenez2024swebench}.
+
+This article is an experience report from one project in which that loop was
+closed with the Pi coding agent\footnote{\url{https://pi.dev/}} running DeepSeek
+models.\footnote{\url{https://www.deepseek.com/}} The agent performed most of
+the edits, test runs, benchmark harnesses and documentation updates. The human
+chose the gates, rejected the tempting numbers, and wrote the final judgements.
+We are explicit about this division because it is the article's main claim.
+
+\paragraph{Thesis.}
+Reusability is not a property of a directory layout or a test count. It is the
+accumulation of falsifiable gates, written memory, and one reference
+implementation---and an AI agent made that accumulation cheap enough to do on
+every failure instead of once at the end.
+
+\paragraph{Claims.}
+The article argues three claims, each with evidence from the repository:
+\begin{enumerate}
+  \item \textbf{Reusability is measurable.} The same policy reproduces on a
+        third machine, the NumPy and torch backends agree to $10^{-10}$ and
+        select the same policy, and a certificate on 400 unseen scenarios
+        survives a redraw.
+  \item \textbf{The reusable artifacts came from a repeatable loop.} Every
+        mechanism in \S\ref{sec:mechanisms} and every guard in
+        \S\ref{sec:failures} is traced to a specific defect and a commit; none
+        arrived from a big-bang rewrite.
+  \item \textbf{AI's contribution was verification throughput and memory, not
+        code volume.} The failure catalogue includes cases where the agent was
+        confidently wrong, and the human protocol that caught them is part of
+        the method.
+\end{enumerate}
+
+\paragraph{Contributions.}
+(i) A concrete account of five reusability mechanisms in a computational
+hydrology stack: reference/batched parity, configuration manifests, gates,
+statistical harnesses, and artifact-first remote execution. (ii) A failure
+catalogue in which each defect became a permanent guard, with the commit and
+the test that pins it. (iii) A set of results that survive independent
+re-derivation, including one that fails its own in-run certificate. (iv) A
+practical account of what an AI agent did well and where it failed.
+
+\paragraph{Roadmap.}
+\S\ref{sec:case} fixes the scientific setting. \S\ref{sec:method} describes the
+AI-assisted loop and the artifacts that serve as memory. \S\ref{sec:mechanisms}
+presents the five mechanisms. \S\ref{sec:failures} is the failure catalogue.
+\S\ref{sec:results} reports the results that survived, with their caveats.
+\S\ref{sec:discussion} discusses the collaboration and its threats to validity,
+and \S\ref{sec:conclusion} concludes. Appendices collect gate definitions,
+repository layout and full tables.

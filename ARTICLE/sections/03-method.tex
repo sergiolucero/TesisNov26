@@ -1,0 +1,209 @@
+% ======================================================================
+% 03-method.tex — the AI-assisted reusability loop
+% ======================================================================
+\section{Method: the AI-assisted reusability loop}
+\label{sec:method}
+
+The project did not begin with a software-engineering plan. It began with a
+research question and a set of runs whose results did not survive scrutiny. The
+method emerged as a response to that: a six-step loop, executed by a human and
+an agent, with the repository as the memory between turns.
+
+\subsection{Roles}
+\label{sec:roles}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Actor & Responsibility in this project \\
+\midrule
+Human (PI/editor) &
+Chooses the question and the acceptance threshold; decides which evidence
+class a claim belongs to; rejects the best-seed number; writes and owns the
+final prose; accepts or rejects a policy. \\
+Pi (agent harness) &
+Reads the repository; runs commands and tests; edits files; writes new tests,
+harnesses and documentation; commits with the finding in the message; keeps the
+memory files current. \\
+DeepSeek (model) &
+Proposes the diagnosis, the patch, the test and the summary that the harness
+executes. Its output is a hypothesis until a gate passes. \\
+Gemini (tertiary) &
+Occasional research assistance and code review; not part of the loop. \\
+\bottomrule
+\end{tabularx}
+\caption{Division of labour. The harness/model split matters: most of the
+leverage came from the agent's ability to \emph{run} the check, not from a
+single model completion.}
+\label{tab:roles}
+\end{table}
+
+\subsection{The loop}
+\label{sec:loop}
+
+Each turn has six steps (Figure~\ref{fig:loop}):
+\begin{enumerate}
+  \item \textbf{Read the memory.} Before touching code, read \code{HUMAN.md},
+        \code{Actions.md}, \code{Conclusions.md} and the relevant plan. This is
+        the step that prevents re-learning an environment gotcha or
+        re-litigating a closed question.
+  \item \textbf{Reproduce the claim.} Run the command that produced the number,
+        or the smallest version of it. A claim that cannot be reproduced is a
+        bug report, not a baseline.
+  \item \textbf{Change one thing.} The smallest reversible edit that could
+        explain the failure---not a cleanup, not a refactor.
+  \item \textbf{Run the gate.} A named threshold on a named artifact. If the
+        gate does not exist yet, writing it is part of the change.
+  \item \textbf{Record the finding.} Update the run log and the conclusions,
+        including negative results. A finding that is not written where the next
+        session will look did not happen.
+  \item \textbf{Commit the finding.} The commit message states what was learned,
+        not what files moved. This makes the history searchable by claim.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=7mm and 9mm,
+  box/.style={draw, rounded corners, align=center, font=\small,
+              minimum height=9mm, text width=24mm, fill=blue!4},
+  mem/.style={draw, dashed, rounded corners, align=center, font=\scriptsize,
+              minimum height=8mm, text width=40mm, fill=orange!8},
+  arrow/.style={-{Latex[length=2mm]}, thick}
+]
+\node[box] (read) {1. Read\\memory};
+\node[box, right=of read] (repro) {2. Reproduce\\the claim};
+\node[box, right=of repro] (change) {3. Smallest\\change};
+\node[box, below=of change] (gate) {4. Run the\\gate};
+\node[box, left=of gate] (record) {5. Record\\the finding};
+\node[box, left=of record] (commit) {6. Commit\\the finding};
+\node[mem, below=of record] (memory) {repository as memory:\\docs, manifests, tests, artifacts};
+\draw[arrow] (read) -- (repro);
+\draw[arrow] (repro) -- (change);
+\draw[arrow] (change) -- (gate);
+\draw[arrow] (gate) -- (record);
+\draw[arrow] (record) -- (commit);
+\draw[arrow] (commit.north) -- ++(0,4mm) -| (read.south);
+\draw[arrow, dashed] (memory) -- (record);
+\draw[arrow, dashed] (memory) -- (read);
+\end{tikzpicture}
+\caption{The loop. The dashed arrow is the property that makes it cumulative:
+the repository, not the conversation, is the memory.}
+\label{fig:loop}
+\end{figure}
+
+The loop is deliberately unoriginal; it is the scientific method with a commit
+hook. What changed with AI is the \emph{cost per turn}. A human will run a
+five-seed sweep once, at the end, when the paper is due. An agent will run it on
+every candidate because the marginal cost of ``run the same command four more
+times and tabulate the result'' is small. That is the entire mechanism behind
+the negative result in \S\ref{sec:failures}: the $\tau$-ramp experiment was repeated
+because repeating it was cheap, and the repetition destroyed the effect.
+
+\subsection{Artifacts as memory}
+\label{sec:memory}
+
+Conversation context is volatile; a repository is not. The project therefore
+keeps four kinds of memory, each written for a different reader.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Artifact & Question it answers \\
+\midrule
+\code{HUMAN.md} & ``What will bite me when I come back?'' Environment gotchas,
+wrong interpreter, out-of-memory, buffering, the corner artefact. Written for a
+human under time pressure. \\
+\code{Actions.md} & ``What was run, and what happened?'' A chronological run log
+with numbers, artifact paths and negative results. \\
+\code{Conclusions.md} & ``What is trustworthy, what is single-seed, what is
+open?'' The evidence-class ledger for the whole project. \\
+\code{USAGE.md} & ``How do I run this?'' Every entry point, its cost and its
+outputs. \\
+\code{runs/runtimes.jsonl} & ``What did it cost?'' One JSON record per run, with
+git SHA, grid, seed, device, wall clock and status. \\
+\code{out/*/run\_config.json} & ``What exactly was this?'' The effective config,
+seed, device, dtype and metrics next to the model. \\
+Commit messages & ``Why does this line exist?'' Each message states the finding,
+so \code{git log -{}-grep} is a literature search over the project's own history. \\
+\bottomrule
+\end{tabularx}
+\caption{The memory hierarchy. The first four are prose for humans; the last
+three are machine-readable records for reruns and audits.}
+\label{tab:memory}
+\end{table}
+
+Two rules keep the memory useful. First, \textbf{a finding is written at the
+level of the reader who will need it}: a run goes in \code{Actions.md}, a
+conclusion goes in \code{Conclusions.md}, an environment trap goes in
+\code{HUMAN.md}. Second, \textbf{numbers carry their provenance}: a table entry
+names the artifact directory and the harness, so ``median $1.61\times10^{-2}$''
+can be traced to \code{runs/sweeps/baseline\_n5} and re-derived. The article's
+own \code{EVIDENCE.md} is the same idea applied to the manuscript.
+
+\subsection{What the agent actually did}
+\label{sec:agent-work}
+
+Across the repository's history at the time of writing: 69 commits, 304 tracked
+files, 23{,}739 lines of Python, 22 test modules and 172 test functions, eight
+optimization configurations, and 33 runtime records (Figure~\ref{fig:timeline}).
+The agent's work was not uniformly distributed. It was concentrated in exactly
+the activities that are repetitive and easy to defer:
+\begin{itemize}
+  \item writing the parity tests that compare the NumPy reference and the torch
+        backend scenario by scenario;
+  \item turning a debugging script into a harness (\code{seed\_sweep.py}), then
+        using it to overturn a single-seed result;
+  \item adding a guard after every failure (a trivial-predictor baseline, a
+        non-finite-candidate policy, a zip-on-crash path);
+  \item rebuilding documentation tables from artifacts rather than memory;
+  \item reconstructing a timeline of 69 commits to find when a claim changed.
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,font=\scriptsize]
+  \draw[-{Latex[length=2mm]}, thick] (0,0) -- (12.7,0);
+  \foreach \x/\d in {0/11-13, 3/11-16, 6/11-18, 9/11-19, 12/11-21} {
+    \draw (\x,0.12) -- (\x,-0.12);
+    \node[below] at (\x,-0.16) {\d};
+  }
+  \node[above, align=center, text width=2.8cm] at (0,0.35)
+    {initial commit\\(PINN/FNO/opt tree)};
+  \node[above, align=center, text width=3.0cm] at (3,0.95)
+    {seed variance;\\($\tau$-ramp negative)};
+  \node[above, align=center, text width=3.0cm] at (6,0.35)
+    {FNO coordinate fix;\\Conclusions.md};
+  \node[above, align=center, text width=3.0cm] at (9,0.95)
+    {backend parity;\\Colab/fleet drivers};
+  \node[above, align=center, text width=3.2cm] at (12,0.35)
+    {certificates;\\42-page assembly};
+  \draw[gray, dashed] (0,0) -- (0,0.25);
+  \draw[gray, dashed] (3,0) -- (3,0.85);
+  \draw[gray, dashed] (6,0) -- (6,0.25);
+  \draw[gray, dashed] (9,0) -- (9,0.85);
+  \draw[gray, dashed] (12,0) -- (12,0.25);
+\end{tikzpicture}
+\caption{The eight-day span in which the loop ran. The dates are commit dates, not a
+claim about effort; the point is the density of findings per day once the gates
+and the harness existed.}
+\label{fig:timeline}
+\end{figure}
+Those are not the tasks that make a research career, which is precisely why
+they are the ones that get skipped. The rest of the article describes what they
+bought.
+
+\subsection{Threats to the method}
+\label{sec:method-threats}
+
+The loop is not self-validating. An agent can write a test that encodes the
+current bug, a gate with a threshold chosen to pass, or a summary that rounds a
+single seed into a trend. The defences used here were procedural, not
+architectural: the human set thresholds before seeing results; every merged
+mechanism had to fail on a known-bad input; and negative results were recorded
+with the same care as positive ones. These defences are fallible, and
+\S\ref{sec:discussion} returns to them.

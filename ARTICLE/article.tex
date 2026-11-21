@@ -1,0 +1,82 @@
+% ======================================================================
+% article.tex — master document for the "Reusable by Construction" article
+% Build:  make            (or latexmk -pdf article.tex)
+% Sources: see SOURCE_MAP.md; evidence: see EVIDENCE.md
+% ======================================================================
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage[round,numbers]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{microtype}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc,shapes.geometric}
+
+% ---------------------------------------------------------------- shortcuts
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Cvar}{\mathrm{CVaR}}
+\newcommand{\ind}{\mathbb{I}}
+\newcommand{\xx}{\mathbf{x}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\pdd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\pddt}[2]{\frac{\partial^{2} #1}{\partial #2^{2}}}
+\newcommand{\erfc}{\operatorname{erfc}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\Lpde}{\mathcal{L}_{\mathrm{PDE}}}
+\newcommand{\Lic}{\mathcal{L}_{\mathrm{IC}}}
+\newcommand{\Lbc}{\mathcal{L}_{\mathrm{BC}}}
+\newcommand{\Ldata}{\mathcal{L}_{\mathrm{data}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{gray!50},
+  backgroundcolor=\color{gray!5},
+  aboveskip=0.6em,
+  belowskip=0.6em
+}
+
+\title{\bfseries Reusable by Construction:\\[2pt]
+\large An AI-Assisted Path from Research Scripts to a Verified\\
+Groundwater Remediation Stack}
+\author{S. Lucero\\[2pt]
+\small with the Pi coding agent (DeepSeek models)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\input{sections/00-abstract}
+\input{sections/01-intro}
+\input{sections/02-case}
+\input{sections/03-method}
+\input{sections/04-mechanisms}
+\input{sections/05-failures}
+\input{sections/06-results}
+\input{sections/07-discussion}
+\input{sections/08-conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\input{sections/appendix}
+
+\end{document}

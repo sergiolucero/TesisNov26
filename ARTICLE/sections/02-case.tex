@@ -1,0 +1,167 @@
+% ======================================================================
+% 02-case.tex — the scientific setting, condensed from TEX/formulation.tex
+% and TEX/optimization.tex. Full derivations: see those files and Appendix A.
+% ======================================================================
+\section{The scientific setting}
+\label{sec:case}
+
+The project has two halves: neural surrogates for a contaminant-transport
+equation, and a stochastic optimization layer that decides pumping rates under
+geological uncertainty. Both are standard; we summarize only what the gates
+need.
+
+\subsection{One-dimensional sandbox and neural surrogates}
+\label{sec:case-1d}
+
+The verification problem is the dimensionless advection--dispersion equation
+(ADE) for a conservative solute in a homogeneous, isotropic aquifer,
+\begin{equation}
+\pdd{u}{\tau}+\pdd{u}{\xi}
+=\frac{1}{\mathrm{Pe}}\,\pddt{u}{\xi},
+\qquad (\xi,\tau)\in(0,1)\times(0,\tau_{\max}],
+\label{eq:ade}
+\end{equation}
+with step inlet and clean initial state,
+\begin{equation}
+u(\xi,0)=0,\qquad u(0,\tau)=1,\qquad u(1,\tau)=0,
+\label{eq:bc}
+\end{equation}
+where $\xi=x/L$, $\tau=tv/L$ is measured in pore volumes, $u=C/C_0$, and
+$\mathrm{Pe}=vL/D$. The closed-form Ogata--Banks solution
+\citep{ogata1961solution}
+\begin{equation}
+u_{\mathrm{ref}}(\xi,\tau)=\frac12\left[
+\erfc\!\left(\frac{(\xi-\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\right)
++e^{\mathrm{Pe}\,\xi}\,
+\erfc\!\left(\frac{(\xi+\tau)\sqrt{\mathrm{Pe}}}{2\sqrt{\tau}}\right)
+\right]
+\label{eq:ogata}
+\end{equation}
+is the ground truth. The shipped configuration uses $\mathrm{Pe}=20$,
+$\tau_{\max}=0.5$ and a $256\times256$ test grid.
+
+\paragraph{PINN.} A multilayer perceptron $u_\theta(\xi,\tau)$ ($\tanh$ hidden,
+sigmoid output) minimizes
+\begin{equation}
+\mathcal{L}(\theta)=\lambda_{\mathrm{PDE}}\Lpde
++\lambda_{\mathrm{IC}}\Lic+\lambda_{\mathrm{BC}}\Lbc,
+\label{eq:loss}
+\end{equation}
+with the PDE residual
+$\mathcal{R}_\theta=\pdd{u_\theta}{\tau}+\pdd{u_\theta}{\xi}
+-\mathrm{Pe}^{-1}\pddt{u_\theta}{\xi}$
+formed by automatic differentiation and each term a mean square over resampled
+collocation points. The best configuration uses a \emph{hard} ansatz that
+satisfies the initial and outlet conditions identically and the inlet up to a
+short ramp,
+\begin{equation}
+u_\theta(\xi,\tau)=(1-\xi)\,s(\tau)
++\xi(1-\xi)\,s(\tau)\,\mathrm{NN}_\theta(\xi,\tau),
+\qquad s(\tau)=1-e^{-\tau/\varepsilon},
+\label{eq:hardbc}
+\end{equation}
+with $\varepsilon=10^{-3}$. Both terms carry $s(\tau)$, so $u_\theta(\xi,0)=0$;
+both carry $(1-\xi)$ or $\xi(1-\xi)$, so $u_\theta(1,\tau)=0$. Only the inlet is
+approximate: $u_\theta(0,\tau)=s(\tau)\to1$ for $\tau\gg\varepsilon$.
+
+\paragraph{Two artefacts worth knowing.} First, the step-inlet problem is
+discontinuous at the corner $(\xi,\tau)=(0,0)$: the initial condition says
+$u=0$, the inlet says $u=1$, and the reference returns $1$. Every continuous
+ansatz that honors the initial condition returns $0$, so the pointwise error at
+the corner is exactly one and a thin band around it is contaminated. This is a
+metric artefact, not a network bug, and it is why two metrics are always
+reported: the full-grid relative $L^2$ error and a corner-excluded interior
+error over $\{\xi>0.05,\ \tau>0.05\}$. Second, the ramp contributes
+$s'(0)=1/\varepsilon$, so
+\begin{equation}
+\max_{\xi,\tau}|\mathcal{R}_\theta|\gtrsim 1/\varepsilon
+\label{eq:resfloor}
+\end{equation}
+\emph{independently of the weights}. At $\varepsilon=10^{-3}$ the corner
+residual is $1.0\times10^{3}$ at initialization and after training, and on every
+seed. A global residual maximum is therefore a useless diagnostic here; only
+band means are meaningful.
+
+\paragraph{FNO.} The Fourier neural operator \citep{li2020fourier} learns the
+solution operator from parameters to the concentration field: a lifting MLP,
+spectral convolution layers with $k_{\max}$ retained modes, and a projection
+MLP. The 1D campaign uses a family of $(v,D)$ scenarios and evaluates against
+\eqref{eq:ogata}. The architecture's input representation turns out to be the
+whole story (\S\ref{sec:failures}).
+
+\subsection{Two- and three-dimensional pump-and-treat}
+\label{sec:case-opt}
+
+The remediation problem couples steady Darcy flow to advective--dispersive
+transport. With transmissivity $T=Kb$, head $h$, recharge $W$ and extraction
+rates $q_i$ at wells $\xx_i$,
+\begin{equation}
+-\nabla\cdot\bigl(T(\xx)\nabla h\bigr)
+=b\,W(\xx)-\sum_{i=1}^{n_w}q_i\,\delta_\varepsilon(\xx-\xx_i),
+\label{eq:darcy}
+\end{equation}
+where $\delta_\varepsilon$ is a normalized Gaussian well kernel. Transport is
+\begin{equation}
+\phi R\,\pdd{C}{t}
+=\nabla\cdot(\phi\mathbf{D}\nabla C)
+-\nabla\cdot(\phi\mathbf{v}C)
+-\sum_i q_i C(\xx_i)\delta_\varepsilon(\xx-\xx_i)+s(\xx,t),
+\label{eq:transport}
+\end{equation}
+with velocity $\mathbf{v}=-K\nabla h/\phi$, dispersion tensor $\mathbf{D}$,
+retardation $R$ and source $s$. Implicit Euler with first-order upwinding makes
+the transport operator linear in $q$ and admits an exact discrete adjoint.
+
+\paragraph{Random conductivity.} The primary random input is a log-normal field
+\begin{equation}
+K(\xx,\omega)=K_0\exp\!\bigl(G(\xx,\omega)\bigr),
+\qquad
+G=m_G+\sum_{n=1}^{N_{KL}}\sqrt{\lambda_n}\,\varphi_n(\xx)\,\xi_n(\omega),
+\label{eq:kl}
+\end{equation}
+with $\xi_n\sim\mathcal{N}(0,1)$ and $(\lambda_n,\varphi_n)$ the eigenpairs of
+an exponential covariance with variance $\sigma_G^2$ and correlation length
+$\ell$ \citep{ghanem1991stochastic}. The benchmark uses
+$\sigma_G=0.65$, $\ell=15$\,m, a 95\% variance truncation
+($n_{KL}=1529$ at $160\times96$), nine candidate wells on a hexagonal lattice,
+and a $10\ \mathrm{m^3/d}$ source at $100\ \mathrm{mg/L}$ for 3650 days.
+
+\paragraph{The stochastic program.} The decision is a vector of nonnegative
+pumping rates $\mathbf{q}$ in a convex admissible set $\mathcal{Q}$ (per-well
+capacity, total budget, drawdown). The cost $J(\mathbf{q},\omega)$ combines
+pumping energy, treatment, residual contamination and cleanup time. Compliance
+is a random constraint $G(\mathbf{q},\omega)\le0$ at a monitoring line over the
+final 20\% of the horizon, and the problem is
+\begin{equation}
+\min_{\mathbf{q}\in\mathcal{Q}}\ \E\bigl[J(\mathbf{q},\omega)\bigr]
+\quad\text{s.t.}\quad
+\Prob\bigl(G(\mathbf{q},\omega)\le0\bigr)\ge1-\alpha,
+\label{eq:chance}
+\end{equation}
+with $\alpha=0.05$ and a head constraint handled analogously. The expectation
+is approximated by sample-average approximation (SAA) over $M_{\text{train}}$
+scenarios, and the chance constraint by a Rockafellar--Uryasev CVaR penalty
+\citep{rockafellar2000optimization,shapiro2009lectures}. The search is a pattern
+search with capacity projection and a batched compass sweep
+\citep{audet2006mesh}. The full program, variants and algorithm discussion are
+in \texttt{TEX/optimization.tex} and \texttt{TEX/SolvingAlgorithms.tex}.
+
+\subsection{What counts as a result}
+\label{sec:case-result}
+
+The project uses four evidence classes, and every quantitative statement in
+this article is labelled with one:
+\begin{enumerate}
+  \item \textbf{Derived}: true by construction (e.g.\ the $1/\varepsilon$
+        residual floor), so seed-independent.
+  \item \textbf{Multi-seed}: a median over $N\ge5$ seeds with its interquartile
+        range, and a paired comparison for any variant.
+  \item \textbf{Gated}: a run that clears a named threshold on a named artifact
+        (mass balance, retained variance, backend parity, reliability).
+  \item \textbf{Certified}: a policy re-evaluated out of sample, with a Wilson
+        interval \citep{wilson1927probable}, not a bare fraction.
+\end{enumerate}
+The rest is \emph{preliminary} and is labelled as such. This taxonomy is the
+article's unit of analysis: the mechanisms in \S\ref{sec:mechanisms} exist to
+make each class cheap to produce, and the failures in \S\ref{sec:failures} are
+cases where a weaker class was being reported as a stronger one.

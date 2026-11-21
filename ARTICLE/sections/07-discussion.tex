@@ -1,0 +1,120 @@
+% ======================================================================
+% 07-discussion.tex
+% ======================================================================
+\section{Discussion: what AI did and did not do}
+\label{sec:discussion}
+
+\subsection{Separate the harness from the model}
+\label{sec:harness-model}
+
+Public discussions of AI-assisted programming usually compare models on a single
+completion: given a prompt, which one writes the better function? That is not the
+unit that mattered here. The unit was a \emph{turn}: read the repository, form a
+hypothesis, edit, run the gate, record the result. Pi supplied the loop; DeepSeek
+supplied the hypothesis. Most of the leverage came from the loop.
+
+Three consequences follow. First, a model that is slightly worse at code
+generation but equally good at following a procedure would have produced almost
+the same project, because the procedure, not the completion, was the bottleneck.
+Second, the value compounds with the repository: the more memory the agent can
+read, the fewer turns are wasted re-learning. Third, the failure modes are
+process failure modes, not syntax failure modes---a plausible hypothesis that
+the gate rejects is the normal case, not an exception.
+
+\subsection{Where the agent was useful}
+\label{sec:agent-good}
+
+\begin{itemize}
+  \item \textbf{Repetition.} The five-seed $\tau$-ramp sweep exists because running
+        it four more times was cheap. The 400-scenario certificate exists
+        because re-scoring on a fresh seed was a command, not a project.
+  \item \textbf{Parity and regression tests.} Comparing two implementations
+        field by field, at several tolerances, on many scenarios, is tedious
+        and exactly the kind of work an agent does without drift.
+  \item \textbf{Documentation from artifacts.} The run log, the runtime table
+        and the conclusions were rebuilt from stored JSON rather than memory,
+        which is why the numbers in this article can be traced.
+  \item \textbf{Searching the history.} Reconstructing when a claim changed
+        across 69 commits is a task a human postpones and an agent performs.
+  \item \textbf{Writing the guard.} After each failure, the agent wrote the
+        smallest test that would have caught it. The guard is often four lines;
+        the discipline is remembering to write it.
+\end{itemize}
+
+\subsection{Where the agent was wrong}
+\label{sec:agent-bad}
+
+The failure catalogue is also a catalogue of agent errors, and it is worth
+naming them:
+\begin{itemize}
+  \item \textbf{Confident single-seed claims.} The $\tau$-ramp result was reported as
+        an improvement before the paired sweep. The prose was plausible; the
+        evidence was one seed.
+  \item \textbf{Plausible structural fixes.} The FNO fix required proving that
+        the old architecture \emph{could not} represent a front. A patch that
+        merely trained longer would have been plausible and wrong.
+  \item \textbf{Over-broad cleanups.} A ``simplification'' that removes the
+        residual chunking is a regression on the 961\,MB host, even though it is
+        correct on a GPU box. The memory file had to say so explicitly.
+  \item \textbf{Metric drift.} Editing an evaluation script can silently change
+        what a number means. The manifests and the artifact paths are the
+        defence; a diff review alone is not.
+  \item \textbf{Optimism about hardware.} The $5\times$ speedup and the A100
+        assumption were both plan-level claims that survived until they were
+        instrumented.
+\end{itemize}
+
+None of these is exotic. They are the ordinary failure modes of a competent,
+tired collaborator. The response is therefore procedural rather than
+technological: make the gate cheap, make the number traceable, and make the
+negative result as easy to record as the positive one.
+
+\subsection{The human protocol}
+\label{sec:protocol}
+
+The project converged on five rules, and they are the part most likely to
+transfer:
+\begin{enumerate}
+  \item \textbf{Set the threshold before seeing the result.} A gate chosen after
+        the run is a description, not a test.
+  \item \textbf{Demand a failing test first.} A bug fix without a test that
+        fails on the old code is a hypothesis, not a repair.
+  \item \textbf{Ask what would falsify the claim.} If the answer is ``another
+        seed'', run it; if the answer is ``nothing'', the claim is not
+        empirical.
+  \item \textbf{Keep the negative result.} The $\tau$-ramp, the A100 and the 3-well
+        policy are as valuable as the successes, because they stop the project
+        from repeating them.
+  \item \textbf{Own the final judgement.} The agent can draft the conclusion;
+        the human decides whether the evidence class supports it.
+\end{enumerate}
+
+\subsection{Threats to validity}
+\label{sec:threats}
+
+This is an experience report, not a controlled experiment. The sample is one
+project, one human and one agent configuration; the models changed during the
+work; there is no baseline project developed without AI; and the author is not
+neutral about the outcome. The quantitative results are reproducible from the
+repository, but the \emph{causal} claim---that the AI loop caused the
+reusability---is an interpretation, supported by the commit history and the
+failure catalogue, not by randomization.
+
+Two further caveats are specific to the science. The 3D result is validated at
+three presets but not against an independent 3D solver; the 2D certificate is
+strong on reliability but shows that the reported CVaR tail does not survive a
+fresh draw; and the 1D/FNO medians are five seeds, which is enough to see a 7$\times$
+spread but not enough to estimate a tail. These are the same caveats the
+repository records in \code{Conclusions.md}, and they are repeated here because
+an article that hides them would reproduce the failure it is describing.
+
+\subsection{What would make this a stronger study}
+\label{sec:future}
+
+A controlled comparison would need two teams, the same task and the same
+deadline, one with and one without an agent, and a pre-registered measure of
+reusability (e.g.\ time to reproduce a result on a fresh machine, number of
+claims that survive an out-of-sample check). That study is worth doing. In its
+absence, the best this article can do is make its own evidence trail complete
+enough that a reader can disagree with the interpretation while trusting the
+numbers.

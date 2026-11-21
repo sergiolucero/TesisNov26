@@ -1,0 +1,200 @@
+% ======================================================================
+% 05-failures.tex — each defect becomes a permanent guard
+% ======================================================================
+\section{Failure catalogue: each defect becomes a guard}
+\label{sec:failures}
+
+The mechanisms in \S\ref{sec:mechanisms} are abstractions. This section is the
+evidence that they were not designed in advance: each one is the residue of a
+specific failure, and each failure left a test, a flag, a gate or a line in the
+memory files. The catalogue is the empirical heart of the article because it is
+where the AI contribution is visible as \emph{work done}, not as a claim.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}p{3.2cm}p{3.4cm}Xp{1.4cm}@{}}
+\toprule
+Symptom & Root cause & Permanent guard & Commit \\
+\midrule
+FNO rel.\ $L^2=0.973$, worse than zeros &
+Constant input channels $\Rightarrow$ only the DC mode; output constant by
+construction &
+Coordinate channels + trivial-predictor guard (all-zeros and mean-field
+baselines) &
+\code{aadc3fe} \\
+One non-finite candidate kills a two-hour run &
+A single float32 Krylov breakdown treated as fatal &
+\code{-{}-allow-nonfinite} maps one candidate to $+\infty$; a whole sweep still
+raises; count is reported &
+\code{4e506b1} \\
+A dying run uploads nothing &
+Zip ran only after a successful dispatch &
+\code{zip\_results\_safely} in \code{finally}; zip failure never masks the real
+error &
+\code{4e506b1} \\
+Assembled thesis aborts on \code{remark} &
+Preamble merger kept \code{\textbackslash newcommand} only; \code{\textbackslash
+newtheorem} and \code{\textbackslash newcolumntype} dropped &
+Declarations keyed by declared name; four compiler-only defects pinned by tests &
+\code{12dcebf}, \code{3628b5d} \\
+$\tau$-ramp looks like a 32\% win on seed 0 &
+Single-seed comparison against a 7$\times$ spread &
+Paired five-seed sweep; median ratio 1.31 the wrong way; negative result kept &
+\code{ecf9537} \\
+Three-well policy passes torch reliability 0.9625, fails NumPy 0.90 &
+Tail scenarios diverge between backends; SAA overfits its own tail &
+Re-score on the NumPy reference before reporting; four wells is the robust
+frontier &
+\code{6cb9827} \\
+$\max|\mathcal{R}|=10^{3}$ looks like a physics error &
+Hard-BC ramp contributes $s'(0)=1/\varepsilon$ independently of weights &
+Report $1/\varepsilon$ as the reference; use band means, not a global maximum &
+\code{bb95c08} \\
+``$5\times$ GPU speedup'' is unmeasured &
+Launch count assumed, not instrumented &
+Instrument the kernel: 4{,}022 matvecs/evaluation, 1.7$\times$ the assumption &
+\code{75bbb5a} \\
+A100 no faster than a T4 &
+Cost is fixed launch overhead, not arithmetic throughput &
+Report the regime and the measurement, not the accelerator name &
+\code{b1346b5} \\
+\bottomrule
+\end{tabularx}
+\caption{Failure catalogue. Each row is a defect that became a permanent guard.
+The commit is the one that introduced the guard, not necessarily the one that
+introduced the bug.}
+\label{tab:failures}
+\end{table}
+
+\subsection{The FNO was structurally incapable}
+\label{sec:failfno}
+
+The recorded result was a relative $L^2$ error of $0.973$ on a two-sample test
+set. Because the metric is normalized by the target norm, a predictor of all
+zeros scores exactly $1.0$: the operator was worse than nothing. The diagnosis
+was not ``train longer''. The input was two spatially constant channels
+$(v,D)$ broadcast over the grid; the lifting layer is pointwise and every
+spectral layer multiplies Fourier coefficients, so a constant input has only the
+DC mode and the output is constant by construction. The measured output spatial
+standard deviation was $\approx2\times10^{-10}$.
+
+The proof was a constant-input test, not an argument. The fix was to append
+normalized $(\xi,\tau)$ coordinate channels---standard practice for FNOs
+\citep{li2020fourier}---with a \code{-{}-no-coords} ablation. The result moved from
+$0.973$ to $0.0146$ (250 epochs, single seed); a five-seed median at 120 epochs
+is $3.02\times10^{-2}$ (IQR $3.2\times10^{-3}$), and the profile-only error
+dropped from $1.000$ to $0.071$. The permanent guard is a trivial-predictor
+check that prints the all-zeros and mean-field baselines and warns when a run
+fails to beat them.
+
+The lesson generalizes: a metric without a trivial baseline can hide a model
+that has learned nothing. The guard is four lines and it would have caught the
+bug on day one.
+
+\subsection{One bad candidate, one dead run}
+\label{sec:failkrylov}
+
+A compass sweep evaluates $2n_w$ candidates per iteration. In mixed float32, a
+batched transport Krylov solve occasionally returns a non-finite residual for
+one candidate. The original code raised, which is correct for a broken solve but
+wrong for one unlucky candidate: a run that had already completed a full start
+died at candidate 5 of 18 of the next.
+
+The fix is a policy, not a try/except. \code{nonfinite\_policy} replaces the
+offending entries with $+\infty$ when \code{-{}-allow-nonfinite} is set. The
+compass acceptance test is \code{fc < best - 1e-12}, so $+\infty$ can never be
+accepted: the move is skipped and the sweep continues. A whole batch coming back
+non-finite still raises, because that is the batched solve diverging, not one
+candidate. The count is reported in the metrics, and \code{multi\_start} still
+raises if every start ends non-finite, so a broken backend cannot be silently
+tolerated.
+
+The same run exposed the artifact problem: \code{-{}-zip-results} ran only after a
+successful dispatch, so start 1's \code{out/} died with the VM and
+\code{colab download} reported ``File or directory not found''. The zip now runs
+in a \code{finally}, and \code{zip\_results\_safely} never masks the real
+exception. Fourteen tests pin both behaviours.
+
+\subsection{Static checks cannot see a preamble}
+\label{sec:failbuild}
+
+Assembling the thesis from six standalone chapters looked like a file-merge
+problem. The offline checker validated braces, environments, references,
+duplicate labels and graphics paths. It passed. A real LaTeX toolchain then
+found four defects the checker could not see: \code{natbib} and \code{geometry}
+were emitted once per chapter so package options clashed; the preamble merger
+carried only \code{\textbackslash newcommand}, dropping
+\code{\textbackslash newtheorem\{remark\}} and \code{\textbackslash
+newcolumntype\{Y\}}, so the first \code{remark} aborted the build; a two-line
+\code{\textbackslash title} leaked its continuation into the preamble; and five
+chapters each shipped a \code{thebibliography}, so \code{ogata1961solution}
+appeared three times and every citation was ``multiply defined''.
+
+Each defect is now pinned by a test in \code{tests/test\_build\_tex.py}, and the
+preamble merger reports a conflict when two chapters define the same name
+differently rather than silently choosing one. The general lesson is the one the
+article keeps returning to: a check that only reads the source is weaker than a
+check that runs the compiler.
+
+\subsection{The negative result that justified the harness}
+\label{sec:failtau}
+
+Causal $\tau$-ramping was supposed to shrink the corner band without hurting the
+interior. On seed 0 it looked like a large win: full-grid error
+$1.42\times10^{-2}\to9.57\times10^{-3}$, interior $8.3\times10^{-3}\to
+4.6\times10^{-3}$, improvements on every region. A single-seed sweep would have
+``confirmed'' the hypothesis.
+
+Across five paired seeds the ramp won two, and the median ramp/baseline ratio
+was $1.31$---worse---with a permutation test $p=0.38$. The baseline alone spans
+$1.17\times10^{-2}$ to $8.14\times10^{-2}$ at fixed hyperparameters. The effect
+was noise. The experiment is reported as a negative result, and the harness that
+made the repetition cheap is now the project's default for any comparison.
+
+This is also the clearest example of the collaboration's value. The agent did
+not have a better idea about $\tau$-ramping. It ran the same experiment four more
+times and tabulated it, which is the thing a human under deadline pressure
+skips.
+
+\subsection{The policy that passed its own gate}
+\label{sec:fail3well}
+
+The 160$\times$96 optimization settled on a three-well policy at
+$5\ \mathrm{m^3/d}$ per well with test cost $J=419{,}550$ and reliability
+$0.9625$ on the torch path---above the $0.94$ gate. Re-scored on the NumPy
+reference, the same policy gave $J=419{,}279$ and reliability $0.90$, which
+fails. The tail scenarios diverged between backends: $M=8$ parity was exact,
+but some high-pumping tail scenarios were not.
+
+The robust frontier is four wells at $J=437{,}964$ and reliability $0.975$,
+about 4\% more expensive than three wells and still 16\% cheaper than uniform
+$5\ \mathrm{m^3/d}$. The permanent rule is that any three-well policy must be
+re-scored on NumPy before it is reported. The deeper lesson is about SAA: with
+$M_{\text{train}}=40$, the optimizer can overfit the very tail the chance
+constraint is supposed to control.
+
+\subsection{The residual maximum is not a physics error}
+\label{sec:failres}
+
+The hard-BC ansatz has $u_\tau$ carrying $s'(\tau)=e^{-\tau/\varepsilon}/
+\varepsilon$, so at the corner $|R|=1/\varepsilon=10^{3}$. It is identical at
+initialization and after training, and on every seed. The first reading was
+``the residual is huge at the inlet''; the correct reading is ``the ansatz has a
+structural floor, and a global maximum is the wrong diagnostic''. The fix was
+documentation and a band-mean diagnostic, not a code change. This is a case
+where the artifact was correct and the interpretation was wrong---the opposite
+failure mode from the FNO.
+
+\subsection{Measure the claim before optimizing it}
+\label{sec:failcost}
+
+The optimization plan assumed roughly $2{,}400$ batched matrix--vector products
+per evaluation and a $5\times$ speedup from removing per-step kernel launches.
+Instrumenting \code{bicgstab\_solve} found $4{,}022$ matvecs per evaluation,
+$40.2$ per solve, $1.7\times$ the assumption. The speedup may still be available,
+but it cannot be claimed until the arithmetic change is implemented and the
+parity gate passes. A related measurement killed the accelerator assumption: at
+this geometry an A100 was \emph{no faster} than a T4, because the cost is fixed
+launch overhead rather than arithmetic throughput. The guard is cultural and now
+explicit in \code{Conclusions.md}: do not land an unmeasured speedup.

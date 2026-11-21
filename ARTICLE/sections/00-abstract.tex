@@ -1,0 +1,31 @@
+% ======================================================================
+% 00-abstract.tex
+% ======================================================================
+\begin{abstract}
+\noindent
+Research code usually becomes reusable by accident, if at all. We report a
+different path: a groundwater-remediation project in which the code was made
+reusable \emph{by construction}, one failure at a time, with an AI coding agent
+(the Pi harness running DeepSeek models) doing most of the implementation,
+testing and record-keeping. The scientific stack is a verified
+advection--dispersion sandbox, a batched finite-volume Darcy/transport solver, a
+chance-constrained pump-and-treat optimizer, and 1D/2D/3D experiments.
+The reusable artifacts are less glamorous: one NumPy reference implementation
+with a parity-tested torch backend, configuration manifests that record seed,
+device, dtype and git revision, gate suites that turn physical assumptions into
+go/no-go conditions, a seed-sweep harness that reports medians with their spread,
+and an artifact-first remote runner that keeps the results of a run that dies.
+We show that these mechanisms changed conclusions, not just style: a
+single-seed ``32\% improvement'' became a negative result, an FNO that scored
+worse than predicting zeros became a 1.5\% operator on one seed (3\% median), a policy that passed its
+own reliability gate failed on the independent NumPy reference, and a 3D paper
+preset reproduced on a third machine with a different BLAS. We also report where
+the agent was confidently wrong, and argue that the useful division of labour is
+not ``human writes, AI types'' but \emph{human owns the gates, agent owns the
+iteration count, and the repository owns the memory}.
+\end{abstract}
+
+\vspace{0.5em}
+\noindent\textbf{Keywords:} research software; reproducibility; physics-informed
+neural networks; Fourier neural operators; stochastic optimization;
+AI-assisted development.

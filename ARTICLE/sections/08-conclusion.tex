@@ -1,0 +1,35 @@
+% ======================================================================
+% 08-conclusion.tex
+% ======================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+The project did not become reusable because it acquired a package layout or a
+test count. It became reusable because every failure left a guard, every guard
+left an artifact, and every artifact was written where the next session would
+look. The five mechanisms are the visible residue of that process: one reference
+implementation with a parity-tested fast path, manifests that make a run
+self-describing, gates that turn physical assumptions into go/no-go decisions, a
+statistical harness that makes a single seed embarrassing, and an artifact-first
+runner that treats the run rather than the process as the unit.
+
+The scientific results that survive are modest and specific: a 1D baseline
+reported as a median with a 7$\times$ spread; an FNO repaired from worse than
+zeros to a 3\% median; two 2D policies 1.2\% apart on different well sets with a
+400-scenario certificate; and a 3D paper preset reproduced on a third machine.
+The results that do not survive are just as useful: $\tau$-ramping, a three-well
+policy, a reported CVaR tail, and a planned GPU speedup. Keeping both lists is
+the practice.
+
+The AI contribution was real but narrower than the marketing: it made
+verification, repetition and record-keeping cheap enough to be habitual. The
+human contribution was to decide what counted as evidence. The repository
+contribution was to remember. A project that keeps all three---and writes down
+which is which---can be reused by someone who was not there.
+
+\paragraph{Code and data availability.}
+The repository contains the solvers, configs, tests, run manifests and artifacts
+referenced in this article. The reproducibility entry points are
+\code{python tests/run\_tests.py}, \code{python SCRIPTS/build\_tex.py
+--check-only}, and the per-section commands in Appendix~\ref{app:repro}. The
+article source, evidence ledger and source map are in \code{ARTICLE/}.

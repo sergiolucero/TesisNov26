@@ -1,0 +1,208 @@
+% ======================================================================
+% 04-mechanisms.tex — five mechanisms that made the code reusable
+% ======================================================================
+\section{Five mechanisms that made the code reusable}
+\label{sec:mechanisms}
+
+The project has no grand architecture. It has five mechanisms, each of which
+was added because a specific failure demanded it. We use the same template for
+each: the failure, the mechanism, what it caught, and what it cost.
+
+\subsection{One reference implementation, many backends}
+\label{sec:parity}
+
+\paragraph{Failure.} The first GPU backend was a second implementation of the
+same physics, and it silently diverged from the NumPy reference on a subset of
+scenarios. A policy could pass its own reliability gate on the torch path and
+fail it on the reference path---which is exactly what happened later to a
+three-well policy (\S\ref{sec:fail3well}).
+
+\paragraph{Mechanism.} NumPy is the reference. The torch modules
+(\code{physics/\allowbreak fv2d\_torch.py}, \code{stoch/\allowbreak saa\_torch.py}) are the fast path,
+and parity is a test, not a hope. The suite compares not only final fields but
+intermediate objects: the upwind operator against a sparse matrix, velocity
+against the reference, superposition and fixed-sign linearity, batch-axis
+independence, mass balance, and the Krylov report. Tolerances are
+$10^{-12}$--$10^{-10}$ for float64 and are tightened or relaxed by dtype, not by
+whatever makes the test pass.
+
+\begin{lstlisting}[language=Python,caption={The parity pattern: the same scenario,
+two backends, one assertion.},label={lst:parity}]
+ref = solve_transport_numpy(scenario, q)
+got = solve_transport_torch(scenario, q)
+np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-12)
+\end{lstlisting}
+
+\paragraph{What it caught.} A float32 Krylov breakdown that produced a
+non-finite residual for one candidate in a compass sweep; a tail-scenario
+divergence where the torch test reliability ($0.9625$) disagreed with NumPy
+($0.90$); and a set of CUDA-only bugs that a real L4 run exposed (device
+resolution, multi-GPU index, zip path). It also makes the fast path auditable:
+the NumPy implementation is the specification, and the torch implementation is
+allowed to be different only where the tests say so.
+
+\paragraph{Cost.} Two implementations to maintain. The mitigation is
+asymmetry: the reference is optimized for clarity, the fast path for throughput,
+and the parity suite is the contract between them.
+
+\subsection{Configuration and manifests}
+\label{sec:config}
+
+\paragraph{Failure.} A run whose result was recorded, but whose effective
+configuration could not be reconstructed: CLI flags overrode config values, a
+missing \code{-{}-config} silently fell back to defaults, and a 3.7\,MB file
+literally named \code{True} was produced by \code{-{}-save-model True}.
+
+\paragraph{Mechanism.} Every optimization experiment is a YAML file under
+\code{configs/opt/}. A missing config is an error, not a default. Every run
+writes a \code{run\_config.json} beside its outputs, recording the effective
+configuration, seed, device, dtype, git revision and metrics. The runtime log
+(\code{runs/runtimes.jsonl}) adds wall clock and evaluation count.
+
+\begin{lstlisting}[caption={The manifest is the run's identity card.}]
+{
+  "git": "1868f33",
+  "seed": {"train": 17000, "test": 710000},
+  "device": "cuda", "dtype": "float32",
+  "grid": [160, 96], "nsteps": 100,
+  "optim": {"max_iter": 5, "init_fraction": 0.1},
+  "metrics": {"test_mean_J": 428579.0, "test_reliability": 0.975}
+}
+\end{lstlisting}
+
+\paragraph{What it caught.} The difference between ``reproduce this run'' and
+``reproduce something like this run''. It also exposed a false negative: two
+replicas with different \code{optim.seed} but \code{n\_starts=1} were identical,
+because the start index consumed no RNG. That observation changed the
+multi-replica protocol.
+
+\paragraph{Cost.} One file per run. The benefit is that a result can be
+re-derived from its own directory, without a conversation or a memory of which
+flags were used.
+
+\subsection{Gates, not assertions}
+\label{sec:gates}
+
+\paragraph{Failure.} ``The forward model works'' is not a testable statement.
+Neither is ``the optimizer converged''. Without a threshold and an artifact,
+both are opinions.
+
+\paragraph{Mechanism.} Each physical assumption is a named gate with a
+threshold and an output. The 2D stack has O0--O4 (analytical flow, retained
+variance and reproducibility, mass balance and the uniform-pumping limit,
+adjoint gradient check, and the three chance-constraint formulations); the 2D
+physics has G2.1--G2.5; the 3D stack has six gates including a fresh-scenario
+reliability gate. The gate tables are reproduced in Appendix~\ref{app:gates}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+Gate & Threshold & What it protects \\
+\midrule
+O0 & Thiem head $6.9\times10^{-3}$; velocity $1.4\times10^{-12}$ &
+The flow solve is the analytical solution before any wells are added. \\
+O1 & retained variance $\ge0.95$; reproducible &
+The KL truncation represents the field it claims to represent. \\
+O2 & mass balance $\le1\%$; uniform $q$ beats no-pump &
+The transport solve conserves mass and the objective is monotone in the
+expected direction. \\
+O3 & adjoint relative error $\le10^{-6}$ &
+The gradient is the gradient of the implemented objective. \\
+O4 & all formulations select the same policy &
+The chance-constraint reformulations agree where the problem is non-degenerate. \\
+G3 & reliability $\ge1-\alpha-1\%$ on held-out scenarios &
+The policy is safe on fields it did not optimize on. \\
+\bottomrule
+\end{tabularx}
+\caption{A sample of the gate suite. The full definitions are in
+Appendix~\ref{app:gates}; artifacts are under \code{out/opt/hydrology\_gpu\_gates/}
+and \code{out3d\_colab/run\_paper/}.}
+\label{tab:gates}
+\end{table}
+
+\paragraph{What it caught.} A feasible-region saturation that made O4
+uninformative on one config; a transport Krylov residual that passed at
+$M=8$ but failed at $M=100$; and a final-test reliability gate that passed on
+torch and failed on NumPy. The gate did not prevent the bug; it made the bug
+visible before a paper did.
+
+\paragraph{Cost.} Gates are code, and they need their own maintenance. The
+project keeps them cheap by making each one a script/flag on an existing driver
+rather than a separate framework.
+
+\subsection{Statistics as infrastructure}
+\label{sec:stats}
+
+\paragraph{Failure.} At fixed hyperparameters the 1D PINN baseline spans
+$1.17\times10^{-2}$ to $8.14\times10^{-2}$ across five seeds. A single run is
+not a result; a single-seed comparison can invert the sign of a real effect.
+
+\paragraph{Mechanism.} \code{SCRIPTS/seed\_sweep.py} runs any command across a
+seed range, pulls one scalar per run from that run's JSON manifest, and reports
+median, IQR, min--max and spread. For two arms it performs a \emph{paired}
+comparison on shared seeds and refuses to compare unpaired runs. The decision
+rule is encoded: a variant counts only if it beats the baseline median by more
+than the baseline IQR. The harness prints the spread next to every median, so a
+claimed improvement is always read against the noise it must beat.
+
+\begin{lstlisting}[caption={The harness makes the statistical rule executable.}]
+$ ./SCRIPTS/seed_sweep.py --arm base --seeds 0-4 \
+    --metric metrics.regions.full --outdir runs/sweeps/base -- \
+    python3 -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
+      --outdir {outdir}/s{seed} --save-model {outdir}/s{seed}/model.pt
+...
+median 1.613e-02   IQR 2.175e-02   min 1.171e-02   max 8.144e-02   spread 7.0x
+\end{lstlisting}
+
+\paragraph{What it caught.} The $\tau$-ramp result: seed 0 showed a 32--45\%
+improvement on every region, but across five paired seeds the ramp won only
+two, with a median ratio of $1.31$ in the wrong direction ($p=0.38$). The
+harness turned a publishable-looking win into a negative result before it was
+published. It also produced the honest FNO number: the single-seed $1.46\%$ at
+250 epochs became a five-seed median of $3.02\%$ at 120 epochs
+(IQR $3.2\times10^{-3}$).
+
+\paragraph{Cost.} Five runs instead of one. On CPU that is minutes; on a GPU it
+is a budget decision, which is exactly the decision that should be explicit.
+
+\subsection{Artifact-first remote execution}
+\label{sec:remote}
+
+\paragraph{Failure.} A Colab cell streams its output only when it returns. A
+two-hour run therefore looks silent, and a run that dies takes its
+\code{/content} directory with it. One run completed an entire start and then
+died on a Krylov breakdown; \code{-{}-zip-results} ran only after a successful
+dispatch, so nothing was uploaded.
+
+\paragraph{Mechanism.} Three changes make the run, not the process, the unit:
+\begin{enumerate}
+  \item \textbf{Zip in \code{finally}.} \code{zip\_results\_safely} zips
+        whatever exists and never masks the real exception.
+  \item \textbf{Read the remote log, not the cell.} A shared helper pulls a
+        live run's log with \code{colab download}, a filesystem read that does
+        not queue behind the running cell, so a live run reports
+        \code{iter 9/40, 163/500 evals, 32.6\%} instead of ``quiet''.
+  \item \textbf{Re-score out of sample.} \code{check\_tail.py} re-evaluates a
+        finished policy on fresh scenarios, with a separate seed base, and
+        reports a Wilson interval. The certificate is not the run's own summary.
+\end{enumerate}
+
+\begin{lstlisting}[language=Python,caption={The zip belongs in a \code{finally},
+and the zip error must not replace the real one.}]
+try:
+    zip_results(args)
+except Exception as exc:          # never mask the real failure
+    print(f"warning: could not zip results: {type(exc).__name__}: {exc}")
+\end{lstlisting}
+
+\paragraph{What it caught.} The artifact loss above; a live run that was
+mistaken for idle; and a certificate that looked strong in-run
+($\Cvar_{5\%}(G)=+0.005$) but moved to $+0.616$ on scenarios no run had seen.
+The last is the most important result in the article: the run's own tail
+statistic is a property of the sample it optimized on.
+
+\paragraph{Cost.} Remote downloads are slower than reading a local file, so
+pulls are bounded (30\,s, one retry) and limited to replicas that are actually
+running. The local view is the fallback, with the reason shown inline.

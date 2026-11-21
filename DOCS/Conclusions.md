@@ -141,7 +141,7 @@ Li et al. 2021), so the spectral layers see real non-zero modes. Ablation flag:
 | :--- | ---: | ---: |
 | original (constant input only) | 0.973 | 4.4× worse than zeros |
 | constant input, 300 epochs | 0.805 plateau | no learning |
-| **coord channels, 250 epochs** | **0.0146** | **15× better** |
+| **coord channels, 250 epochs** | **0.0146** (seed 0) | 15× better |
 | coord channels, profile-only | 0.071 | learns front shape |
 
 The trivial-predictor guard added to `solve_1d_fno.py` now prints both
@@ -150,22 +150,41 @@ cannot silently ship again.
 
 **Phase 4 checks (coord channels, 120 epochs unless noted):**
 
-- *Frequency truncation* — modes 4 / 12 / 24 → 2.79% / 2.35% / 2.19%.
-  Monotone with diminishing returns; a smooth advection front needs no high `k`.
+- *Frequency truncation* — modes 4 / 12 / 24 → 2.79% / 2.35% / 2.19% **single
+  seed**; five-seed medians below (4.06% / 3.02% / 2.47%) keep the ordering and
+  the diminishing returns, at a worse absolute level.
 - *Resolution invariance* — train 128² (250 ep) → 1.46%; train 64² → 4.14%;
   train 32² → 6.92%, all evaluated at 128². Degrades gracefully, confirming the
   FNO is genuinely resolution-agnostic rather than hardcoded to a grid.
 - *Normalization* — per-channel standard-Gaussian, stats from the training split
   only (no test leakage).
 
-**Five-seed median (new).** The single-seed coord-channel numbers above
-(1.46% at 250 epochs; 2.35% at 120 epochs in the mode sweep) are one draw
-apiece. At 120 epochs across five seeds the coord-channel FNO gives median
-**3.02e-2** (IQR 3.2e-3, range 2.35e-2 … 5.98e-2) —
-`runs/sweeps/fno_coords_120ep/`. So the honest 120-epoch figure is ~3.0%
-with a ~2.5× spread; the single-seed 2.35% was a favourable seed. The
-250-epoch 1.46% still needs its own multi-seed median before it appears in
-the paper.
+**Five-seed medians (all of them).** Every FNO number above was one draw per
+configuration. Sweeping five seeds changes two of them.
+
+| arm (128², 32 scenarios) | median test rel L2 | IQR | per seed (s0…s4) | vs mean-field 0.221 |
+| :--- | ---: | ---: | :--- | ---: |
+| modes 12, 120 ep | 3.02e-2 | 2.82–3.14e-2 | 2.35, 3.02, 2.82, 3.14, 5.98 e-2 | 7.3× |
+| **modes 12, 250 ep** | **1.99e-2** | 1.68–2.14e-2 | 1.46, 1.99, 1.68, 2.14, 4.59 e-2 | **11.1×** |
+| modes 4, 120 ep | 4.06e-2 | 3.99–4.44e-2 | 2.79, 4.06, 3.99, 4.44, 7.18 e-2 | 5.4× |
+| modes 24, 120 ep | 2.47e-2 | 2.44–2.61e-2 | 2.19, 2.47, 2.61, 2.44, 5.00 e-2 | 8.9× |
+
+`runs/sweeps/fno_coords_120ep/`, `fno_coords_250ep/`, `fno_modes_120ep/`.
+
+Paired on the shared seeds: 250 ep beats 120 ep with median ratio **0.660**,
+better on **5/5** seeds; modes 24 beats modes 4 with median ratio **0.66**,
+better on **5/5**. Both effects are real and replicated — the seed spread is
+~3× within an arm, but it is the same ~3× in every arm, so it cancels in the
+paired comparison.
+
+What does *not* survive is the absolute level. **The 1.46% quoted for 250 epochs
+is seed 0, the best of the five**; the honest figure is **2.0%**, and "15× better
+than mean-field" becomes **11×**. The 120-epoch single-seed 2.35% was likewise a
+favourable draw (median 3.02%). This is the third time on this project that a
+single-seed FNO/PINN number flattered the method, which is why §8 rule 1 exists.
+
+Still single-seed and therefore still `preliminary`: the resolution-transfer
+rows (64² 4.14%, 32² 6.92%), the profile-only 0.071, and the 300-epoch plateau.
 
 ---
 
@@ -293,9 +312,11 @@ uncertainty only.
   script). It is an assembly of existing chapters, **not** a written thesis:
   there is no introduction, no related-work chapter and no conclusions chapter,
   and `results_2d.tex` covers only the 2D campaign.
-- Apply per-seed medians to the FNO sweep table — **done for the 120-epoch
-  coord-channel config** (§5, five seeds); the 250-epoch and mode-sweep rows
-  remain single-seed.
+- ~~Apply per-seed medians to the FNO sweep table~~ — **done** (2026-11-21):
+  five seeds at 120 ep, 250 ep and modes 4/12/24 (§5). The 250-epoch headline
+  fell from 1.46% to a median 1.99% (IQR 1.68–2.14e-2); the paired gains
+  (250>120, m24>m4) replicate 5/5. Resolution-transfer rows and the 300-epoch
+  plateau are still single-seed.
 - DO-lane execution of the bounded opt run to exercise the dispatch path.
 - Remove the per-step kernel launches (§9): worth ~5× on an A100, more than a
   card upgrade.

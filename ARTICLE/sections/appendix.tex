@@ -1,0 +1,125 @@
+% ======================================================================
+% appendix.tex — gates, repository map, artifacts, reproduction
+% ======================================================================
+\section{Gate definitions}
+\label{app:gates}
+
+A gate is a named threshold on a named artifact. The tables below reproduce the
+definitions used in the article; the full text is in
+\code{DOCS/2D\_plan.md}, \code{TEX/plans\_2d\_3d.tex} and
+\code{DOCS/3D\_results.md}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lXl@{}}
+\toprule
+Gate & Condition & Artifact \\
+\midrule
+O0 & Thiem head relative error $6.89\times10^{-3}$; velocity $1.4\times10^{-12}$ & \code{out/opt/hydrology\_gpu\_gates/} \\
+O1 & retained KL variance $0.9500$; $n_{KL}=1529$; reproducible & same \\
+O2 & mass balance $7.1\times10^{-15}$; uniform $q=5$ gives $J=529{,}250$, reliability $1.0$; no pump $J=317{,}653$, reliability $0.025$ & same \\
+O3 & adjoint relative error $2.6\times10^{-11}$ & same \\
+O4 & all three chance-constraint formulations select $q=5$ (saturated region, uninformative on this config) & same \\
+G2.1 & extruded 1D interior rel-$L^2\le1.5\times10^{-2}$; wall-normal gradient $\le10^{-3}$ & \code{DOCS/2D\_plan.md} \\
+G2.2 & plume-core rel-$L^2\le5\%$; mass balance $\le1\%$ & same \\
+G2.3 & head rel-$L^2\le10^{-3}$; velocity rel-$L^2\le10^{-2}$ away from wells & same \\
+G2.4 & FV observed order $\ge1.8$; PINN MMS $\le2\times10^{-2}$; held-out $K$ $\le5\%$ & same \\
+G2.5 & cleanup-time error $\le10\%$; FNO rollout error $\le5\%$; surrogate $\ge100\times$ & same \\
+G3 & KL retained variance $\ge0.95$; reproducible; mass balance $\le1\%$; test reliability $\ge1-\alpha-1\%$; improvement over no pump; no-pump reliability recorded & \code{DOCS/3D\_results.md} \\
+\bottomrule
+\end{tabularx}
+\caption{Gate definitions used by the article. A gate is go/no-go: it has a
+threshold, an artifact and a failure mode.}
+\label{tab:gates-full}
+\end{table}
+
+\section{Repository map}
+\label{app:repo}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Path & Contents \\
+\midrule
+\code{physics/} & Finite-volume flow/transport: NumPy reference and batched torch \\
+\code{stoch/} & Random fields, wells, objective, SAA, chance constraints, adjoint, optimizer, report \\
+\code{SCRIPTS/} & Entry points: solvers, drivers, sweep harness, remote runner, viewer, build script \\
+\code{configs/opt/} & Benchmark, exploration and certificate configurations \\
+\code{tests/} & Unit, gradient-check, parity and regression tests \\
+\code{DOCS/} & Plans, run log, conclusions, GPU audit, usage guide, article plan \\
+\code{TEX/} & Standalone chapters and the assembled thesis build \\
+\code{ARTICLE/} & This article: master, sections, figures, evidence ledger, source map \\
+\code{out/}, \code{runs/} & Run artifacts, manifests, sweeps, certificates, figures \\
+\bottomrule
+\end{tabularx}
+\caption{Repository layout. The rule is that everything runnable lives in
+\code{SCRIPTS/}, the packages hold libraries, and the write-ups live in
+\code{DOCS/}.}
+\label{tab:repo}
+\end{table}
+
+\section{Artifact and seed ledger}
+\label{app:tables}
+
+Every quantitative claim in \S\ref{sec:results} is listed here with its seed
+count and artifact path. This is the appendix equivalent of the repository's
+\code{EVIDENCE.md}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lXl@{}}
+\toprule
+Claim & Artifact & Seeds / $N$ \\
+\midrule
+1D full-grid median $1.61\times10^{-2}$ & \code{runs/sweeps/baseline\_n5} & 5 \\
+1D interior median $1.42\times10^{-2}$ & same & 5 \\
+FNO 120-epoch median $3.02\times10^{-2}$ & \code{runs/sweeps/fno\_coords\_120ep} & 5 \\
+FNO 250-epoch $1.46\%$ & \code{out/fno10} and run artifacts & 1 \\
+2D float64 policy $J=434{,}008$ & \code{runs/colab\_multi/20261118-114831} & 40 test \\
+2D float32 policy $J=428{,}579$ & \code{out/certified\_20261120-111849} & 40 test \\
+2D certificate $391/400$ & \code{out/cert/f32\_M400.json} & 400 \\
+2D fresh CVaR $+0.616$ & same, \code{-{}-seed-base 900000} & 400 \\
+3D paper preset $J=547{,}665.31$ & \code{out3d\_colab/run\_paper/} & 128 test \\
+3D third-machine reproduction & local run, 1014.8\,s & 128 test \\
+\bottomrule
+\end{tabularx}
+\caption{Evidence ledger. A number without a row here does not belong in
+\S\ref{sec:results}.}
+\label{tab:ledger}
+\end{table}
+
+\section{Reproduction commands}
+\label{app:repro}
+
+\begin{lstlisting}[language=bash,caption={The commands a reader needs to check
+the article's claims.}]
+# tests (172 functions across 22 modules)
+python tests/run_tests.py
+
+# LaTeX assembly checks (no compiler needed)
+python SCRIPTS/build_tex.py --check-only
+
+# 1D baseline, five seeds
+./SCRIPTS/seed_sweep.py --arm base --seeds 0-4 \
+  --metric metrics.regions.full --outdir runs/sweeps/base -- \
+  python3 -u SCRIPTS/solve_1d_pinn.py --hard-bc --eps 1e-3 \
+    --outdir {outdir}/s{seed} --save-model {outdir}/s{seed}/model.pt
+
+# 2D gate suite
+python SCRIPTS/run_optimization.py --config configs/opt/hydrology_gpu.yaml --stage gates
+
+# 3D paper preset (laptop CPU)
+python full3D_colab_run.py --preset paper --budget 15 --n-starts 2
+
+# Re-score a policy on fresh scenarios
+python SCRIPTS/check_tail.py --run out/certified_20261120-111849 \
+  --m-scen 400 --seed-base 900000
+\end{lstlisting}
+
+The article source is built with \code{make} in \code{ARTICLE/}. The evidence
+ledger is \code{ARTICLE/EVIDENCE.md}; the source map for material lifted from
+\code{TEX/} is \code{ARTICLE/SOURCE\_MAP.md}.

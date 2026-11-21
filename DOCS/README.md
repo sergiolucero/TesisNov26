@@ -100,9 +100,10 @@ GPU/Colab instructions.
 
 1. Phase 3 PINN experiments: tau-ramp / RAR, longer Adam→L-BFGS schedule,
    gradient logging.
-2. Phase 4 FNO: the coordinate-channel fix works (1.46% test rel L2, 15x better
-   than the dataset-mean baseline); repeat the mode/resolution sweeps as
-   medians over seeds. See `DOCS/Conclusions.md`.
+2. Phase 4 FNO: the coordinate-channel fix works (median 1.99e-2 test rel L2
+   over five seeds, 11x better than the dataset-mean baseline; the previously
+   quoted 1.46% was the best seed). Mode sweeps are now medians too; the
+   resolution sweeps are not. See `DOCS/Conclusions.md` §5.
 3. Complete the 2D gates G2.1–G2.5, then the 2.5D/3D gates G3.1–G3.6.
 4. Run the full stochastic benchmark with out-of-sample reliability/cost
    certificates and CVaR/cleanup-time reporting.

@@ -248,6 +248,12 @@ def run_opt(args: argparse.Namespace) -> None:
         cmd += ["--nx", str(args.nx)]
     if args.ny is not None:
         cmd += ["--ny", str(args.ny)]
+    if args.krylov_rtol is not None:
+        cmd += ["--krylov-rtol", str(args.krylov_rtol)]
+    if args.krylov_maxiter is not None:
+        cmd += ["--krylov-maxiter", str(args.krylov_maxiter)]
+    if args.allow_nonfinite:
+        cmd.append("--allow-nonfinite")
     if (args.preset in {"smoke", "quick"} or args.quick_opt) and not args.no_quick_opt:
         cmd.append("--quick")
     run(cmd)
@@ -285,6 +291,22 @@ def zip_results(args: argparse.Namespace) -> None:
                 # a mounted Drive path), where path.relative_to(ROOT) raises.
                 zf.write(path, Path(folder.name) / path.relative_to(folder))
     print(f"[collab_run] wrote {target} ({target.stat().st_size / 1e6:.2f} MB)")
+
+
+def zip_results_safely(args: argparse.Namespace) -> None:
+    """Zip whatever exists, and never replace the real error with a zip error.
+
+    Called from a ``finally``: a run that dies mid-search (a Krylov breakdown,
+    a CUDA OOM, a Colab timeout) still owns everything it computed, and the
+    one-hour GPU run that motivated this died *after* completing start 1 and
+    uploaded no artifacts at all -- ``colab download`` reported "File or
+    directory not found" and the partial ``out/`` died with the VM.
+    """
+    try:
+        zip_results(args)
+    except Exception as exc:                      # never mask the real failure
+        print(f"[collab_run] warning: could not zip results: "
+              f"{type(exc).__name__}: {exc}")
 
 
 def normalize_models(models: list[str]) -> list[str]:
@@ -340,6 +362,15 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--opt-dtype", default="float32", choices=["float32", "float64"],
                     help="Working precision of the GPU backend; float32 is the "
                          "fast screening mode, float64 matches the NumPy reference.")
+    ap.add_argument("--krylov-rtol", type=float, default=None,
+                    help="Transport Krylov relative tolerance (torch backend)")
+    ap.add_argument("--krylov-maxiter", type=int, default=None,
+                    help="Transport Krylov max iterations per time step (torch backend)")
+    ap.add_argument("--allow-nonfinite", action="store_true",
+                    help="Keep going when a single candidate's objective is "
+                         "non-finite (torch backend): it is rejected as a move "
+                         "instead of ending the run. A whole non-finite compass "
+                         "sweep is still fatal.")
     ap.add_argument("--quick-opt", action="store_true", help="Force --quick for optimization")
     ap.add_argument("--no-quick-opt", action="store_true",
                     help="Never pass --quick to the optimizer, even for the smoke/quick "
@@ -364,6 +395,49 @@ def validate(args: argparse.Namespace) -> None:
         )
 
 
+DISPATCH = {
+    "dataset": build_dataset,
+    "pinn": run_pinn,
+    "fno": run_fno,
+    "opt": run_opt,
+    "tests": run_tests,
+}
+
+
+def run_models(args: argparse.Namespace) -> None:
+    """Run each requested stage, zipping artifacts even when one raises.
+
+    The zip belongs in a ``finally``: a crash is exactly when the artifacts
+    matter most, because the VM (and with it ``--out-root``, which for Colab
+    lives under ``/content``) is about to be destroyed.  A run that died after
+    completing one of two starts uploaded nothing, and its ``out/`` went with
+    the session; ``colab download`` then reported "File or directory not
+    found" for a path that the ``--zip-results`` flag was supposed to fill.
+    """
+    for model in normalize_models(args.models):
+        print(f"\n[collab_run] === running {model} ({args.preset}) ===")
+        t_task = time.time()
+        failed = False
+        try:
+            DISPATCH[model](args)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if args.zip_results and failed:
+                zip_results_safely(args)
+        log_runtime(
+            RUNTIME_LOG, f"collab_run.py:{model}", time.time() - t_task,
+            stage=model, preset=args.preset, device=args.device,
+            gpu=args.gpu, models=" ".join(normalize_models(args.models)),
+            grid=[args.nx, args.ny, args.nt], out_root=str(Path(args.out_root)),
+        )
+
+    if args.zip_results:
+        zip_results_safely(args)
+    print("\n[collab_run] complete")
+
+
 def main() -> None:
     os.chdir(ROOT)
     args = parse_args()
@@ -382,28 +456,7 @@ def main() -> None:
         )
     args.device = device
     print(f"[collab_run] free disk at root: {shutil.disk_usage(ROOT).free / 1e9:.1f} GB")
-
-    dispatch = {
-        "dataset": build_dataset,
-        "pinn": run_pinn,
-        "fno": run_fno,
-        "opt": run_opt,
-        "tests": run_tests,
-    }
-    for model in normalize_models(args.models):
-        print(f"\n[collab_run] === running {model} ({args.preset}) ===")
-        t_task = time.time()
-        dispatch[model](args)
-        log_runtime(
-            RUNTIME_LOG, f"collab_run.py:{model}", time.time() - t_task,
-            stage=model, preset=args.preset, device=args.device,
-            gpu=args.gpu, models=" ".join(normalize_models(args.models)),
-            grid=[args.nx, args.ny, args.nt], out_root=str(Path(args.out_root)),
-        )
-
-    if args.zip_results:
-        zip_results(args)
-    print("\n[collab_run] complete")
+    run_models(args)
 
 
 if __name__ == "__main__":

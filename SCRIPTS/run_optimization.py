@@ -393,7 +393,8 @@ def run(cfg: dict, outdir: Path, stages: set[str],
         backend: str = "numpy", device: str = "auto",
         dtype: str = "float64", rtol: float | None = None,
         maxiter: int = 4000,
-        batched_search: bool | None = None) -> dict:
+        batched_search: bool | None = None,
+        allow_nonfinite: bool = False) -> dict:
     t0 = time.time()
     outdir = ensure_dir(outdir)
     ensure_dir(outdir / "figures")
@@ -460,6 +461,18 @@ def run(cfg: dict, outdir: Path, stages: set[str],
     test = make_archive(grid, aq, layout.wells, test_scen, fwd, backend=backend,
                         device=device, dtype=dtype, rtol=rtol, maxiter=maxiter,
                         label="test")
+    holdout = None
+    m_hold = int(cfg["saa"].get("M_holdout", 0) or 0)
+    if m_hold > 0 and ("opt" in stages or "all" in stages):
+        t_hold = time.time()
+        seed_hold = int(cfg["seed"].get("holdout",
+                                        int(cfg["seed"]["test"]) + 500000))
+        hold_scen = [gen.sample(seed_hold + i) for i in range(m_hold)]
+        holdout = make_archive(grid, aq, layout.wells, hold_scen, fwd,
+                               backend=backend, device=device, dtype=dtype,
+                               rtol=rtol, maxiter=maxiter, label="holdout")
+        log(f"holdout archive ready: {m_hold} held-out scenarios "
+            f"(seed {seed_hold}) in {time.time() - t_hold:.1f}s")
     log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test scenarios "
         f"in {time.time() - t_arch:.1f}s")
     if batched_search is None:
@@ -500,8 +513,10 @@ def run(cfg: dict, outdir: Path, stages: set[str],
     if "opt" in stages or "all" in stages:
         opt = cfg["optim"]
         t_stage = time.time()
+        init_fraction = float(opt.get("init_fraction", 0.5))
         log(f"stage opt: method={opt['method']} starts={opt['n_starts']} "
             f"max_iter={opt['max_iter']} max_evals={opt.get('max_evals', 2000)} "
+            f"init={init_fraction:.3g}*q_max "
             f"search={'batched' if batched_search else 'sequential'}")
 
         def opt_progress(ev: dict) -> None:
@@ -535,7 +550,38 @@ def run(cfg: dict, outdir: Path, stages: set[str],
             chance=opt["chance"],
             rho_g=float(opt["rho_g"]),
             rho_h=float(opt["rho_h"]),
+            allow_nonfinite=allow_nonfinite,
         )
+        hold_every = max(int(opt.get("holdout_every", 10)), 1)
+        hold_floor = 1.0 - float(cfg["saa"]["alpha"]) - 0.01
+        hold_checks: list[dict] = []
+
+        def on_iter(q, nit, best, start=1):
+            """Out-of-sample check of the incumbent every ``holdout_every`` sweeps.
+
+            The M=16 lesson: the training tail of a 16-scenario SAA is one
+            realization, so the search can walk into a policy that only looks
+            compliant.  One held-out evaluation costs ~M_hold/M_train of a
+            sweep, so this is affordable, and it makes the failure visible
+            while the run is still going instead of after the VM is gone.
+            """
+            if holdout is None or nit % hold_every != 0:
+                return None
+            t_check = time.time()
+            ev_h = holdout.evaluate(q, cost, keep=False)
+            summ = ev_h.summary()
+            rel = float(summ["reliability"])
+            rec = {"start": int(start), "iteration": int(nit),
+                   "evals": int(problem.n_eval), "best": float(best),
+                   "reliability": rel, "cvar_G": float(summ["cvar_G"]),
+                   "mean_J": float(summ["mean_J"]),
+                   "seconds": round(time.time() - t_check, 2)}
+            hold_checks.append(rec)
+            flag = "" if rel >= hold_floor else "   <-- BELOW TARGET"
+            log(f"  holdout it={nit:3d} rel={rel:.3f} cvarG={rec['cvar_G']:+.3f} "
+                f"J={rec['mean_J']:.6g} ({rec['seconds']:.1f}s){flag}")
+            return rec
+
         result = solve_saa(
             problem,
             method=opt["method"],
@@ -544,9 +590,15 @@ def run(cfg: dict, outdir: Path, stages: set[str],
             max_evals=int(opt.get("max_evals", 2000)),
             seed=int(opt["seed"]),
             progress=opt_progress,
+            on_iter=on_iter if holdout is not None else None,
             batched=batched_search,
+            init_fraction=init_fraction,
         )
         log(f"stage opt done in {time.time() - t_stage:.1f}s")
+        if problem.n_nonfinite:
+            log(f"warning: {problem.n_nonfinite} candidate evaluation(s) were "
+                "non-finite and were rejected as moves; a rising count means "
+                "the transport solve is breaking down (prefer --dtype float64)")
         q_star = result.q
         ev_tr = train.evaluate(q_star, cost, keep=True)
         ev_te = test.evaluate(q_star, cost, keep=True)
@@ -576,7 +628,16 @@ def run(cfg: dict, outdir: Path, stages: set[str],
             "max_mass_balance_error_test": float(
                 max(abs(d["mass_balance_error"]) for d in ev_te.details)
             ),
+            "nonfinite_candidates": int(problem.n_nonfinite),
         }
+        if hold_checks:
+            metrics["stages"]["opt"]["holdout"] = {
+                "M": m_hold,
+                "every": hold_every,
+                "checks": hold_checks,
+                "final_reliability": float(hold_checks[-1]["reliability"]),
+                "min_reliability": float(min(c["reliability"] for c in hold_checks)),
+            }
         save_json(outdir / "policy.json", {
             "q": q_star.tolist(),
             "wells": layout.wells.tolist(),
@@ -661,6 +722,14 @@ def run(cfg: dict, outdir: Path, stages: set[str],
         )
         gates["final_gap<=5%"] = abs(s["opt"]["test_gap_vs_train"]) <= 0.05
         gates["final_mass_balance<=1%"] = s["opt"]["max_mass_balance_error_test"] <= 0.01
+        hold = s["opt"].get("holdout") or {}
+        if hold.get("checks"):
+            # Independently drawn scenarios, checked during the search: a policy
+            # whose certificate depends on which sample you drew fails here.
+            gates[f"holdout_reliability>={1.0 - alpha - 0.01:.2f}"] = (
+                hold["final_reliability"] >= 1.0 - alpha - 0.01
+            )
+            gates["holdout_reliability"] = hold["final_reliability"]
     metrics["gates"] = gates
     metrics["wall_clock_s"] = time.time() - t0
     save_json(outdir / "metrics.json", metrics)
@@ -695,6 +764,11 @@ def main() -> None:
     ap.add_argument("--batched-search", dest="batched_search", action="store_true",
                     default=None,
                     help="force the batched compass sweep (default: on for torch on a GPU)")
+    ap.add_argument("--allow-nonfinite", action="store_true",
+                    help="treat a non-finite candidate objective as a rejected move "
+                         "instead of aborting the run (a whole non-finite compass "
+                         "sweep is still fatal); the count lands in "
+                         "metrics['stages']['opt']['nonfinite_candidates']")
     ap.add_argument("--no-batched-search", dest="batched_search", action="store_false",
                     help="use the sequential pattern search even with a GPU archive")
     ap.add_argument("--runtime-log", default=str(ROOT / "runs" / "runtimes.jsonl"),
@@ -726,7 +800,8 @@ def main() -> None:
     metrics = run(cfg, out, stages, backend=backend, device=args.device,
                   dtype=args.dtype, rtol=args.krylov_rtol,
                   maxiter=args.krylov_maxiter,
-                  batched_search=args.batched_search)
+                  batched_search=args.batched_search,
+                  allow_nonfinite=args.allow_nonfinite)
 
     print("\n=== gates ===")
     for k, v in metrics["gates"].items():

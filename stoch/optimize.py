@@ -18,6 +18,7 @@ Two search strategies coexist:
 from __future__ import annotations
 
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
@@ -48,6 +49,70 @@ def torch_clamp_min(x):
     return x.clamp(min=0.0)
 
 
+def _finite_or_raise(values, archive, what: str = "objective") -> None:
+    """Fail loudly on a non-finite objective instead of searching on NaN.
+
+    A stalled Krylov solve (or a NaN that slipped into a conductivity field)
+    makes every candidate compare equal, so the pattern search would burn the
+    whole evaluation budget walking a flat NaN landscape.  Measured cost of not
+    catching that: a paid GPU run spent minutes per sweep on ``best=nan``.
+    """
+    bad = [i for i, v in enumerate(np.atleast_1d(values))
+           if not np.isfinite(float(v))]
+    if not bad:
+        return
+    dev = getattr(getattr(archive, "device", None), "type", "cpu")
+    raise RuntimeError(
+        f"{what} is not finite for candidate(s) {bad[:5]} "
+        f"(backend={type(archive).__name__}, device={dev}). "
+        "Almost always a Krylov solve that did not converge: check "
+        "archive.describe()['transport_krylov'], and either raise "
+        "--krylov-maxiter, choose --dtype float64, or run --backend numpy."
+        " One bad candidate in a batched sweep is recoverable with "
+        "--allow-nonfinite."
+    )
+
+
+def nonfinite_policy(values, allow: bool, archive=None, what: str = "objective",
+                     batch: bool = False) -> tuple[np.ndarray, int]:
+    """Decide what a non-finite objective means: fatal, or a rejected move.
+
+    ``allow=False`` (default) keeps :func:`_finite_or_raise`, so a broken solve
+    stops the run instead of being searched over.
+
+    ``allow=True`` replaces the offending entries with ``+inf``.  The compass
+    acceptance test is ``fc < best - 1e-12``, so ``+inf`` can never be accepted:
+    one diverging candidate out of the ``2 * n_wells`` in a sweep is *skipped*
+    rather than killing a two-hour GPU run (measured: a float32 Krylov breakdown
+    at candidate 5 of 18 ended a run that had already produced a full start).
+
+    A whole batch coming back non-finite is still fatal: that is not one
+    unlucky candidate, it is the batched solve itself diverging, and silently
+    walking a NaN landscape wastes the same budget ``_finite_or_raise`` is
+    there to protect.
+
+    Returns ``(sanitised values, how many were non-finite)``.
+    """
+    arr = np.atleast_1d(np.asarray(values, dtype=float)).copy()
+    bad = ~np.isfinite(arr)
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return arr, 0
+    if not allow:
+        _finite_or_raise(arr, archive, what)  # raises
+    if batch and arr.size > 1 and n_bad == arr.size:
+        dev = getattr(getattr(archive, "device", None), "type", "cpu")
+        raise RuntimeError(
+            f"every candidate in a compass sweep returned a non-finite {what} "
+            f"({arr.size} of {arr.size}, backend={type(archive).__name__}, "
+            f"device={dev}). --allow-nonfinite tolerates one bad candidate, not "
+            "a diverging batched solve: check archive.describe()"
+            "['transport_krylov'], use --dtype float64, or run --backend numpy."
+        )
+    arr[bad] = np.inf
+    return arr, n_bad
+
+
 def project_capacity(
     q: np.ndarray,
     q_max: float = 50.0,
@@ -69,10 +134,18 @@ class OptResult:
     method: str
     history: list[dict] = field(default_factory=list)
     metrics: dict = field(default_factory=dict)
+    holdout: list[dict] = field(default_factory=list)
+    """Out-of-sample checks taken during the search (see ``on_iter``).
+
+    Each entry is the dict returned by the caller's hook, so a run can show the
+    incumbent's held-out reliability *while* it is being optimized instead of
+    discovering at the end that the training tail was optimistic.
+    """
 
     def to_dict(self) -> dict:
         return {"q": self.q.tolist(), "fun": self.fun, "nit": self.nit,
-                "method": self.method, "metrics": self.metrics}
+                "method": self.method, "metrics": self.metrics,
+                "holdout": self.holdout}
 
 
 class SAAProblem:
@@ -93,6 +166,7 @@ class SAAProblem:
         eps_sigmoid: float = 0.05,
         rho_g: float = 1.0,
         rho_h: float = 1.0,
+        allow_nonfinite: bool = False,
     ) -> None:
         self.archive = archive
         self.cost = cost
@@ -104,6 +178,9 @@ class SAAProblem:
         self.eps_sigmoid = eps_sigmoid
         self.rho_g = rho_g
         self.rho_h = rho_h
+        self.allow_nonfinite = bool(allow_nonfinite)
+        self.n_nonfinite = 0
+        self._nonfinite_warned = False
         self.n_wells = archive.well_xy.shape[0]
         self._cache_q: Optional[np.ndarray] = None
         self._cache_ev = None
@@ -129,11 +206,33 @@ class SAAProblem:
         ch, _ = cvar_and_weights(-ev.H, self.alpha_h)
         return cg, ch
 
+    def _sanitize(self, values, what: str = "objective",
+                  batch: bool = False) -> np.ndarray:
+        """Apply :func:`nonfinite_policy` and keep the run's own tally."""
+        clean, n_bad = nonfinite_policy(values, self.allow_nonfinite,
+                                       self.archive, what, batch)
+        if n_bad:
+            self.n_nonfinite += n_bad
+            if not self._nonfinite_warned:
+                self._nonfinite_warned = True
+                dev = getattr(getattr(self.archive, "device", None), "type", "cpu")
+                warnings.warn(
+                    f"{what} is not finite for {n_bad} candidate(s) "
+                    f"(backend={type(self.archive).__name__}, device={dev}); "
+                    "rejected and the search continues. Later occurrences are "
+                    "only counted (metrics['nonfinite_candidates']). A rising "
+                    "count means the transport solve is breaking down: prefer "
+                    "--dtype float64 or --backend numpy for the final run.",
+                    RuntimeWarning, stacklevel=3,
+                )
+        return clean
+
     def objective(self, q, keep: bool = False) -> float:
         ev = self.evaluate(q, keep=keep)
         cg, ch = self.chance_values(ev)
-        return float(ev.mean_J + self.rho_g * max(cg, 0.0) ** 2
-                     + self.rho_h * max(ch, 0.0) ** 2)
+        f = float(ev.mean_J + self.rho_g * max(cg, 0.0) ** 2
+                  + self.rho_h * max(ch, 0.0) ** 2)
+        return float(self._sanitize(f)[0])
 
     # -- batched evaluation (GPU archives) --------------------------------
     @property
@@ -171,7 +270,8 @@ class SAAProblem:
              + self.rho_g * torch_clamp_min(cg) ** 2
              + self.rho_h * torch_clamp_min(ch) ** 2)
         self.n_eval += int(Q.shape[0])
-        return f.detach().cpu().numpy(), ev
+        f_np = f.detach().cpu().numpy()
+        return self._sanitize(f_np, batch=True), ev
 
     def penalty(self, ev) -> tuple[float, float]:
         cg, ch = self.chance_values(ev)
@@ -218,6 +318,7 @@ def pattern_search(
     max_iter: int = 80,
     max_evals: int = 2000,
     progress: Optional[Callable[[dict], None]] = None,
+    on_iter: Optional[Callable[..., Optional[dict]]] = None,
 ) -> OptResult:
     """Compass/coordinate pattern search with capacity projection.
 
@@ -231,6 +332,7 @@ def pattern_search(
     best = problem.objective(q)
     step = step0 if step0 is not None else 0.25 * problem.q_max
     hist = [{"eval": 0, "f": best, "q": q.tolist()}]
+    hold_recs: list[dict] = []
     nit = 0
     evals = 1
     if progress is not None:
@@ -257,13 +359,22 @@ def pattern_search(
         nit += 1
         if not improved:
             step *= 0.5
+        if on_iter is not None:
+            extra = on_iter(q, nit, best)
+            if extra:
+                hold_recs.append(extra)
         if progress is not None:
             progress({"phase": "iter", "iteration": nit, "evals": evals,
                       "step": step, "best": best,
                       "elapsed": time.time() - t0})
     ev = problem.evaluate(q, keep=False)
+    metrics = ev.summary()
+    # getattr: duck-typed problems (the tests use one) need not track this.
+    n_bad = int(getattr(problem, "n_nonfinite", 0))
+    if n_bad:
+        metrics["nonfinite_candidates"] = n_bad
     return OptResult(q=q, fun=best, nit=nit, method="pattern", history=hist,
-                     metrics=ev.summary())
+                     metrics=metrics, holdout=hold_recs)
 
 
 def pattern_search_batched(
@@ -274,6 +385,7 @@ def pattern_search_batched(
     max_iter: int = 80,
     max_evals: int = 2000,
     progress: Optional[Callable[[dict], None]] = None,
+    on_iter: Optional[Callable[..., Optional[dict]]] = None,
 ) -> OptResult:
     """Generalized pattern search on a batch-capable (GPU) archive.
 
@@ -299,6 +411,7 @@ def pattern_search_batched(
     best = problem.objective(q)
     step = step0 if step0 is not None else 0.25 * problem.q_max
     hist = [{"eval": 0, "f": best, "q": q.tolist()}]
+    hold_recs: list[dict] = []
     nit = 0
     evals = 1
     if progress is not None:
@@ -335,6 +448,10 @@ def pattern_search_batched(
         else:
             step *= 0.5
         nit += 1
+        if on_iter is not None:
+            extra = on_iter(q, nit, best)
+            if extra:
+                hold_recs.append(extra)
         if progress is not None:
             progress({"phase": "iter", "iteration": nit, "evals": evals,
                       "step": step, "best": best,
@@ -342,8 +459,13 @@ def pattern_search_batched(
                       "compass": len(cands), "improved": improved})
 
     ev = problem.evaluate(q, keep=False)
+    metrics = ev.summary()
+    # getattr: duck-typed problems (the tests use one) need not track this.
+    n_bad = int(getattr(problem, "n_nonfinite", 0))
+    if n_bad:
+        metrics["nonfinite_candidates"] = n_bad
     return OptResult(q=q, fun=best, nit=nit, method="pattern-batched", history=hist,
-                     metrics=ev.summary())
+                     metrics=metrics, holdout=hold_recs)
 
 
 def slsqp_adjoint(
@@ -391,10 +513,18 @@ def multi_start(
     method: str = "pattern",
     seed: int = 0,
     progress: Optional[Callable[[dict], None]] = None,
+    on_iter: Optional[Callable[..., Optional[dict]]] = None,
     batched: Optional[bool] = None,
+    init_fraction: float = 0.5,
     **kwargs,
 ) -> OptResult:
     """Random feasible starts, keep the best penalised objective.
+
+    ``init_fraction`` sets the first (deterministic) start to
+    ``init_fraction * q_max`` on every well.  The default 0.5 is the legacy
+    behaviour; a lower value such as 0.1 starts from a cheap, usually feasible
+    uniform policy instead of a near-capacity one, which matters when each
+    pattern sweep can move only one well.
 
     ``batched`` selects the search variant: ``None`` (default) uses the batched
     compass sweep whenever the archive supports it, ``False`` forces the
@@ -414,8 +544,15 @@ def multi_start(
     best: Optional[OptResult] = None
     results = []
     for k in range(n_starts):
+        start_no = k + 1
+
+        def _iter(q, nit, best, _start=start_no):
+            if on_iter is None:
+                return None  # pragma: no cover - guarded by callers
+            return on_iter(q, nit, best, start=_start)
+
         if k == 0:
-            q0 = np.full(problem.n_wells, 0.5 * problem.q_max)
+            q0 = np.full(problem.n_wells, float(init_fraction) * problem.q_max)
         else:
             w = rng.random(problem.n_wells) + 0.1
             q0 = w / w.sum() * rng.uniform(0.2, 1.0) * problem.Q_max
@@ -426,6 +563,7 @@ def multi_start(
             kw = {key: val for key, val in kwargs.items()
                   if key in ("step0", "tol", "max_iter", "max_evals")}
             kw["progress"] = progress
+            kw["on_iter"] = _iter
             r = (pattern_search_batched if batched else pattern_search)(problem, q0, **kw)
         elif method == "slsqp":
             kw = {key: val for key, val in kwargs.items() if key in ("max_iter", "ftol")}
@@ -440,6 +578,16 @@ def multi_start(
         if best is None or r.fun < best.fun:
             best = r
     assert best is not None
+    if not np.isfinite(best.fun):
+        raise RuntimeError(
+            f"every start returned a non-finite objective ({n_starts} starts, "
+            f"{int(getattr(problem, 'n_nonfinite', 0))} non-finite candidates rejected). "
+            "--allow-nonfinite keeps one diverging candidate from ending a run, "
+            "but it cannot rescue a backend that produces no finite numbers: "
+            "check archive.describe()['transport_krylov'], use --dtype float64, "
+            "or run --backend numpy."
+        )
+    best.holdout = [h for r in results for h in r.holdout]
     best.metrics["multi_start_spread"] = float(np.std([r.fun for r in results]))
     best.metrics["multi_start_best"] = float(np.min([r.fun for r in results]))
     return best

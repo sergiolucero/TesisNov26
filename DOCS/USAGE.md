@@ -235,6 +235,7 @@ python3 -u SCRIPTS/run_optimization.py --quick --stage opt \
 | `--krylov-rtol` | per dtype | `1e-11` (float64) / `1e-6` (float32) |
 | `--krylov-maxiter` | `4000` | cap per time step |
 | `--[no-]batched-search` | on for a GPU | batched compass sweep vs. sequential pattern search |
+| `--allow-nonfinite` | off | one candidate whose objective is non-finite is rejected as a move instead of ending the run (a whole non-finite sweep stays fatal); the count lands in `metrics['stages']['opt']['nonfinite_candidates']` |
 
 The choice is recorded in `metrics.json` under `backend` (including the GPU
 name, the flow-solve Krylov report and whether every solve converged) and in

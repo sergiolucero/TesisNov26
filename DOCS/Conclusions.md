@@ -480,3 +480,27 @@ gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
 `SCRIPTS/bench_backend.py`, `tests/test_fv2d_torch.py`,
 `tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
 Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*
+
+**Update (2026-11-21): the launch count, measured.** The estimate above
+("~100 time steps × ~24 dependent BiCGSTAB iterations") was a reading of the
+code, not a measurement. Instrumenting `bicgstab_solve` in
+`physics/fv2d_torch.py` and running one evaluation of the paper geometry
+(80×40, `nsteps=100`, `M=8`, float64, CPU) gives **100 solves and 4022 batched
+matvecs — 40.2 matvecs per solve**, i.e. ~4000 dependent kernel launches per
+evaluation rather than the ~2400 assumed. The launch budget is 1.7× worse than
+the estimate, so the 81 %-overhead figure is if anything optimistic; it is not
+inflation.
+
+What the 5× therefore requires, concretely: each BiCGSTAB iteration currently
+issues ~10 small kernels (`_dot`, `_scale`, stencil apply, axpy) before the next
+iteration can start, and the time loop makes the whole sequence sequential
+(`transport_batch`, the `for k in range(nsteps)` at `physics/fv2d_torch.py:1123`).
+Either fuse the recurrence so an iteration is one or two kernels
+(`torch.compile` around the recurrence body is the cheapest form — inductor is
+available here and gcc is present, but the numerics change reduction order, so
+parity must be re-gated: field error against NumPy plus the 1e-6 mass balance,
+both already in `--verify`), or replace the iteration with a banded/scan solve.
+Neither is a refactor: both change the arithmetic, which is why the 5× stays
+**unverified** until measured on a T4/A100 -- the recipe is the existing
+`wall = 1.52 s + 8.9 ms × M` sweep run twice, flag off and on, at `M=18` and
+`M=40`. Do not quote the 5× in a paper before that.

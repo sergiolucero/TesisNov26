@@ -62,6 +62,16 @@ objective is flat along the direction "which two or three of the nine wells carr
 the duty". Multi-start at this geometry therefore samples *near-equivalent
 policies*, not cost.
 
+**Accepted answer.** The float32 policy (2 wells, J = 428,592 train / 428,579
+test) is the reported result for this geometry. The reasons not to keep searching
+are the ones above: the two independent backends land 1.2% apart on *different*
+well subsets, a fresh draw reproduces J to 0.02% (§2.2), and the compass search
+had already passed the point where the step size, not the budget, decides the
+outcome. If the flat direction ever has to be resolved, the experiment is a
+*different* one — several replicas with offset scenario seeds compared on
+out-of-sample J — not more evaluations at seed 0, which is exactly what the
+crashed two-start run (`DOCS/GPU.md` §6) established.
+
 ### 2.2 Out-of-sample certificate with Wilson intervals
 
 Combining the two runs would be wrong (different scenarios), so each policy was

@@ -208,6 +208,14 @@ class TorchArchive:
             self.flow.b * float(aquifer.R) * self.flow.phi_flat * grid.cell_volume
         ).reshape(self.M, grid.n)
 
+        # Transport convergence bookkeeping: a sweep that silently stops at
+        # ``maxiter`` produces a wrong objective, so it is counted here, warned
+        # about once, and reported through describe()/metrics.json.
+        self.krylov_solves = 0
+        self.krylov_converged = 0
+        self.krylov_stalled = 0
+        self._warned_krylov = False
+
     # -- basic properties -------------------------------------------------
     def __len__(self) -> int:
         return len(self.scenarios)
@@ -219,6 +227,23 @@ class TorchArchive:
     @property
     def n_wells(self) -> int:
         return self.resp.n_wells
+
+    def _record_krylov(self, report) -> None:
+        """Accumulate transport convergence statistics and warn once."""
+        self.krylov_solves += int(report.solves)
+        if report.converged:
+            self.krylov_converged += int(report.solves)
+        if report.stalled:
+            self.krylov_stalled += 1
+        if not report.converged and not self._warned_krylov:
+            self._warned_krylov = True
+            print(
+                f"[torch] warning: {self.label} transport Krylov did not converge "
+                f"(worst residual {report.worst_residual:.2e}, "
+                f"{report.worst_iterations} iterations, stalled={report.stalled}). "
+                f"Objectives built from it are inaccurate; raise --krylov-maxiter, "
+                f"loosen --krylov-rtol, or use --backend numpy."
+            )
 
     def describe(self) -> dict:
         props = {}
@@ -238,6 +263,12 @@ class TorchArchive:
             "wells": self.n_wells,
             "grid": [self.grid.nx, self.grid.ny],
             "flow_krylov": self.resp.report.as_dict(),
+            "transport_krylov": {
+                "solves": self.krylov_solves,
+                "converged": self.krylov_converged,
+                "stalled": self.krylov_stalled,
+                "ok": self.krylov_solves == self.krylov_converged,
+            },
             **props,
         }
 
@@ -259,7 +290,7 @@ class TorchArchive:
     def transport(self, Q: torch.Tensor, store_fields: bool = False) -> TransportBatch:
         """Batched transport solve for rate vectors ``Q`` (shape ``(S, nw)``)."""
         fwd = self.fwd
-        return transport_batch(
+        batch = transport_batch(
             self.grid,
             self.aquifer,
             self.flow,
@@ -275,6 +306,8 @@ class TorchArchive:
             rtol=self.rtol,
             maxiter=self.maxiter,
         )
+        self._record_krylov(batch.report)
+        return batch
 
     def evaluate_many(
         self,

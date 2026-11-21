@@ -236,6 +236,39 @@ little here, while reducing the *number* of Krylov iterations (better
 preconditioning, a looser tolerance) or increasing batching further are the
 levers that would actually pay. The `bench` numbers above are the evidence.
 
+### But float64 flips it: the A100 is 6.4x the T4
+
+The A100 verdict above is a **float32** verdict, and it only holds while the work
+is launch-bound. At 160x96 the float64 path (which section 6 shows is mandatory
+at this geometry) is throughput-bound instead, and there the bigger card wins by
+a wide margin. Same config, same M_train=100 / M_test=40, same seeds, same
+9-well layout, same `--opt-backend torch --opt-dtype float64`:
+
+| | T4 (15.6 GB, 40 SM) | A100-SXM4-80GB | ratio |
+| :--- | ---: | ---: | ---: |
+| archives (100 train + 40 test) | 38.0 s | **7.6 s** | 5.0x |
+| flow CG (800 iterations, one-time) | ~30 s | ~6 s | 5x |
+| one SAA evaluation (M=100) | 38.1 s | **5.89 s** | 6.5x |
+| one 19-candidate compass sweep | 680 s | **106 s** | 6.4x |
+| per candidate*scenario | 0.381 s | **0.059 s** | 6.5x |
+| best objective at 100 evals | 821,250 | 821,250 | identical |
+| gates | pass | pass | - |
+
+The trajectory is bit-for-bit the same (both took `f = 821250` at the 100-eval
+mark), so the 6.4x is not bought with a wrong answer. The gap versus the ~32x
+fp64 FLOPS ratio (0.3 vs 9.7 TFLOPS) shows the workload is still partly
+latency/bandwidth-bound, but fp64 throughput now clearly matters - the opposite
+of the float32 finding.
+
+Practical rule: **choose the card by dtype.** float32 screening -> the T4 is as
+good as anything and 6x cheaper per hour. float64 (mandatory at 160x96 and
+above) -> A100/H100 pay off as soon as their hourly price is under ~6x the T4's;
+if they cost more than that, they are break-even on wall clock but still buy 85
+GB of VRAM (M_train 400 fits) and 6.4x lower latency per experiment.
+
+This also re-prices the queue: the "finish the M=100 search" run (400 evals) is
+**~40 min on an A100** versus ~4 h on a T4.
+
 ### It is the fixed overhead, not the hardware (measured on A100)
 
 A100 vs T4 on the identical full geometry is the decisive comparison, and it
@@ -338,3 +371,250 @@ If a future run becomes bottlenecked in the discrete adjoint (SLSQP at large
 exact transpose of the transport operator (`tests/test_fv2d_torch.py::
 TestAdvectionStencil` checks that against the sparse transpose), so the adjoint
 recursion is ready to be batched.
+
+## 6. The float32 transport breakdown: found and fixed
+
+At 160x96 the batched float32 transport used to lose the residual entirely for a
+few compass candidates, the first sweep returned a non-finite objective, and the
+only workaround was float64 (2.8x more expensive per candidate*scenario on a
+T4). The cause is now identified and the fix is in `physics/fv2d_torch.py`.
+
+**Root cause: the scalar reductions, not the stencil.** A BiCGSTAB iteration
+needs `<rhat, r>`, `||r||`, `||s||` and the `beta`/`omega` ratios, all of which
+sum ~1e4-1e5 similar-magnitude terms. In float32 that reduction error is what
+decides whether the residual can reach 1e-5 at all, and it is device-dependent:
+on a T4 the batched solve then stalls, the per-iteration residual becomes NaN,
+and the max-over-batch convergence test poisons every candidate in the batch.
+
+**Fix: promote only the scalars to float64** (`_dot`, `_flat_norm`) while the
+work vectors and the stencil matvec stay float32, so the cost centre is
+untouched. Module switch `SCALAR_FP64` (env `TESIS_SCALAR_FP64=0`) keeps the old
+behaviour for A/B measurement.
+
+Measured on a T4, 160x96, M=40, S=19, nsteps=100, float32, 4 repetitions each
+(the failure is deterministic per setting, and reproducible both ways):
+
+| setting | transport residual | converged | finite candidates |
+| :--- | :--- | :--- | :--- |
+| `TESIS_SCALAR_FP64=0` | `nan` | False (stalled) | 18/19, 4/4 reps |
+| `TESIS_SCALAR_FP64=1` (default) | 9.99e-06 | True (33 it/solve) | 19/19, 4/4 reps |
+
+The healthy iteration count is unchanged (33.2 iters/solve with and without the
+promotion when the plain path happens to survive), so the fix costs accuracy
+nothing and buys the whole float32 mode back:
+
+| T4, 160x96, batched | float64 | float32 (fixed) |
+| :--- | ---: | ---: |
+| per candidate*scenario | 0.381 s | **0.138 s** |
+| one 19-candidate sweep, M=40 | 272 s | 105 s |
+| one 19-candidate sweep, M=100 | 680 s | ~262 s |
+
+An end-to-end float32 optimization run at M_train=M_test=M_holdout=40 now
+completes with finite objectives, passing gates and a clean metrics file
+(527.9 s, 105 s per sweep).
+
+**Scope limit, measured.** The promotion fixes M=40 but not M=100: a float32 run
+at M=100 (batch of 1900 systems) still lost one of 19 candidates to a NaN
+residual after 28 iterations, i.e. at that batch size the float32 recurrence
+itself, not just the reductions, is not accurate enough. So the honest rule is
+
+| batch M (160x96) | float32 |
+| :--- | :--- |
+| <= 40 | usable (4/4 clean runs, 2.8x cheaper than float64) |
+| 100 | still unsafe -- use float64 |
+
+Going further would mean keeping the whole BiCGSTAB recurrence (vectors p, v, s,
+t and rho/alpha/omega) in float64 and using the float32 stencil only as a
+preconditioned operator; that is a bigger change and is not done.
+
+The failure was nevertheless *cheap* this time: the warning fired, and
+`_finite_or_raise` killed the run inside the first sweep (8 min of VM) instead of
+letting it burn 45 min on NaN objectives -- which is what the guard is for.
+
+### Mixed-precision recurrence: 2.5x, trajectory-identical (M=100)
+
+The next step up from promoting the scalars is promoting the *recurrence*:
+`MIXED_KRYLOV` (env `TESIS_MIXED_KRYLOV=0` to disable) keeps `x, r, rhat, v, p,
+s, t` and `rho/alpha/omega/beta` in float64 while casting only each matvec input
+down to float32 and the result back up -- so the stencil apply stays float32 and
+the ~8 work vectors pay about 10% extra elementwise traffic.
+
+Measured on a T4 at 160x96, M=100, S=19, nsteps=100, float32:
+
+| | per candidate*scenario | one 19-candidate sweep |
+| :--- | ---: | ---: |
+| float64 | 0.381 s | ~700 s |
+| float32, fp64 scalars only | 0.138 s | -- (NaN at M=100) |
+| float32, mixed recurrence | **0.152 s** | **288 s** |
+
+and the quality check that matters: the mixed float32 run reproduced the float64
+best-value trajectory **bit-for-bit** over its first four sweeps
+(`1.04938e6 -> 1.00375e6 -> 958125 -> 912500`, 76 evaluations), with no
+non-finite objective -- the exact sequence the float64 T4 and A100 runs produced.
+
+**Completed end-to-end.** Run `20261120-111849` is the same job as the float64
+certifying run (`M_train=100`, `M_test=40`, `M_holdout=40`, 1 start, 400
+evaluations) in mixed float32:
+
+| | float64 (`20261118-114831`) | mixed float32 (`20261120-111849`) |
+| :--- | ---: | ---: |
+| wall clock | 4.14 h (14,756 s) | **1.67 h (5,996 s)** |
+| evaluations | 401 | 401 |
+| q* | `[0,9.72,5.86,0,3.38,0,0,0,0]`, 3 wells | `[0,9.33,8.16,0,0,0,0,0,0]`, 2 wells |
+| J (train/test) | 433,945 / 434,008 | **428,592 / 428,579** |
+| CVaR-5% G | +0.018 / -0.007 | +0.005 / +0.009 |
+| reliability | 0.990 / 0.975 | 0.990 / 0.975 |
+| holdout | 1.000 | 0.975 |
+| mass balance | 4.2e-11 | 2.3e-05 |
+| gates | all pass | all pass |
+
+So the mixed path is **2.46x faster with no loss of quality**, and the two runs
+agree to 1.2% in cost while picking *different well subsets*. That is a result in
+its own right: near the optimum the objective is flat along the direction
+"which two or three of the nine wells carry the duty", so multi-start here is a
+search over near-equivalent policies rather than over cost.
+
+Two honest caveats. (1) The float32 mass balance is 2.3e-05 versus 4.2e-11 --
+that is the fp32 accumulation floor, and it passes the 1% gate with five orders
+of margin but means mass-conservation *identities* must stay float64. (2) The
+float32 search accepted/rejected on a noisier objective, so it converged at
+`nit~21` instead of `nit=28`: fine-step compass decisions are decided by
+differences of order the float32 noise, which is why it landed on the other
+policy. Use float64 when you need to *reproduce* a specific trajectory.
+
+**Update (2026-11-21): still not safe at M=100 over a long search.** Run
+`20261121-111857` used the mixed path and lost a candidate 174 evaluations in, at
+start 2 iter 7 -> 8: `worst residual nan, 51 iterations, stalled=True`, then
+`RuntimeError: objective is not finite for candidate(s) [5]`. Start 1 had already
+completed 250 clean evaluations, so this is not the "first sweep" failure the
+promotion fixed -- it is a low-probability NaN that a 400-evaluation run survived
+(`20261120-111849`) and a 500-evaluation one did not. Treat mixed float32 at
+M=100 as *usually* fine, occasionally fatal: screening yes, anything you will
+report no.
+
+Two consequences in the driver. (1) `--zip-results` now zips in a `finally`: this
+run uploaded nothing, because the zip was written only after a *successful*
+dispatch, so the completed start 1 died with the VM. (2) `--allow-nonfinite`
+(opt-in, off by default) turns one diverging candidate into a rejected move --
+`+inf` can never pass the compass acceptance test `fc < best - 1e-12` -- while an
+entire non-finite sweep stays fatal, because that is the batched solve diverging
+and not one unlucky candidate.
+
+**A second fix that mattered as much.** The first float32 run finished its
+optimization and then died in `plot_distributions`: `np.histogram` refuses to
+build 20 bins over the tiny data range of float32 objective values, and that
+`ValueError` aborted the run *after* the search succeeded and *before*
+`metrics.json` was written, i.e. an entire GPU run produced no numbers. The plot
+helper now casts to float64 first (`tests/test_report_float32.py`).
+
+## 7. Three complete runs on the 160x96 hydrology (T4, float64)
+
+Section 6 says float64 is the only trustworthy mode at this geometry; these runs
+prove it end to end and then isolate the *statistical* limit that a GPU does not
+fix. All use `configs/opt/hydrology_gpu.yaml` (ly 120 m, `sigma_G=0.65`,
+`ell=15 m`, 160x96 = 15,360 cells, dx = dy = 1.25 m), `--opt-backend torch
+--opt-dtype float64`, M_test 40, seeds train 7000 / test 700000, and the same
+9-well layout.
+
+| run | M_train | budget | wall | q* (m3/d) | J (train) | test reliability |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `20261117-171411` | 16 | 2 x 126 evals (7 sweeps) | 26 min | `[25.5,0.3,4.9,4.0,6.7,35.1,12.0,3.8,9.8]`, 102.1 | 737,707 | 1.000 |
+| `20261118-041443` | 16 | 2 x 300 evals (19/18 sweeps) | 60 min | `[0,0.3,4.9,4.0,6.7,0,0,0,0]`, 15.9 | 423,264 | **0.925 (gate FAILS)** |
+| `20261118-052228` | **100** | 1 x 200 evals (12 sweeps) | 2.15 h | `[0,9.72,9.72,9.72,9.72,0,0,9.72,9.72]`, 58.3 | **577,917** | **1.000 (all gates pass)** |
+| `20261118-114831` | **100** | 1 x 400 evals (**28 sweeps, converged**) | 4.14 h | `[0,9.72,5.86,0,3.38,0,0,0,0]`, 19.0 | **433,945** | **0.975, holdout 1.000 (all gates pass)** |
+| `20261120-111849` | **100** | 1 x 400 evals, **float32 mixed** | **1.67 h** | `[0,9.33,8.16,0,0,0,0,0,0]`, 17.5 | **428,592** | **0.975, holdout 0.975 (all gates pass)** |
+
+The first two runs found the same first four well rates; the longer search then
+shut the large pumps off, cutting J by 43% — admissible only because the
+16-scenario tail of the *training* set said so. That policy does not survive
+held-out data. The 100-scenario run instead settled on six wells at 9.72 m3/d
+each, J = 577,917, plume peak 42.1 -> 0.446 mg/L on the plotted scenario, and it
+passes every gate (O0, gap 1e-12, mass balance 7.7e-11, reliability 1.000).
+
+### The converged policy is certified, and it is barely more expensive
+
+Run `20261118-114831` is the one that answers the research question. The compass
+step went 12.5 -> 6.25 -> 3.12 -> 1.56 -> 0.78 -> 0.39 -> 0.195 -> 0.098 and the
+loop stopped at `nit=28` with 401 evaluations (4.14 h on a T4), i.e. it converged
+rather than running out of budget:
+
+| | value |
+| :--- | :--- |
+| q* | `[0, 9.72, 5.86, 0, 3.38, 0, 0, 0, 0]` m3/d = 18.96 total, 3 active wells |
+| J | 433,945 train / 434,008 test (gap 0.015%) |
+| CVaR-5% G | +0.018 train / -0.007 test |
+| reliability | 0.990 train / **0.975 test** (gate needs >= 0.94) |
+| cleanup time | 36 d train / 91 d test |
+| holdout | 3 in-run checks, all reliability **1.000** (min = 1.000) |
+| mass balance | 4.2e-11 |
+| gates | all pass, including the new `holdout_reliability` gate |
+
+Two things matter here. First, the solution sits exactly on the constraint
+(`CVaR ~ 0` from both sides), which is what an optimum of a chance-constrained
+problem must do - this is not a policy that happens to be safe, it is the
+cheapest one that is safe. Second, **the certified policy costs only 2.5% more J
+than the uncertifiable one**: the M=16 run's 423,264 buys a policy that fails
+out of sample (0.925 on its own test set), while 433,945 is certified by 100
+training scenarios, 40 held-out test scenarios and 3 in-run holdout checks.
+Cheap-but-fragile was never actually cheap.
+
+This also settles the sample-size question quantitatively: 400 evaluations per
+start at M_train=100 is enough to converge at this geometry, and the holdout
+guard (40 scenarios, `optim.holdout_every=8`, 14 s per check on a T4) is what
+would have caught the failure mode while the run was still alive.
+
+### Independent verification (`SCRIPTS/check_tail.py`)
+
+A run's own `metrics.json` should not be the only witness, so every policy is
+re-evaluated with the NumPy reference backend on fresh scenarios:
+
+| policy | recomputed J | CVaR-5% G | reliability | run's own rows |
+| :--- | :--- | :--- | :--- | :--- |
+| `20261118-041443` q* (M=16, 300 evals) | 422,900 (M=100) | **+1.920** | 0.950 (5/100) | train -0.045 / 1.000, test +1.863 / 0.925 |
+| `20261118-052228` q* (M=100, 200 evals) | 577,916.7 | **-1.000** | 1.000 (0/100) | train and test agree exactly |
+
+Two things worth reading off this table. The M=100 policy is compliant at every
+sample size checked (M = 16, 20, 40, 100: zero violations), so it is certified
+rather than lucky. The M=16 policy sits *on* the boundary and the answer flips
+with the sample: its first 16 training scenarios give CVaR -0.045 and zero
+violations (which is exactly what the run reported - the run was right), its
+40 held-out scenarios give 0.925 reliability (gate fails at < 0.94), and 100
+fresh scenarios give CVaR +1.920 with 5 violations, i.e. 0.950 - back above the
+gate. A policy whose certificate depends on which 40-100 scenarios you draw is
+not certifiable; that is the real argument for `M_train >= 100`, stronger than
+"the M=16 run overfit".
+
+**A verifier bug worth remembering.** The first version of `check_tail.py`
+(and `probe_krylov.py`) rebuilt the grid by hand as `Grid(ny, nx, lx, ly)`, but
+`physics.fv2d.Grid` is `(nx, ny, lx, ly)`. The result was a transposed 160x96
+grid with dx = 2.08 m / dy = 0.75 m instead of 1.25 m / 1.25 m, `n_kl` 1392
+instead of 1529, and a completely different scenario set - which made a correct
+run look unreproducible for an afternoon. Both scripts now import
+`run_optimization.make_grid/make_kl/base_aquifer/make_forward/make_cost`
+instead of re-deriving them, and the M=16 run reproduces to the last digit
+(`J 423,264.1`, `CVaR -0.045`, first 16 scenarios). Rule: a verification tool
+must reconstruct the run through the run's own constructors, never by hand.
+
+### Planning rules that came out of these runs
+
+1. **Budget first.** At 160x96 the M=100 search needs 28 sweeps to converge
+   (401 evaluations, step 12.5 -> 0.098); at 200 evaluations it was still taking
+   full 12.5 steps. Budget `max_evals >= 400` per start, and note the sweeps get
+   cheaper as the step shrinks (~700 s at 12.5, ~310 s at 0.78) because most
+   moves hit the capacity bounds.
+2. **Then scenarios.** `alpha*M_train >= 5`, otherwise the chance constraint is
+   fitted to one realization. At `alpha=0.05` that means `M_train >= 100`; 16
+   (`alpha*M = 0.8`, i.e. the degenerate one-sample tail) produced a policy whose
+   certificate flips between 0.925 and 0.950 depending on the draw, and the
+   paper config's 40 (tail of 2) is thin.
+3. **Judge adequacy on the constraint, not on J.** `rel_se_J` was 0.02-0.05% in
+   every run (the J spread collapses once the captured mass saturates), so the
+   O2 Monte-Carlo gate passes even when the CVaR estimate is badly wrong.
+4. **Cost scales with M, not with S.** A 19-candidate sweep took 105 s at M=16
+   and 680 s at M=100 (6.5 s per evaluation per 100 scenarios); the batch is
+   free, the scenarios are not.
+
+float32 at this geometry was broken when these runs were made. Section 6 now
+records the fix (float64 accumulators for the Krylov scalars), which restores
+float32 at 0.138 s per candidate*scenario instead of 0.381 s. Both runs above
+were float64 and are unaffected; the same queue in float32 is ~2.8x cheaper.

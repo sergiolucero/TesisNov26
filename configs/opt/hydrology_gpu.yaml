@@ -1,0 +1,128 @@
+# hydrology_gpu.yaml -- a *new hydrology* on a GPU-friendly grid.
+#
+# What is new relative to configs/opt/benchmark.yaml
+# --------------------------------------------------
+# The physical setting is a wider aquifer cross-section (ly 100 -> 120 m) with
+# a rougher, shorter-correlated conductivity field (sigma_G 0.5 -> 0.65,
+# ell 20 -> 15 m) and slightly weaker dispersivity (alpha_l 5 -> 4 m).  Same
+# geometric-mean conductivity, regional gradient and release rate, so the plume
+# still arrives at the compliance line inside T = 3650 d and the optimization
+# stays in the regime the paper benchmark explores -- what changes is the
+# geology (more channeling, more scenario spread) and the domain width.
+#
+# Why these dimensions are the "ideal" ones for the batched backend
+# ----------------------------------------------------------------
+# The torch backend solves a batch of (S candidates x M scenarios) systems of
+# ny*nx unknowns per implicit-Euler step, one Krylov iteration at a time, so
+# the cost that matters is (a) cells per layer, (b) cells per kernel launch and
+# (c) how well the flat cell index tiles into warps:
+#
+#   nx = 160, ny = 96       both multiples of 32 (160 = 5*32, 96 = 3*32), so a
+#                           plane of 15,360 cells is 480 full warps and no
+#                           row/plane reduction runs a partial warp.
+#   dx = dy = 1.25 m        square cells: the numerical dispersion tensor is
+#                           isotropic, so alpha_l/alpha_t mean what they say.
+#   15,360 cells            above the ~1e4-cell line where a stencil matvec
+#                           beats a splu solve (DOCS/GPU.md rule of thumb), and
+#                           ~4.8x the paper grid, so the launch overhead that
+#                           dominates a sweep is amortised over real work.
+#   ell = 15 m = 12 cells   the new correlation length is resolved, so the
+#                           field is a genuine heterogeneity rather than
+#                           grid noise.
+#   M_train = 40, nsteps = 100, S = 18 candidates per compass sweep
+#                           nsteps*M*S = 72,000 cell-blocks per sweep, i.e.
+#                           comfortably past the 1e3 threshold; peak batch
+#                           memory is ~0.5 GB in float32.
+#
+# Everything downstream (gates, objective, reporting) is configuration
+# agnostic, so this file is a drop-in --opt-config for
+# run_optimization.py / collab_run.py / multi_colab.py.
+
+domain:
+  lx: 200.0        # m
+  ly: 120.0        # m  (was 100)
+  nx: 160          # cells (dx = 1.25 m, 5*32)
+  ny: 96           # cells (dy = 1.25 m, 3*32)
+
+aquifer:
+  k0: 10.0         # m/d geometric mean (unchanged: keeps plume arrival time)
+  b: 10.0
+  phi: 0.30
+  R: 1.0
+  alpha_l: 4.0     # m  (was 5)
+  alpha_t: 0.4     # m  (was 0.5)
+  decay: 0.0
+
+flow:
+  grad: 1.0e-3
+
+random_field:
+  sigma: 0.65      # new hydrology: rougher conductivity
+  ell_x: 15.0      # m  (was 20; still 12 cells at dx = 1.25)
+  ell_y: 15.0
+  n_kl: 0          # auto-select for target_variance
+  target_variance: 0.95
+  random_source: false
+  random_gradient: false
+
+wells:
+  n: 9
+  method: hex
+  q_max: 50.0
+  Q_max: 200.0
+  eps: 1.5
+  plume_threshold: 0.05
+
+source:
+  x: 30.0
+  y: 60.0          # centred in the wider cross-section
+  q: 10.0
+  c: 100.0
+  days: 365.0
+
+compliance:
+  x: [185.0]
+  y: [60.0]
+  creg: 1.0
+  window_start: 0.8
+
+observation:
+  x: [100.0]
+  y: [60.0]
+  h_min: -10.0
+
+time:
+  dt: 36.5
+  nsteps: 100
+
+saa:
+  M_train: 40
+  M_test: 80
+  M_holdout: 40      # held-out set checked during the search (cost: ~1 eval/check)
+  alpha: 0.05
+  alpha_h: 0.01
+
+cost:
+  c_e: 1.0
+  c_w: 1.0
+  c_m: 1.0
+  c_tau: 1.0
+  c_fail: 10.0
+  eps_time: 0.05
+  time_mode: soft
+
+optim:
+  method: pattern
+  n_starts: 3
+  max_iter: 40
+  max_evals: 540      # 30 compass sweeps per start
+  rho_g: 1000000.0
+  rho_h: 1000000.0
+  chance: cvar
+  seed: 11
+
+seed:
+  train: 7000      # new realization draws, independent of the paper run
+  test: 700000
+
+plot: true

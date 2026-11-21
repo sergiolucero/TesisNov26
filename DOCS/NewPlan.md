@@ -222,11 +222,15 @@ For the tablet view, `app.py` serves the same snapshot as a rendered page:
 ```bash
 ./SCRIPTS/run_app.sh start                        # http://<tailnet-ip>:5001
 curl -sf localhost:5001/fleet             # add ?role=hub on the hub
+curl -sf localhost:5001/api/colab | jq .pipeline  # Colab pipeline as JSON
 ```
 
 `/fleet` shells out to `fleet_status.sh --json` (15 s timeout) and renders it
 server-side, so it needs no JavaScript; a failed probe shows a banner rather
-than an error page.
+than an error page. `/api/colab` returns the `/runs` snapshot as JSON with a
+`pipeline.state` field (`running`/`idle`/`finished`/`failed`/…) and a
+`progress_pct`, so a cron probe needs one `jq` expression and `curl -sf` is a
+valid health check; `?limit`, `?live=1` and `?run=<id>` narrow it.
 
 `fleet_status.sh` reports host/load/disk, Tailscale, Herdr, repo state
 (including size by filetype), and job sentinels; it exits non-zero on a failed

@@ -126,3 +126,155 @@ full fwd  : flow residual 3.1e-15, mass balance 7.3e-16, peak C 0.003 mg/L,
             J = 857750 (9 wells, 135 m3/d)
 gates     : O1_reproducible, O2_rel_se_J, O2_mass_balance, O3_adjoint_rel_error,
             O4_cvar_not_better_than_exact, O4_sigmoid_exact_feasible -- all True
+
+NEW HYDROLOGY 160x96 ON A COLAB T4 (2026-11-17/18)
+--------------------------------------------------
+Config : configs/opt/hydrology_gpu.yaml -- ly 100 -> 120 m, sigma_G 0.5 -> 0.65,
+         ell 20 -> 15 m, alpha_l 5 -> 4 m, lx 200 m, grid 160x96 = 15,360 cells
+         (dx = dy = 1.25 m, both dims multiples of 32), nsteps 100, dt 36.5 d,
+         new realisation seeds (train 7000, test 700000).
+Driver : SCRIPTS/multi_colab.py launch --gpu T4 --replicas 1 --opt-stage opt
+         -- --opt-backend torch --opt-dtype float64
+Mode   : M_train 16 / M_test 40, alpha 0.05, torch float64 on cuda, batched
+         search, flow CG 773 it @ 9.6e-12 (identical in both runs)
+
+run 20261117-171411, 2 starts x 126 evals (7 sweeps)
+  wall  : 26m23s (opt 1520 s, archives 16 s, 254 evaluations)
+  q*    : [25.5, 0.3, 4.9, 4.0, 6.7, 35.1, 12.0, 3.8, 9.8] m3/d = 102.1 total
+  J     : 737707 (pump 372707, treat 364957, residual 42.9)
+  test  : reliability 1.000, cleanup 0 d, mass balance 5.6e-11
+  note  : budget-truncated -- still accepting a full 12.5 m3/d step in sweep 7
+
+run 20261118-041443, 2 starts x 300 evals (19 and 18 sweeps)
+  wall  : 1.01 h (opt 3563 s, 602 evaluations)
+  q*    : [0, 0.3, 4.9, 4.0, 6.7, 0, 0, 0, 0] m3/d = 15.9 total, 4 active wells
+  J     : 423264 train / 423154 test (pump 58040, treat 320416, residual 44367)
+  test  : reliability 0.925 (3/40 violate), cleanup 274 d, mass balance 3.2e-11
+  gates : O0 ok, gap ok, mass balance ok, final_test_reliability >= 0.94 FALSE
+  step  : halved 12.5 -> 6.25 -> 3.12 -> 1.56 and stopped at nit=19, so 300 evals
+          per start is a converged budget and 800+ is unnecessary
+  lesson: with M_train=16, alpha*M_train = 0.8, i.e. the CVaR tail is one
+          scenario -- train CVaR(G) = -0.045 (compliant) while test CVaR(G) =
+          +1.864 (violating). The deeper search therefore trades 43% of J for an
+          out-of-sample violation. Sample adequacy must be judged on the
+          constraint, not on J (rel_se_J was 0.02-0.05% but meaningless here).
+          For alpha=0.05 budget M_train >= 100.
+  plume : contamination figure built for test scenario 0
+
+run 20261118-052228, M_train 100, 1 start x 200 evals (12 sweeps, budget-bound)
+  wall  : 2.15 h (opt 7656 s, 201 evaluations, ~680 s per 19-candidate sweep)
+  q*    : [0, 9.72, 9.72, 9.72, 9.72, 0, 0, 9.72, 9.72] m3/d = 58.33, 6 wells
+  J     : 577917 train = test (gap 1e-12)
+  test  : reliability 1.000, mean_G -1.000, cleanup 0 d, mass balance 7.7e-11
+  gates : ALL PASS (O0, gap, mass balance, final_test_reliability)
+  verify: SCRIPTS/check_tail.py reproduces J 577916.7 and CVaR(G) -1.000 on
+          fresh scenarios at M = 16/20/40/100 with zero violations -> certified
+  note  : the M16 run's 43%-cheaper policy is rejected by the same check
+          (CVaR +1.29 at M=40, 8/100 violations); see DOCS/GPU.md s7 for the
+          unreproducible train row and the sample-size rules (M_train >= 100
+          for alpha = 0.05).
+
+BACKEND/DEVICE: float64 T4 vs A100 (2026-11-18)
+-----------------------------------------------
+Identical job: configs/opt/hydrology_gpu.yaml, 160x96, M_train 100 / M_test 40,
+1 start x 100 evals, torch float64, batched search, same seeds and layout.
+
+                    T4 (15.6 GB)     A100-SXM4-80GB    ratio
+archives            38.0 s           7.6 s             5.0x
+flow CG (800 it)    ~30 s            ~6 s              5x
+SAA eval (M=100)    38.1 s           5.89 s            6.5x
+compass sweep       680 s            106 s             6.4x
+per cand*scenario   0.381 s          0.059 s           6.5x
+best @100 evals     821250           821250            identical
+gates               pass             pass               -
+
+opt stage wall: 609.8 s total on the A100 (594.7 s in the optimizer).
+Interpretation: the earlier "A100 is not faster than T4" finding was float32 and
+launch-bound; in float64 the A100 wins 6.4x, so pick the card by dtype. A 400-eval
+M=100 search is ~40 min on an A100 vs ~4 h on a T4.
+Driver wart: piping `multi_colab.py launch` into `head` kills the driver with
+SIGPIPE after the VM exists (idle billing VM). Recovered by kicking the run with
+nohup via `colab exec` and downloading artifacts.zip - see DOCS/Collab.md.
+
+FLOAT32 REPAIR + HOLDOUT GUARD (2026-11-18)
+-------------------------------------------
+Root cause of the 160x96 float32 transport NaN: the BiCGSTAB *scalars*
+(<rhat,r>, ||r||, beta/omega) were accumulated in float32; the reduction error
+sits exactly at the 1e-5 tolerance and decides convergence. Fix: promote only
+those reductions to float64 (vectors and stencil matvec stay float32), switch
+SCALAR_FP64 / TESIS_SCALAR_FP64=0 for A/B.
+
+A/B on one T4, 160x96, M=40, S=19, nsteps=100, float32, 4 reps per setting:
+  TESIS_SCALAR_FP64=0 : res=nan, converged=False, stalled, 18/19 finite -- 4/4
+  TESIS_SCALAR_FP64=1 : res=9.99e-06, converged, 33 it/solve, 19/19 finite -- 4/4
+Cost per candidate*scenario on a T4 at 160x96: float64 0.381 s, float32 0.138 s
+(2.8x). End-to-end float32 opt run (M=40): 5 sweeps, all finite, gates pass,
+results written in 527.9 s (= 105 s per 19-candidate sweep).
+
+Also fixed: plot_distributions crashed on float32 objective values (np.histogram
+refuses 20 bins over the tiny float32 range) AFTER a successful optimization and
+BEFORE metrics.json was written, so a whole GPU run produced no numbers. Cast to
+float64 in the plot helper; regression test tests/test_report_float32.py.
+
+Scope limit: the promotion fixes M=40 but NOT M=100 -- a float32 run at M=100
+(batch 1900) still lost 1/19 candidates to a NaN residual after 28 iterations and
+was aborted in the first sweep by _finite_or_raise (8 min of VM instead of 45).
+Rule: float32 for M<=40, float64 for M>=100. Fixing M=100 would need the whole
+BiCGSTAB recurrence in float64 (float32 stencil as the operator only).
+
+Holdout guard (new): saa.M_holdout > 0 builds a third, disjoint archive and
+optim.holdout_every sweeps evaluates the incumbent on it during the search,
+logging rel/cvarG/J, recording them in metrics.stages.opt.holdout and adding a
+holdout_reliability gate. Cost at M_holdout=40: 6 s on a T4, 2 s on an A100.
+It is what catches "the training tail made the policy look compliant".
+
+Verifier note: SCRIPTS/check_tail.py now rebuilds the run through
+run_optimization's own constructors. The first version re-derived the grid by
+hand as Grid(ny, nx) -- physics.fv2d.Grid is (nx, ny) -- so it verified a
+transposed grid with a different KL basis (n_kl 1392 vs 1529) and made a correct
+run look unreproducible.
+
+CONVERGED + CERTIFIED POLICY, 160x96 (2026-11-18)
+-------------------------------------------------
+run 20261118-114831: M_train 100, M_test 40, M_holdout 40, 1 start, 400 evals,
+torch float64 on a T4, holdout check every 8 sweeps.
+  wall   : 4.14 h (opt 14756 s, 401 evals, nit=28 -> converged)
+  steps  : 12.5 -> 6.25 -> 3.12 -> 1.56 -> 0.78 -> 0.39 -> 0.195 -> 0.098
+  q*     : [0, 9.72, 5.86, 0, 3.38, 0, 0, 0, 0] m3/d = 18.96, 3 active wells
+  J      : 433945 train / 434008 test (gap 0.015%)
+  CVaR(G): +0.018 train / -0.007 test  (sits ON the constraint: 0.05-quantile)
+  rel    : 0.990 train / 0.975 test (gate 0.94)
+  holdout: 3 checks during the run, reliability 1.000 each (min 1.000)
+  mass   : 4.2e-11 | gates: ALL PASS (incl. holdout_reliability)
+  verify : SCRIPTS/check_tail.py reproduces J 433944.7, CVaR +0.018, rel 0.990
+  compare: the M=16 run's q* (J 423264) is only 2.5% cheaper but fails
+           out of sample (0.925) -- cheap-but-fragile was never cheap
+  sweep  : 700 s at step 12.5, 310 s at step 0.78 (most moves hit q bounds)
+
+MIXED-PRECISION KRYLOV, T4, 160x96 (2026-11-19)
+----------------------------------------------
+MIXED_KRYLOV (TESIS_MIXED_KRYLOV=0 disables) runs the BiCGSTAB recurrence and
+work vectors in float64 while each matvec input is cast to float32 (operator
+stays fp32). Cost per candidate*scenario: float64 0.381 s, fp32-scalars-only
+0.138 s (NaN at M=100), fp32-mixed 0.152 s -> 288 s per 19-candidate sweep vs
+~700 s in float64 (2.5x).
+Quality: the float64 best-value trajectory is reproduced BIT-FOR-BIT for the
+first ~17 sweeps (1.04938e6 -> ... -> 435888), zero non-finite objectives.
+
+COMPLETED run 20261120-111849 (T4, float32 mixed, M=100, 1 start, 400 evals):
+  wall   : 5966-5996 s = 1.67 h  (float64 twin 20261118-114831: 4.14 h, 2.46x)
+  q*     : [0, 9.33, 8.16, 0, 0, 0, 0, 0, 0] = 17.49 m3/d, 2 active wells
+  J      : 428592 train / 428579 test (gap 3e-05)
+  CVaR(G): +0.005 train / +0.009 test | rel 0.990 train / 0.975 test
+  holdout: 0.975 (min 0.975) | mass balance 2.3e-05 | ALL GATES PASS
+  verify : check_tail reproduces J 428592.0, meanG -0.925, CVaR +0.005, rel 0.990
+  compare: float64 certified run gave 433945 with 3 wells -- the two certified
+           policies differ by 1.2% in cost and pick different well subsets, i.e.
+           the cost surface is flat in "which wells carry the duty". float32 is
+           2.46x faster and its 2.3e-05 mass balance is the fp32 floor (passes
+           the 1% gate but mass identities must stay float64).
+Perf caveat: at M=100 float32 is ~10% slower than pure fp32 but 2.5x faster than
+float64 -- the recurrence was the blocker, and fixing it is cheap. tests/
+test_mixed_krylov.py covers the switch (no-op for float64, dtype preserved,
+lower residual than a plain fp32 recurrence on an ill-conditioned system).
+

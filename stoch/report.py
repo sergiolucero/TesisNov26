@@ -443,13 +443,19 @@ def plot_convergence(history: list[dict], path: str | Path) -> None:
 
 
 def plot_distributions(ev, tau_cap: float, path: str | Path) -> None:
+    # Promote to float64 before histogramming: with float32 objective values
+    # numpy refuses to build 20 finite bins over the (tiny) data range and the
+    # figure raises ValueError, which used to abort the whole run *after* the
+    # optimization had succeeded and before metrics.json was written.
+    G = np.asarray(ev.G, dtype=float)
+    tau = np.asarray(ev.tau, dtype=float)
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.2))
-    axes[0].hist(ev.G, bins=20, color="steelblue")
+    axes[0].hist(G, bins=20, color="steelblue")
     axes[0].axvline(0.0, color="r", ls="--", label="compliance")
     axes[0].set_xlabel("G (max violation)")
     axes[0].set_ylabel("scenarios")
     axes[0].legend(fontsize=8)
-    axes[1].hist(np.minimum(ev.tau, tau_cap), bins=20, color="darkorange")
+    axes[1].hist(np.minimum(tau, float(tau_cap)), bins=20, color="darkorange")
     axes[1].set_xlabel("cleanup time [d]")
     axes[1].set_ylabel("scenarios")
     fig.tight_layout()

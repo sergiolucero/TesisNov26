@@ -49,10 +49,12 @@ packages, configs and generated outputs.
 | `SCRIPTS/multi_colab.py` | Multi-VM Colab driver (`launch`/`status`/`logs`/`collect`/`stop`) |
 | `SCRIPTS/colab_status.py` | Current/recent Colab run snapshot (`--json`; backs `/runs`) |
 | `SCRIPTS/bench_backend.py` | NumPy vs batched-GPU backend benchmark + verdict |
+| `SCRIPTS/probe_krylov.py` | Batched Krylov diagnostic (residual/iteration trace, NaN localiser) |
+| `SCRIPTS/check_tail.py` | Re-evaluate a finished run's policy on fresh scenarios (trust check) |
 | `SCRIPTS/app.py` | Flask viewer: figures, plots, fleet health and Colab run status (`/`, `/plots`, `/fleet`, `/runs`, `/api/colab`) |
 | `physics/` | Finite-volume flow/transport (NumPy reference + batched torch) and analytical references |
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report — and their batched (`*_torch`) counterparts |
-| `configs/opt/` | Benchmark/exploration/certificate configurations |
+| `configs/opt/` | Benchmark/exploration/certificate configurations (`hydrology_gpu.yaml`: 160x96 new hydrology) |
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
 | `DOCS/` | **All project documentation** — see [`DOCS/USAGE.md`](DOCS/USAGE.md) for the scripts |
 | `DOCS/NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |

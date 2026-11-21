@@ -1,9 +1,164 @@
-# Results — longer training runs
+# Results
 
-Baseline (from `Actions.md`): soft-BC rel-L2 2.43e-2, hard-BC exp (eps=1e-3)
-1.35e-2 full / 8.0e-3 interior. All runs: Pe=20, τ_max=0.5, MLP 4×64 tanh,
-Adam (resampled collocation) + L-BFGS polish on fixed grid.
+Every number below comes from a run whose artifacts are in this repository, and
+each certificate has been re-derived independently by `SCRIPTS/check_tail.py`
+(fresh scenarios, NumPy reference) rather than taken from the run's own summary.
+Section 5 lists what is *not* established.
 
-| # | Config | Adam | L-BFGS | full rel-L2 | interior | notes |
-|---|--------|------|--------|-------------|----------|-------|
-|   |        |      |        |             |          |       |
+---
+
+## 1. Phase 1 — 1D advection–dispersion surrogate (PINN / FNO)
+
+Reference: Ogata–Banks. Geometry: `Pe = vL/D = 20`, `τ_max = 0.5`, MLP 4×64 tanh,
+Adam with resampled collocation + L-BFGS polish on a fixed grid.
+
+| Surrogate | BC treatment | full-grid rel-L2 | interior rel-L2 | notes |
+| :--- | :--- | ---: | ---: | :--- |
+| PINN | soft penalty | 2.43e-2 | — | baseline |
+| PINN | hard (`eps = 1e-3`) | **1.35e-2** | **8.0e-3** | residual error is the measure-zero inlet corner |
+| FNO | — | see `DOCS/Conclusions.md` §5 | — | normalized coordinates were required |
+
+The hard-constraint answer `u = (1-ξ)s(τ) + ξ(1-ξ)s(τ)·NN` encodes the inlet
+discontinuity exactly, which is why the corner error disappears from the interior
+metric. Full narrative and the FNO negative-then-fixed story: `DOCS/Conclusions.md`.
+
+---
+
+## 2. Phase 2 — 2D forward model and stochastic optimization
+
+Benchmark (`configs/opt/hydrology_gpu.yaml`): 200×120 m at 160×96 cells
+(15,360 unknowns), log-normal `K` with `σ = 0.65`, `ℓ = 15 m`, KL expansion at
+95% variance (`n_kl = 1529`), 9 candidate wells on a hexagonal lattice, source
+10 m³/d at 100 mg/L for 3650 d, compliance 1.0 mg/L at `x = 185 m` over the last
+20% of the horizon. Chance constraint: `P(G ≤ 0) ≥ 1 − α`, `α = 0.05`, handled
+as a CVaR-5% penalty; `M_train = 100` scenarios, `M_test = 40`, `M_holdout = 40`.
+
+### 2.1 Certified policies
+
+Two runs used the same search (pattern search over well rates with capacity
+projection, batched compass sweep on a GPU) and differ only in floating-point
+precision. Both are independent, fully certified optima:
+
+| | float64 (`20261118-114831`) | float32 mixed (`20261120-111849`) |
+| :--- | ---: | ---: |
+| q\* [m³/d] | `[0, 9.72, 5.86, 0, 3.38, 0, 0, 0, 0]` | `[0, 9.33, 8.16, 0, 0, 0, 0, 0, 0]` |
+| total pumping | 19.0 | 17.5 |
+| active wells | 3 | 2 |
+| J (train / test) | 433,945 / 434,008 | 428,592 / 428,579 |
+| CVaR-5%(G) train / test | +0.018 / −0.007 | +0.005 / +0.009 |
+| reliability train / test | 0.990 / 0.975 | 0.990 / 0.975 |
+| holdout during search | 1.000 | 0.975 |
+| max mass-balance error | 4.2e-11 | 2.3e-05 |
+| wall clock (T4) | 4.14 h | **1.67 h** |
+| gates | all pass | all pass |
+
+Two facts matter more than the numbers. First, both optima sit **on** the
+constraint (`CVaR ≈ 0` from either side), which is what the solution of a
+chance-constrained program must do — these are the cheapest policies that are
+still safe, not policies that happen to be safe. Second, the two policies differ
+by only **1.2% in cost while using different well subsets**: near the optimum the
+objective is flat along the direction "which two or three of the nine wells carry
+the duty". Multi-start at this geometry therefore samples *near-equivalent
+policies*, not cost.
+
+### 2.2 Out-of-sample certificate with Wilson intervals
+
+Combining the two runs would be wrong (different scenarios), so each policy was
+re-evaluated on 400 fresh scenarios (`SCRIPTS/check_tail.py --m-scen 400`):
+
+| policy | violations | reliability | 95% Wilson CI | gate 0.94 |
+| :--- | ---: | ---: | :--- | :--- |
+| float64 `q*` (3 wells) | 1/400 | 0.998 | **[0.986, 1.000]** | PASS |
+| float32 `q*` (2 wells) | 7/400 | 0.983 | **[0.964, 0.991]** | PASS |
+
+The interval is the point of this table. A bare `0.975` at M = 40 is consistent
+with a true reliability anywhere in ~[0.87, 1.00]; `399/400` is not. Sample-size
+ladders are non-monotone (the same single violating scenario enters the tail at
+different rates), which is why a single M is never quoted without the interval:
+
+| M | 40 | 60 | 100 | 200 | 300 | 400 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| violations, float64 policy | 0 | 0 | 1 | 1 | 1 | 1 |
+| reliability | 1.000 | 1.000 | 0.990 | 0.995 | 0.997 | 0.998 |
+| Wilson low | 0.912 | 0.940 | 0.946 | 0.972 | 0.981 | 0.986 |
+| violations, float32 policy | 0 | 0 | 1 | 3 | 6 | 7 |
+| reliability | 1.000 | 1.000 | 0.990 | 0.985 | 0.980 | 0.983 |
+| Wilson low | 0.912 | 0.940 | 0.946 | 0.957 | 0.957 | 0.964 |
+
+Both policies clear the 0.94 gate with certainty, but not equally: the float64
+policy violates in 1 of 400 scenarios, the float32 policy in 7 of 400. A point
+estimate of 0.975 at M = 40 cannot distinguish them -- both look identical there
+-- and the difference only becomes visible at M ≥ 200. **That is the argument for
+large out-of-sample evaluation**: policy ranking is not resolvable at the sample
+size the search itself used.
+
+### 2.3 Effect of the policy on the plume
+
+At `q*`, evaluated on 80 held-out scenarios (median with IQR): peak concentration
+35.81 → 0.433 mg/L, concentration at the compliance point 17.23 → 0.0260 mg/L,
+and scenarios meeting the 1.0 mg/L limit go from 1/80 to 78/80. The plume is
+displaced rather than erased (its peak moves to `x ≈ 115 m`, just down-gradient
+of the active well), which is the physically expected signature of pump-and-treat.
+
+Baselines on the same scenario set: no pumping J = 322,341 (reliability 0.000,
+mean cleanup 3650 d); uniform half-capacity J = 1,186,250 (reliability 1.000,
+pumping cost 821,250).
+
+---
+
+## 3. Compute: what the GPU actually buys
+
+Measured, not estimated (`DOCS/GPU.md` has the full audit):
+
+| setting | geometry | result |
+| :--- | :--- | :--- |
+| batched compass sweep, float32, T4 | 80×40, M=8 | 1.46 s vs 69 s sequential NumPy → **47×** |
+| same, A100 | 80×40, float32 | **no faster than T4** (latency-bound: one Python thread drives the GPU) |
+| float64, T4 → A100 | 160×96, M=100 | **6.4×** (fp64-throughput-bound, opposite regime) |
+| float64 → mixed float32, T4 | 160×96, M=100, 400 evals | **2.46×** (4.14 h → 1.67 h) |
+
+Two lessons worth carrying: the first wall was kernel-launch overhead, not FLOPs;
+and the work is *latency*-bound in float32 (a slice moves 1.6 MB in 7.6 ms against
+a ~5 µs memory floor) but *throughput*-bound in float64, so "which card" has a
+regime-dependent answer.
+
+Numerical care that was needed to get there: float32 Krylov scalars and then the
+whole BiCGSTAB recurrence had to be promoted to float64 (fp32 produced a NaN
+transport solve at M ≥ 100 on a T4), and a mid-search **holdout guard** evaluates
+the incumbent on 40 disjoint scenarios every 8 sweeps (14 s per check). That guard
+is what distinguishes a certificate from a training-set artefact: a 43%-cheaper
+policy found with `M_train = 16` looked compliant on its training tail and failed
+out of sample (0.925 < 0.94 gate).
+
+---
+
+## 4. Reproducing
+
+```
+python3 SCRIPTS/run_optimization.py --config configs/opt/hydrology_gpu.yaml \
+    --stage opt --backend torch --dtype float64        # ~4 h on a T4
+python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip \
+    --config runs/colab_multi/<run>/r0/config_r0.yaml --m-scen 400 --ladder
+python3 tests/run_tests.py                              # 129 tests
+```
+
+---
+
+## 5. What is *not* established
+
+1. **Global optimality.** Both policies are local optima of a non-convex program;
+   the 1.2% spread suggests a flat basin, not that nothing better exists. A
+   multi-start sweep at M = 100 is in flight.
+2. **2.5D / 3D.** `physics/fv3d.py` implements the 3D flow and transport
+   operators. Flow is verified exactly (uniform velocity and transverse
+   invariance to 1e-16, G3.1 flow gate). The transport gate is **open**: the 3D
+   extraction reproduces `y`/`z`-invariance to 1e-20 and the correct front speed,
+   but its mass ledger does not close and the Ogata–Banks shape error is ~0.37
+   against a 1.5e-2 gate. Those two gates are marked `expectedFailure` in
+   `tests/test_fv3d.py` rather than deleted.
+3. **Long-horizon supply reliability.** All certificates are for the fixed
+   deterministic source/gradient used in this config; source-strength and
+   gradient uncertainty are implemented (`random_source` / `random_gradient`) but
+   off in these runs.
+4. **Surrogate-in-the-loop.** The FNO/PINN surrogates were never used inside the
+   optimization loop; all optimization results use the finite-volume model.

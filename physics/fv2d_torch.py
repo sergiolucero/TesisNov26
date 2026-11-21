@@ -43,6 +43,8 @@ GPU) and on CUDA when available.
 
 from __future__ import annotations
 
+import math
+import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
@@ -108,8 +110,21 @@ def torch_dtype(spec: str | torch.dtype = "float64") -> torch.dtype:
 
 
 def default_rtol(dtype: torch.dtype) -> float:
-    """Krylov tolerance that is tight relative to the working precision."""
-    return 1e-11 if dtype == torch.float64 else 1e-6
+    """Relative Krylov tolerance that the given dtype can actually reach.
+
+    float64 has ~2.2e-16 of head-room, so 1e-11 reproduces ``splu`` far inside
+    the 1e-8 parity band.
+
+    float32 has ~1.2e-7 and loses several digits to cancellation in a batched
+    sparse solve: measured on the 80x40 benchmark the attainable relative
+    residual sits at 9.8e-7 .. 1.0e-6, i.e. *exactly* at 1e-6.  Asking for 1e-6
+    makes convergence a coin flip decided by reduction order, and the losing
+    side pays the full ``maxiter`` on every one of the 100 time steps.  A
+    production A100 run did that: 55 of 75 compass sweeps took 2.1 s, 20 took
+    272 s median (508 s worst), 98% of the wall clock in that minority.  1e-5 is
+    five decades above the noise floor, so it converges deterministically.
+    """
+    return 1e-11 if dtype == torch.float64 else 1e-5
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +139,20 @@ class KrylovReport:
     worst_iterations: int = 0    # iterations of the slowest single solve
     worst_residual: float = 0.0  # final relative residual, worst case
     converged: bool = True
+    stalled: bool = False        # gave up on the stagnation guard, not on maxiter
 
     def add(self, other: "KrylovReport") -> None:
         self.iterations += other.iterations
         self.solves += other.solves
         self.worst_iterations = max(self.worst_iterations, other.worst_iterations)
-        self.worst_residual = max(self.worst_residual, other.worst_residual)
+        # ``max(0.0, nan)`` is 0.0 in Python, which once hid a NaN solve behind
+        # a reassuring 'worst residual 0.00e+00' in a production run's log.
+        if not math.isfinite(other.worst_residual):
+            self.worst_residual = float("nan")
+        elif math.isfinite(self.worst_residual):
+            self.worst_residual = max(self.worst_residual, other.worst_residual)
         self.converged = self.converged and other.converged
+        self.stalled = self.stalled or other.stalled
 
     @property
     def iterations_per_solve(self) -> float:
@@ -144,12 +166,27 @@ class KrylovReport:
             "worst_iterations": int(self.worst_iterations),
             "worst_residual": float(self.worst_residual),
             "converged": bool(self.converged),
+            "stalled": bool(self.stalled),
         }
 
 
 def _flat_norm(t: torch.Tensor) -> torch.Tensor:
-    """Per-batch-element Euclidean norm for ``(B, ...)`` tensors."""
-    return torch.linalg.vector_norm(t.reshape(t.shape[0], -1), dim=1)
+    """Per-batch-element Euclidean norm for ``(B, ...)`` tensors.
+
+    float32 is scaled first (LAPACK ``nrm2`` style).  Squaring a field whose
+    largest entry is ~1e20 overflows the float32 exponent range and returns
+    ``inf``, and ``inf/inf`` in the convergence test is ``nan`` -- which is how
+    a *correct* solve can be reported as broken.  The scaled form bounds every
+    squared term by 1, so the reduction cannot overflow.
+    """
+    flat = t.reshape(t.shape[0], -1)
+    if t.dtype != torch.float32:
+        return torch.linalg.vector_norm(flat, dim=1)
+    if SCALAR_FP64:
+        return torch.linalg.vector_norm(flat.double(), dim=1).to(torch.float32)
+    amax = flat.abs().amax(dim=1)
+    safe = torch.where(amax > 0, amax, torch.ones_like(amax))
+    return amax * torch.linalg.vector_norm(flat / safe.unsqueeze(1), dim=1)
 
 
 def _scalar(t: torch.Tensor) -> float:
@@ -164,8 +201,23 @@ def _scalar(t: torch.Tensor) -> float:
 
 
 def _dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Per-batch-element inner product for ``(B, ...)`` tensors."""
-    return (a * b).reshape(a.shape[0], -1).sum(dim=1)
+    """Per-batch-element inner product for ``(B, ...)`` tensors.
+
+    Same overflow argument as :func:`_flat_norm`: in float32 the product of two
+    large work vectors can exceed the exponent range, so each operand is scaled
+    by its own max and the scale is folded back afterwards.
+    """
+    fa = a.reshape(a.shape[0], -1)
+    fb = b.reshape(b.shape[0], -1)
+    if a.dtype != torch.float32:
+        return (fa * fb).sum(dim=1)
+    if SCALAR_FP64:
+        return (fa.double() * fb.double()).sum(dim=1).to(torch.float32)
+    sa = fa.abs().amax(dim=1)
+    sb = fb.abs().amax(dim=1)
+    sa = torch.where(sa > 0, sa, torch.ones_like(sa))
+    sb = torch.where(sb > 0, sb, torch.ones_like(sb))
+    return (sa * sb) * (fa / sa.unsqueeze(1) * (fb / sb.unsqueeze(1))).sum(dim=1)
 
 
 def _safe_div(num: torch.Tensor, den: torch.Tensor) -> torch.Tensor:
@@ -176,6 +228,76 @@ def _safe_div(num: torch.Tensor, den: torch.Tensor) -> torch.Tensor:
 def _scale(coeff: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
     """Reshape a per-batch scalar so it broadcasts against ``like``."""
     return coeff.reshape(-1, *([1] * (like.dim() - 1)))
+
+
+#: A solve is declared stalled when it fails to set a new *best* residual for
+#: this many consecutive iterations.  The test is deliberately weak ("no
+#: improvement at all", not "no big improvement"): a well-conditioned CG that
+#: needs 900 iterations still improves the best residual almost every step, so
+#: it never trips the guard, while a float32 solve sitting on its ~1e-6 noise
+#: floor bounces around without ever beating its best and is caught in
+#: ``STALL_WINDOW`` steps instead of burning ``maxiter`` (4000) per time step.
+STALL_WINDOW = 60
+SCALAR_FP64 = os.environ.get("TESIS_SCALAR_FP64", "1") not in {"0", "false", "False"}
+"""Accumulate Krylov scalars in float64 even when the vectors are float32.
+
+A float32 Krylov loop loses accuracy where it multiplies *accumulated* work
+vectors: ``<rhat, r>``, ``||r||`` and the beta/omega ratios sum ~1e4-1e5 terms of
+similar magnitude, so the reduction error is what decides whether the residual
+can reach 1e-6 at all. Measured on a T4 at 160x96 (M40) the batched BiCGSTAB
+stalled with a NaN residual on 4 of 19 compass candidates; the fix that needs no
+extra memory or code in the solver is to promote only the *scalars* to float64
+(the vectors stay float32, so the stencil matvec -- the cost centre -- is
+unchanged). Set ``TESIS_SCALAR_FP64=0`` to get the plain float32 reductions back
+for an A/B measurement.
+"""
+
+
+MIXED_KRYLOV = os.environ.get("TESIS_MIXED_KRYLOV", "1") not in {"0", "false", "False"}
+"""Run the whole BiCGSTAB recurrence in float64, with a float32 matvec.
+
+Promoting only the *scalars* (``SCALAR_FP64``) fixed the float32 transport at
+M=40 but not at M=100: with a batch of 1900 systems the float32 *recurrence*
+itself -- ``p = r + beta*(p - omega*v)`` and the ``alpha``/``omega`` updates,
+where errors accumulate rather than cancel -- lost one candidate to a NaN
+residual after 28 iterations.
+
+``MIXED_KRYLOV`` keeps the work vectors and the recurrence scalars in float64
+and casts only the input of each matvec down to float32 (the operator holds
+float32 face coefficients), casting the result back up. The stencil apply, which
+is the cost centre, stays float32; the extra cost is fp64 elementwise traffic on
+the ~8 work vectors. Set ``TESIS_MIXED_KRYLOV=0`` for the pure-float32 loop.
+"""
+
+
+class _StallGuard:
+    """Track the best residual so far and detect a plateau.
+
+    Bounding a stalled solve matters because the solvers are called once per
+    implicit-Euler step: at 4000 iterations a single unreachable tolerance turns
+    an 8 s compass sweep into a 500 s sweep (measured on a T4, 20 sweeps of 75).
+    """
+
+    __slots__ = ("best", "best_it", "stalled")
+
+    def __init__(self) -> None:
+        self.best = float("inf")
+        self.best_it = 0
+        self.stalled = False
+
+    def check(self, iteration: int, residual: float) -> bool:
+        """Record ``residual``; return True when the solve has stalled."""
+        if not math.isfinite(residual):
+            self.stalled = True
+            return True
+        if residual < self.best:
+            self.best = residual
+            self.best_it = iteration
+            return False
+        if iteration - self.best_it >= STALL_WINDOW:
+            self.stalled = True
+            return True
+        return False
 
 
 def cg_solve(
@@ -200,9 +322,13 @@ def cg_solve(
     p = z.clone()
     rz = _dot(r, z)
 
+    guard = _StallGuard()
     it = 0
     for it in range(1, maxiter + 1):
-        if _scalar((_flat_norm(r) / scale).max()) <= rtol:
+        cur = _scalar((_flat_norm(r) / scale).max())
+        if cur <= rtol:
+            break
+        if guard.check(it, cur):
             break
         ap = matvec(p)
         alpha = _safe_div(rz, _dot(p, ap))
@@ -217,7 +343,8 @@ def cg_solve(
     residual = _scalar((_flat_norm(r) / scale).max())
     report = KrylovReport(iterations=it, solves=1, worst_iterations=it,
                           worst_residual=residual,
-                          converged=residual <= max(rtol, 10.0 * rtol))
+                          converged=residual <= max(rtol, 10.0 * rtol),
+                          stalled=guard.stalled)
     return x, report
 
 
@@ -228,12 +355,38 @@ def bicgstab_solve(
     diag: Optional[torch.Tensor] = None,
     rtol: float = 1e-11,
     maxiter: int = 4000,
+    mixed_precision: Optional[bool] = None,
 ) -> tuple[torch.Tensor, KrylovReport]:
     """Batched preconditioned BiCGSTAB for nonsingular systems.
 
     Used for the implicit-Euler transport operator (nonsymmetric upwind
     advection) and for its transpose in the discrete adjoint.
+
+    ``mixed_precision`` (default ``MIXED_KRYLOV``) runs the recurrence in
+    float64 for float32 inputs; it is a no-op for float64 inputs.
     """
+    if mixed_precision is None:
+        mixed_precision = MIXED_KRYLOV
+    # Mixed-precision mode: the recurrence runs in float64 while the operator
+    # stays float32 (see MIXED_KRYLOV above).  All work vectors therefore live
+    # in float64; only the matvec sees float32.
+    b0_dtype = b.dtype
+    mixed = mixed_precision and b.dtype == torch.float32
+    if mixed:
+        _mv = matvec
+
+        def matvec(q: torch.Tensor) -> torch.Tensor:  # noqa: F811 - local override
+            return _mv(q.to(torch.float32)).to(torch.float64)
+
+        work = torch.float64
+    else:
+        work = b.dtype
+    b = b.to(work)
+    if x0 is not None:
+        x0 = x0.to(work)
+    if diag is not None:
+        diag = diag.to(work)
+
     x = torch.zeros_like(b) if x0 is None else x0.clone()
     r = b - matvec(x)
     bnorm = _flat_norm(b)
@@ -246,11 +399,30 @@ def bicgstab_solve(
     alpha = torch.ones_like(rho_old)
     omega = torch.ones_like(rho_old)
 
+    guard = _StallGuard()
     it = 0
     for it in range(1, maxiter + 1):
-        if _scalar((_flat_norm(r) / scale).max()) <= rtol:
+        cur = _scalar((_flat_norm(r) / scale).max())
+        if cur <= rtol:
+            break
+        if guard.check(it, cur):
             break
         rho = _dot(rhat, r)
+        # BiCGSTAB breakdown guard.  <rhat, r> can vanish (or turn non-finite
+        # after an alpha/omega blow-up), and the next beta = rho/rho_old *
+        # alpha/omega then explodes; in float32 that ends in inf/NaN, which
+        # poisoned 4 of 19 candidates in a real A100 run.  The textbook remedy
+        # is to restart the affected elements with rhat = r.
+        if not bool(torch.isfinite(rho).all()):
+            okay = torch.isfinite(rho) & (rho.abs() > 0)
+            mask = (~okay).reshape(-1, *([1] * (r.dim() - 1)))
+            rhat = torch.where(mask, r, rhat)
+            p = torch.where(mask, torch.zeros_like(p), p)
+            v = torch.where(mask, torch.zeros_like(v), v)
+            rho_old = torch.where(okay, rho_old, torch.ones_like(rho_old))
+            alpha = torch.where(okay, alpha, torch.ones_like(alpha))
+            omega = torch.where(okay, omega, torch.ones_like(omega))
+            rho = _dot(rhat, r)
         beta = _safe_div(rho, rho_old) * _safe_div(alpha, omega)
         p = r + _scale(beta, r) * (p - _scale(omega, p) * v)
         phat = p if diag is None else p / diag
@@ -269,9 +441,12 @@ def bicgstab_solve(
         rho_old = rho
 
     residual = _scalar((_flat_norm(r) / scale).max())
+    if mixed:
+        x = x.to(b0_dtype)
     report = KrylovReport(iterations=it, solves=1, worst_iterations=it,
                           worst_residual=residual,
-                          converged=residual <= max(rtol, 10.0 * rtol))
+                          converged=residual <= max(rtol, 10.0 * rtol),
+                          stalled=guard.stalled)
     return x, report
 
 

@@ -17,8 +17,10 @@ when no toolchain is installed.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,6 +83,72 @@ class TestBibliographyMerge(unittest.TestCase):
                 "\\end{thebibliography}\n\\section{After}\n")
         stripped, _ = build_tex.take_bibliography(body)
         self.assertIn("\\section{After}", stripped)
+
+
+class TestChapterLevelAssembly(unittest.TestCase):
+    """A stand-alone article is not a thesis chapter until it is demoted.
+
+    Each selected file becomes a real ``\\chapter``. Three things follow and all
+    three were bugs first: a body whose opener only restates the chapter title
+    must lose it (otherwise the section numbers ``1.0.1``), a chapter's own
+    ``abstract`` must not appear mid-document, and its ``\\appendix`` must not
+    flip every later chapter into appendix numbering.
+    """
+
+    def test_duplicate_opener_is_dropped(self):
+        body = "\\section{Introduction}\n\\label{chap:x}\n\\section{Why}\n"
+        out = build_tex.drop_duplicate_opener(body, "Introduction")
+        self.assertNotIn("\\section{Introduction}", out)
+        self.assertIn("\\label{chap:x}", out)      # the label stays
+        self.assertIn("\\section{Why}", out)
+
+    def test_a_different_opener_is_kept(self):
+        body = "\\section{Governing equation and assumptions}\n"
+        out = build_tex.drop_duplicate_opener(body, "Formulation")
+        self.assertIn("\\section{Governing equation", out)
+
+    def test_case_spacing_and_trailing_punctuation_do_not_defeat_the_match(self):
+        body = "\\section{background  and related WORK:}\n\\section{Next}\n"
+        out = build_tex.drop_duplicate_opener(body, "Background and related work")
+        self.assertTrue(out.lstrip().startswith("\\section{Next}"))
+
+    def test_chapter_abstract_is_removed(self):
+        body = ("\\begin{abstract}\nChapter summary.\n\\end{abstract}\n"
+                "\\section{Start}\ntext\n")
+        out = build_tex.drop_abstract(body)
+        self.assertNotIn("abstract", out)
+        self.assertIn("\\section{Start}", out)
+
+    def test_chapter_appendix_marker_is_stripped(self):
+        text = ("\\documentclass{article}\n\\begin{document}\n"
+                "\\section{Main}\nbody\n\\appendix\n\\section{Extra}\n")
+        _head, body = build_tex.split_document(text, "x")
+        self.assertNotIn("\\appendix", body)
+        self.assertIn("\\section{Extra}", body)     # material is kept
+
+    def test_assembled_master_uses_chapters_and_one_abstract(self):
+        tmp = tempfile.mkdtemp(prefix="build_tex_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--chapters", "introduction,conclusions", "--build-dir", str(tmp),
+             "--title", "A Test Title", "--author", "A. Author"],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        master = (Path(tmp) / "tesis.tex").read_text()
+        self.assertIn("\\documentclass[11pt]{report}", master)
+        self.assertIn("\\chapter{Introduction}", master)
+        self.assertIn("\\chapter{Conclusions}", master)
+        self.assertIn("A Test Title", master)
+        self.assertIn("A. Author", master)
+        # exactly one abstract, in the front matter, before the first chapter
+        self.assertEqual(master.count("\\begin{abstract}"), 1)
+        self.assertLess(master.index("\\begin{abstract}"),
+                        master.index("\\chapter{Introduction}"))
+        for stem in ("introduction", "conclusions"):
+            body = (Path(tmp) / "body" / f"{stem}.tex").read_text()
+            self.assertNotIn("\\begin{abstract}", body)
+            self.assertNotIn("\\appendix", body)
 
 
 class TestAssembledDocument(unittest.TestCase):

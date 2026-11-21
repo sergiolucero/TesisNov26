@@ -1,0 +1,45 @@
+% Thesis abstract.  A fragment: emitted by SCRIPTS/build_tex.py after \maketitle
+% (see --abstract), so it carries no preamble of its own.
+
+\begin{abstract}
+\noindent
+Pump-and-treat remediation of a contaminated aquifer is a design problem under
+uncertainty: well rates must keep the concentration at a compliance surface below
+a limit with high probability, while the conductivity field that decides where
+the plume travels is known only statistically. This thesis solves that problem
+for a two-dimensional benchmark ($200\times120$\,m, $160\times96$ cells, a
+log-normal conductivity truncated at $1\,529$ Karhunen--Lo\`eve modes, nine
+candidate wells, a $5\%$ chance constraint) and treats the question of what makes
+a computed design believable as a first-class object of study.
+
+Three layers are built and verified in turn. A one-dimensional
+advection--dispersion sandbox with the Ogata--Banks solution as its reference
+supports the learned surrogates: a physics-informed network reaches a median
+full-grid relative error of $1.61\times10^{-2}$ over five seeds (spread
+$1.17$--$8.14\times10^{-2}$) and a coordinate-augmented Fourier neural operator
+$1.99\times10^{-2}$ at 250 epochs, $11\times$ better than a mean-field predictor.
+A batched finite-volume Darcy/transport solver with a parity-tested GPU backend
+supports the optimization: a conditional-value-at-risk penalty in a sample
+average approximation, minimized by compass search over well rates in
+$1.67$--$4.14$\,h of one rented GPU. Two runs differing only in floating-point
+precision reach policies $1.2\%$ apart in cost on different well subsets
+($J = 428\,592$ and $433\,945$), each sitting on the constraint.
+
+The certification layer supplies both the strongest confirmation and the
+strongest negative result. The accepted policy reproduces its cost to $0.02\%$ on
+four hundred scenarios no run had seen, with reliability $0.978$ (Wilson interval
+$[0.958,0.988]$) against a $0.94$ gate; a policy optimized on only sixteen
+scenarios reports perfect reliability in-run and fails out of sample
+($0.912$ $[0.881,0.936]$). Across three disjoint draws of four hundred, however,
+the CVaR tail moves between $+0.616$, $+0.254$ and $+0.334$ --- spread smaller
+than the standard error of any one value, because a $5\%$ tail of four hundred
+draws averages twenty of the most variable realizations. Reliability transports;
+the tail does not. The thesis therefore recommends certifying with reliability
+and its interval, quoting tails with their standard error, and never ranking
+policies by tail value at affordable sample sizes.
+
+\vspace{0.6em}
+\noindent\textbf{Keywords:} groundwater remediation; chance-constrained
+optimization; conditional value-at-risk; physics-informed neural networks;
+Fourier neural operators; verification and validation; reproducibility.
+\end{abstract}

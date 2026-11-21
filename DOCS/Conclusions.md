@@ -320,9 +320,18 @@ uncertainty only.
   disjoint chapters into a 42-page document with no undefined reference or
   citation.
 - The assembled thesis is `TEX/build/tesis.pdf` (gitignored, regenerate with the
-  script). It is an assembly of existing chapters, **not** a written thesis:
-  there is no introduction, no related-work chapter and no conclusions chapter,
-  and `results_2d.tex` covers only the 2D campaign.
+  script). As of 2026-11-21 it **is** a thesis rather than a staple: `report`
+  class, one `\chapter` per selected file, and three new chapters ---
+  `introduction` (the remediation problem, the two numbers that are easy to get
+  wrong, contributions), `related_work` (subsurface flow, learned surrogates,
+  optimization under uncertainty, SAA, verification practice, tail statistics)
+  and `conclusions` (results, the methodological result, five limitations, five
+  pieces of future work) --- plus an abstract and a title page. 55 pages, 0
+  undefined references. What it still is *not*: a complete monograph. There is no
+  chapter for the 3D work (that lives in `DOCS/3D_results.md`), `results_2d.tex`
+  covers only the 2D campaign, and the two half-written chapters
+  (`SolvingAlgorithms`, `plans_2d_3d`) remain outside the assembly because they
+  restate material that `optimization.tex` already contains.
 - ~~Apply per-seed medians to the FNO sweep table~~ — **done** (2026-11-21):
   five seeds at 120 ep, 250 ep and modes 4/12/24 (§5). The 250-epoch headline
   fell from 1.46% to a median 1.99% (IQR 1.68–2.14e-2); the paired gains

@@ -1,0 +1,134 @@
+% Conclusions.  A fragment: include from the master with \input{conclusions}.
+% Requires nothing beyond booktabs/amsmath/siunitx, which the master loads.
+
+\section{Conclusions}
+\label{chap:conclusions}
+
+\subsection{What was established}
+
+The thesis set out to compute a defensible pump-and-treat design for a
+contaminated aquifer under conductivity uncertainty, and to be explicit about
+what makes such a design defensible. Three results carry the argument.
+
+\paragraph{The surrogate question.} On the one-dimensional advection--dispersion
+sandbox, with the Ogata--Banks solution as the reference, a physics-informed
+network reaches a median full-grid relative error of $1.61\times10^{-2}$ over
+five seeds, with individual seeds spanning $1.17\times10^{-2}$ to
+$8.14\times10^{-2}$; a coordinate-augmented Fourier neural operator reaches a
+median of $1.99\times10^{-2}$ at 250 epochs over five seeds, $11\times$ better
+than the mean-field predictor, where its best seed alone would have claimed
+$1.46\times10^{-2}$. The same operator, in an earlier configuration, scored
+$0.973$ --- worse than outputting zero, because relative error is normalized by
+the target and the architecture could only produce a constant field. Both facts
+are only visible against a baseline and a seed sweep.
+
+\paragraph{The optimization question.} On the $200\times120$\,m, $160\times96$
+benchmark with $1\,529$ Karhunen--Lo\`eve modes and a $5\%$ chance constraint,
+two independent runs that differ only in floating-point precision converge to
+policies $1.2\%$ apart in penalized cost on different well subsets
+($J = 428\,592$ and $433\,945$), each sitting on the constraint
+($\mathrm{CVaR}_{5\%}\approx 0$) as the solution of a chance-constrained program
+must, in $1.67$\,h and $4.14$\,h of one rented GPU. Batching an entire compass
+sweep is worth $47\times$ over the NumPy reference; compiling the Krylov
+iteration into a single call is worth a further $2.2$--$2.8\times$ at the larger
+geometry, with the objective unchanged to $10^{-7}$.
+
+\paragraph{The certification question.} A policy is reported only after being
+re-solved on scenarios no run has seen, on the independent NumPy reference. The
+accepted policy gives $391/400$ compliant scenarios on a fresh draw,
+reliability $0.978$ with a Wilson interval of $[0.958, 0.988]$, clearing the
+$0.94$ gate; its cost reproduces to $0.02\%$. The same protocol rejects a policy
+optimized on sixteen scenarios: it reported reliability $1.000$ on its own
+sample and achieves $0.912$ $[0.881, 0.936]$ on four hundred unseen ones.
+
+\subsection{The methodological result}
+
+The finding that generalizes beyond this problem is a statement about which
+statistics of a stochastic program transport from the optimization sample to the
+aquifer.
+
+For the accepted policy on three disjoint draws of $400$ scenarios, the cost
+reproduces to $0.02\%$ and the reliability to $0.003$
+($0.978$, $0.975$, $0.978$), while the CVaR tail takes the values $+0.616$,
+$+0.254$ and $+0.334$. Those three are not distinguishable: their spread is
+smaller than the standard error of any one of them ($\pm0.21$ to $\pm0.47$),
+because a $5\%$ tail of $400$ draws averages twenty of the most variable
+realizations in the set. The reported in-sample value, $+0.005$, lies outside all
+three intervals --- it is a fourth sample, not a better estimate.
+
+The practical consequences, which are cheap to adopt and are the recommendation
+of this thesis, are fourfold. Certify a policy with \emph{reliability and its
+interval}, not with a tail value. Quote a tail \emph{with its standard error}, and
+only as evidence about where the policy sits relative to the constraint. Do not
+rank policies by tail value at sample sizes that are affordable: at $M=400$ the
+tail cannot separate policies that reliability separates easily. And re-evaluate
+on draws that no part of the optimization has touched, because scenarios that
+continue the training seed reproduce the run rather than test it.
+
+\subsection{Limitations of the present evidence}
+
+\begin{itemize}
+  \item \textbf{One two-dimensional geometry.} All 2D conclusions concern a single
+        $200\times120$\,m configuration, nine wells and one source. The
+        observation that well rates are seed-insensitive --- two independently
+        seeded searches followed a digit-for-digit identical trajectory --- is a
+        property of this cost model, not a general law, and it means the reported
+        policy is one of several near-equivalent designs rather than a unique
+        optimum.
+  \item \textbf{Mixed precision at the margin.} The accepted policy was found in
+        mixed float32 (float32 operator, float64 Krylov recurrence). That mode is
+        not unconditionally safe: two of three fully float32 runs aborted on a
+        non-finite transport residual, which is why the search now tolerates a
+        single rejected candidate but not an entire diverging sweep. The
+        float32/float64 policy gap of $1.2\%$ is within the noise that fine
+        compass steps introduce.
+  \item \textbf{Tail resolution.} At $M=400$ the tail statistic is not resolvable
+        to better than a few tenths. Establishing the tail of the distribution to
+        the precision at which reliability is known would require thousands of
+        scenarios, i.e.\ an order of magnitude more transport solves than the
+        optimization itself.
+  \item \textbf{The three-dimensional model has no analytical gate.} The 3D
+        solver reproduces the 2D solution under extrusion to $10^{-13}$ and closes
+        its mass ledger to $10^{-15}$, and its paper preset reproduces across
+        machines; but it has no Ogata--Banks- or Thiem-type verification of its
+        own, so its correctness rests on dimensional reduction and parity rather
+        than on an independent solution.
+  \item \textbf{Timings are single-machine.} Reported GPU costs come from rented
+        T4 and A100 instances with the batch sizes stated; the fixed-cost model
+        behind the larger projections is a two-point fit that was not
+        reproducible to better than about $15\%$.
+\end{itemize}
+
+\subsection{Work that would remove these limitations}
+
+\begin{enumerate}
+  \item \textbf{An analytical gate for the 3D solver.} The cheapest available is a
+        fully penetrating well in a slab, whose drawdown must reproduce the Thiem
+        shape to about $10^{-2}$, plus a one-dimensional extruded column for
+        which the Ogata--Banks front location and breakthrough variance are known
+        to a few percent. Both are CPU-only tests and neither requires a new
+        solver; the current 3D evidence is dimensional rather than analytical.
+  \item \textbf{A 2.5D axisymmetric bridge} between the 2D and 3D models, which
+        would give a second independent route to the same answer and make the
+        dimensional reduction a check instead of an assumption.
+  \item \textbf{Operator learning in 3D} as an input--output map between
+        conductivity realizations and compliance-point histories, with the same
+        seed-sweep and resolution-transfer protocol applied in 1D, so that the
+        surrogate claim is either established or refuted at the resolution the
+        optimization actually uses.
+  \item \textbf{Tail estimation at scale.} If a tail statement is wanted, it has
+        to be paid for: $M$ of a few thousand, drawn from a frozen policy, with
+        the standard error reported as a matter of course. Until then the honest
+        claim is about reliability.
+  \item \textbf{Removing the per-step kernel launches.} The measured $2.2$--$2.8\times$
+        came from compiling the iteration body; the sequential dependence of
+        implicit time stepping remains, and a formulation that solves the whole
+        time history at once would remove the remaining synchronizations. Any
+        such change must still pass the mass-balance and field-parity gates.
+\end{enumerate}
+
+The wider lesson is that the two questions the thesis opened with --- is the
+forward model right, and is the optimizer's evidence about the aquifer or about
+its own sample --- are answered by the same kind of device: an independent
+computation that can disagree. The cost of each device is small relative to the
+optimization it audits, and in this work every one of them changed a conclusion.

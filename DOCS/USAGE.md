@@ -313,24 +313,38 @@ python3 SCRIPTS/build_tex.py --compile    # + PDF, on a host with TeX Live
 
 `TEX/*.tex` are standalone `article` files, not chapters: `optimization.tex`
 restates material from `SolvingAlgorithms.tex` and `plans_2d_3d.tex`, so the
-assembled set is the disjoint subset `formulation` + `optimization` +
-`results_2d` (override with `--chapters`). The script checks brace/environment
-balance, every `\ref` against the labels of the assembled chapters, duplicate
-labels and missing `\input`/`\includegraphics` targets, merges the preambles
-(packages with unioned options, `\newcommand`/`\newtheorem`/`\newcolumntype`
-keyed by declared name) and the per-chapter `thebibliography` blocks (de-duped by
-`\bibitem` key), and writes the chapter bodies to `TEX/build/body/` — the
-sources are never modified. `--compile` rebuilds `TEX/build/tesis.pdf` and reads
-the final LaTeX log, failing when a reference or citation is still undefined
-(`latexmk` alone exits 0 for those).
+assembled set is the disjoint subset `introduction` + `related_work` +
+`formulation` + `optimization` + `results_2d` + `conclusions` (override with
+`--chapters`). The script checks brace/environment balance, every `\ref` against
+the labels of the assembled chapters, duplicate labels and missing
+`\input`/`\includegraphics` targets, merges the preambles (packages with unioned
+options, `\newcommand`/`\newtheorem`/`\newcolumntype` keyed by declared name) and
+the per-chapter `thebibliography` blocks (de-duped by `\bibitem` key), and writes
+the chapter bodies to `TEX/build/body/` — the sources are never modified.
+`--compile` rebuilds `TEX/build/tesis.pdf` and reads the final LaTeX log, failing
+when a reference or citation is still undefined (`latexmk` alone exits 0 for
+those).
+
+**Assembly rules** (each one started as a visible defect in the PDF):
+
+| what the source does | what the master does |
+| :--- | :--- |
+| `\documentclass`, `\title`, `\author`, `\maketitle`, `\tableofcontents` | dropped; the master emits `\documentclass{report}`, one `\title` (`--title`, default in `THESIS_TITLE`), one `\author` (`--author`), and `TEX/abstract.tex` between the title page and the contents (`--abstract`, `''` to omit) |
+| every selected file | becomes a real `\chapter{<registry title>}` — not a bare `\section` pile |
+| opens with `\section{<same as chapter title>}` | that opener is folded into the chapter heading and the headings after it are promoted one level (`\subsection`→`\section`), otherwise the chapter numbers its sections `1.0.1` under a section that does not exist. Run-in `\paragraph` headings are left alone |
+| `\begin{abstract}…\end{abstract}` | dropped — a thesis has one abstract, in the front matter; left in, each chapter printed its own mid-document |
+| `\appendix` | dropped: it is a standalone-document device, and left in it flipped every later chapter into appendix numbering (Chapters 5 and 6 became A and B). A chapter's appendix sections stay in that chapter |
+| `\begin{thebibliography}` blocks | lifted out, de-duped by key (first wins, warning when the texts differ), emitted once before `\end{document}` |
 
 The toolchain here is a user-level [TinyTeX](https://yihui.org/tinytex/) in
 `~/.TinyTeX` (`curl -fsSL https://yihui.org/tinytex/install-bin-unix.sh | sh`,
 then `tlmgr install` whatever a build reports as missing); the script finds it
-without `PATH` help. Verified output: **42 pages, 0 undefined references, 0
-undefined citations**. `results_2d.tex` is a fragment (no `\documentclass`), so
-it only compiles inside the master; the other five chapters also still compile
-standalone.
+without `PATH` help. Verified output: **55 pages, 6 chapters, 0 undefined
+references, 0 undefined citations, 0 overfull boxes**.
+`results_2d.tex`, `conclusions.tex` and `abstract.tex` are fragments (no
+`\documentclass`), so they only compile inside the master; the other six chapters
+also still compile standalone, and the two new ones are tracked with their PDFs
+(`TEX/introduction.pdf`, 4 pages; `TEX/related_work.pdf`, 5 pages).
 
 ## 4. Experiment harnesses
 

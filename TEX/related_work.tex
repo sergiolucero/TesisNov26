@@ -1,0 +1,344 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage[round,numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\title{Background and related work}
+\author{Sergio Lucero}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Background and related work}
+\label{chap:related}
+
+This chapter places the thesis in four literatures it borrows from and tries to
+satisfy at once: subsurface flow and transport simulation, learned surrogates for
+partial differential equations, optimization under uncertainty for remediation
+design, and the verification and statistical practice that decides whether a
+computed number may be believed. The last of these is the one the thesis argues
+about.
+
+\subsection{Flow and transport in heterogeneous aquifers}
+
+Steady groundwater flow in a confined aquifer is governed by Darcy's law with a
+hydraulic conductivity that varies over several orders of magnitude in space.
+Analytical solutions exist only in idealized configurations, and two of them are
+used here as references: the Thiem solution for steady radial flow to a well
+\citep{thiem1906,bear1972} and the Ogata--Banks solution for one-dimensional
+longitudinal dispersion from a step source \citep{ogata1961solution}. Both are
+old, both are derived under assumptions (homogeneity, one dimensionality, a fully
+penetrating well) that a real site violates, and that is exactly why they are
+useful: a numerical model that cannot reproduce them is not wrong about the site,
+it is wrong about the equation.
+
+Contaminant transport couples advection by the seepage velocity with hydrodynamic
+dispersion and, where relevant, retardation and decay. The standard treatment of
+heterogeneity is geostatistical: conductivity is modelled as a log-normal random
+field with an exponential covariance, discretized here by a Karhunen--Lo\`eve
+expansion truncated at $95\%$ of the field variance. The truncation is not a
+modelling convenience but a dimension decision --- at the resolution used in this
+thesis it retains $1\,529$ modes, which is the number any surrogate has to face.
+
+Finite-volume discretizations with upwind advection \citep{leveque2002finite} are
+the workhorse for this class of problem, and they are what the reference
+implementation of \S\ref{chap:formulation} and the batched GPU backend both
+implement, so that the difference between them is arithmetic order and data type,
+not physics.
+
+\subsection{Learned surrogates for partial differential equations}
+
+Physics-informed neural networks \citep{raissi2019pinn,karniadakis2021piml}
+embed the residual of the governing equation in the training loss, so that a
+network can be trained without solution data. Operator-learning methods instead
+learn a map between function spaces: DeepONet \citep{lu2021deeponet} from a
+branch/trunk decomposition, and the Fourier neural operator
+\citep{li2020fourier,li2021fno,kovachki2023neural} by multiplying retained Fourier
+modes inside each layer, which gives it a global receptive field and a
+resolution-independent parameterization.
+
+The literature on failure modes is as important as the literature on successes.
+Spectral bias makes networks learn low frequencies first and sharp fronts late;
+gradient pathologies under stiff residuals and multi-objective losses are
+documented and partly remedied by adaptive weighting
+\citep{wang2021gradient,jagtap2020xpinn}; and the observation that PINN training
+degrades as the problem becomes harder \citep{krishnapriyan2021failure} is a
+warning against extrapolating from the easy cases.
+
+A recurrent methodological hazard, and the one that this thesis spends a chapter
+on, is that surrogate accuracy is usually reported as a single normalized error
+for a single training run. Relative $L^2$ error has a built-in reference point ---
+the zero predictor scores exactly $1.0$ --- which makes it possible to report a
+number near $1.0$ without noticing that the surrogate is worse than useless. The
+literature rarely reports the trivial-predictor baseline, the seed spread, or the
+effect of the resolution the operator was trained at, and all three decide whether
+a claimed improvement is real.
+
+\subsection{Optimization under uncertainty for remediation design}
+
+Simulation--optimization for pump-and-treat design has a long history
+\citep{gorelick1983,wagner1995,mayer2002,ahlfeld2000}, reviewed in
+\citep{zheng2002applied}. The classical formulations are deterministic: minimize
+pumping cost subject to a concentration constraint evaluated on one calibrated
+model. Because that model is uncertain, the design is fragile in exactly the way
+the constraint is supposed to prevent, which motivates robust and
+chance-constrained variants.
+
+Two risk measures dominate. Value-at-risk constrains a quantile, is
+non-convex and ignores the size of violations; conditional value-at-risk (CVaR)
+averages the tail, is convex in the underlying distribution, and admits a linear
+or smooth reformulation via the Rockafellar--Uryasev construction
+\citep{rockafellar1991,rockafellar2000}. This thesis uses a CVaR penalty with
+squared hinge, which keeps the objective smooth while making a policy that is
+inside the constraint strictly better than one that merely touches it.
+
+\subsection{Sample average approximation and what it certifies}
+
+Chance-constrained and expectation objectives over a continuous random field are
+not computable in closed form, so they are replaced by a sample average over $M$
+realizations, an approach analysed in \citep{kleywegt2002,birge2011,shapiro2009,
+nemirovski2009}. The theory says two things that matter for practice: the
+optimal value of the sample problem converges to the true one as $M$ grows, and
+the optimizer of the sample problem is \emph{not} certified by the sample it was
+optimized on. A candidate solution has to be re-evaluated on independent draws,
+and the resulting estimator of the reliability has its own sampling error.
+
+That second step is often skipped, and the reason is arithmetic rather than
+laziness: it costs as much again as the optimization. The consequence, measured
+in \S\ref{chap:results}, is that a policy optimized on sixteen scenarios can
+report a perfect reliability and fail on four hundred unseen ones, and that a
+tail statistic computed on the optimization sample is not even approximately the
+tail of the distribution.
+
+\subsection{Derivative-free search and batched evaluation}
+
+The objective defined by a transport solve is non-convex, non-smooth in the
+constraints, and has no usable gradient in the presence of the random field; the
+discrete adjoint exists but is not what the batched backend computes. The search
+used here is therefore a compass (pattern) search with capacity projection, a
+classical derivative-free method with convergence theory under mild smoothness
+\citep{conn2009,nocedal2006}. Its cost structure is unusually friendly to
+batching: a whole sweep of compass directions can be evaluated as one batch of
+initial-value problems, which turns a sequence of small linear solves into one
+large one and is where the GPU speedups of \S\ref{chap:results} come from.
+
+\subsection{Verification, validation, and reproducible computational results}
+
+The vocabulary used throughout is the standard one. \emph{Code verification}
+asks whether the implementation solves the intended equations, and is answered
+by convergence studies and manufactured solutions; \emph{solution verification}
+asks whether a particular discretization is accurate enough; \emph{validation}
+asks whether the equations describe the site. This thesis is concerned almost
+entirely with the first, plus a fourth activity that the literature treats
+informally: \emph{implementation parity}, i.e.\ whether two independently written
+backends of the same model agree. Parity is the cheapest available check on a
+fast implementation, and it is the one that catches the errors that benchmarks
+miss.
+
+The reproducibility literature \citep{sandve2013ten,wilson2014best} has
+established the practices --- version control, tests, recorded environments,
+archived artifacts --- and equally that they are not followed under deadline
+pressure. The argument developed in this thesis is narrower and more operational:
+each verification device should be tied to a defect it would have caught, and it
+should be cheap enough to run on every change. Where a device is expensive (an
+out-of-sample certificate, a seed sweep), the cost is made explicit so that the
+decision to skip it is a decision and not an oversight.
+
+\subsection{Statistical reporting of rare events}
+
+A reliability of $0.975$ estimated from forty scenarios and the same number
+estimated from four hundred are not the same claim, and a tail average is weaker
+still. The interval used here is the Wilson score interval for a binomial
+proportion \citep{wilson1927probable}, chosen over the normal approximation
+because it behaves sensibly at the extremes that matter for a $5\%$ failure
+probability. For the tail itself the relevant fact is that a CVaR estimate at
+level $\alpha$ averages $\alpha M$ of the most variable draws: at
+$\alpha = 0.05$ and $M = 400$ that is twenty draws, so its standard error is
+$\operatorname{sd}(\text{tail})/\sqrt{20}$ --- of order a third of a unit for the
+compliance metric used here. No amount of careful implementation removes that
+uncertainty; the only responses are to report it or to change the sample size,
+and \S\ref{chap:results} quantifies the trade-off.
+
+\subsection{Positioning of this work}
+
+The contributions of the thesis are not new numerical methods. The batched
+transport solve, the CVaR formulation, the pattern search and the Wilson interval
+are all standard. What is specific here is the \emph{protocol} that decides when a
+number may be reported: seed sweeps instead of best runs for surrogates,
+implementation parity as a gate on the fast backend, an out-of-sample
+certificate with an interval for reliability, and an explicit standard error for
+the tail. Applied consistently, that protocol produces two results that a
+conventional workflow would have hidden: a surrogate that was worse than
+predicting zeros, and a tail statistic that describes the sample it was computed
+on rather than the aquifer it is supposed to describe.
+
+\begin{thebibliography}{99}
+
+\bibitem[Thiem(1906)]{thiem1906}
+G.~Thiem.
+\textit{Hydrologische Methoden}.
+Gebhardt, Leipzig, 1906.
+
+\bibitem[Bear(1972)]{bear1972}
+J.~Bear.
+\textit{Dynamics of Fluids in Porous Media}.
+American Elsevier, New York, 1972.
+
+\bibitem{ogata1961solution}
+A. Ogata and R. B. Banks,
+\textit{A solution of the differential equation of longitudinal dispersion in
+porous media}, U.S. Geological Survey Professional Paper 411-A, 1961.
+
+\bibitem[LeVeque(2002)]{leveque2002finite}
+R.~J. LeVeque.
+\textit{Finite Volume Methods for Hyperbolic Problems}.
+Cambridge University Press, 2002.
+
+\bibitem[Raissi et~al.(2019)]{raissi2019pinn}
+M.~Raissi, P.~Perdikaris, and G.~E. Karniadakis.
+Physics-informed neural networks: A deep learning framework for solving forward
+and inverse problems involving nonlinear partial differential equations.
+\textit{Journal of Computational Physics}, 378:686--707, 2019.
+
+\bibitem[Karniadakis et~al.(2021)]{karniadakis2021piml}
+G.~E. Karniadakis, I.~G. Kevrekidis, L.~Lu, P.~Perdikaris, S.~Wang, and L.~Yang.
+Physics-informed machine learning.
+\textit{Nature Reviews Physics}, 3:422--440, 2021.
+
+\bibitem[Lu et~al.(2021)]{lu2021deeponet}
+L.~Lu, P.~Jin, G.~Pang, Z.~Zhang, and G.~E. Karniadakis.
+Learning nonlinear operators via DeepONet based on the universal approximation
+theorem of operators.
+\textit{Nature Machine Intelligence}, 3:218--229, 2021.
+
+\bibitem{li2020fourier}
+Z. Li, N. Kovachki, K. Azizzadenesheli, B. Liu, K. Bhattacharya, A. Stuart,
+A. Anandkumar, \textit{Fourier Neural Operator for Parametric Partial
+Differential Equations}, ICLR, 2021.
+
+\bibitem[Li et~al.(2021)]{li2021fno}
+Z.~Li, N.~Kovachki, K.~Azizzadenesheli, B.~Liu, K.~Bhattacharya, A.~Stuart,
+and A.~Anandkumar.
+Fourier neural operator for parametric partial differential equations.
+\textit{International Conference on Learning Representations (ICLR)}, 2021.
+
+\bibitem[Kovachki et~al.(2023)]{kovachki2023neural}
+N.~Kovachki, Z.~Li, B.~Liu, K.~Azizzadenesheli, K.~Bhattacharya, A.~Stuart,
+and A.~Anandkumar.
+Neural operator: Learning maps between function spaces with applications to
+PDEs.
+\textit{Journal of Machine Learning Research}, 24(89):1--97, 2023.
+
+\bibitem[Wang et~al.(2021)]{wang2021gradient}
+S.~Wang, Y.~Teng, and P.~Perdikaris.
+Understanding and mitigating gradient flow pathologies in physics-informed
+neural networks.
+\textit{SIAM Journal on Scientific Computing}, 43(5):A3055--A3081, 2021.
+
+\bibitem[Jagtap et~al.(2020)]{jagtap2020xpinn}
+A.~D. Jagtap, E.~Kharazmi, and G.~E. Karniadakis.
+Conservative physics-informed neural networks on discrete domains for
+conservation laws: Applications to forward and inverse problems.
+\textit{Computer Methods in Applied Mechanics and Engineering},
+365:113028, 2020.
+
+\bibitem[Krishnapriyan et~al.(2021)]{krishnapriyan2021failure}
+A.~S. Krishnapriyan, A.~Gholami, S.~Zhe, R.~Kirby, and M.~W. Mahoney.
+Characterizing possible failure modes in physics-informed neural networks.
+\textit{Advances in Neural Information Processing Systems}, 34, 2021.
+
+\bibitem[Gorelick(1983)]{gorelick1983}
+S.~M. Gorelick.
+A review of distributed parameter groundwater management modeling methods.
+\textit{Water Resources Research}, 19(2):305--319, 1983.
+
+\bibitem[Wagner(1995)]{wagner1995}
+B.~J. Wagner.
+Recent advances in simulation-optimization groundwater management modeling.
+\textit{Reviews of Geophysics}, 33(S2):1021--1028, 1995.
+
+\bibitem[Mayer et~al.(2002)]{mayer2002}
+A.~S. Mayer, C.~T. Kelley, and C.~T. Miller.
+Optimal design of pump-and-treat systems using simulation-optimization.
+\textit{Water Resources Research}, 38(12):1277, 2002.
+
+\bibitem[Ahlfeld and Mulligan(2000)]{ahlfeld2000}
+D.~P. Ahlfeld and A.~E. Mulligan.
+\textit{Optimal Management of Groundwater Resources}.
+Wiley, New York, 2000.
+
+\bibitem[Zheng and Bennett(2002)]{zheng2002applied}
+C.~Zheng and G.~D. Bennett.
+\textit{Applied Contaminant Transport Modeling}.
+Wiley, New York, 2nd edition, 2002.
+
+\bibitem[Rockafellar and Wets(1991)]{rockafellar1991}
+R.~T. Rockafellar and R.~J.-B. Wets.
+Scenarios and policy aggregation in optimization under uncertainty.
+\textit{Mathematics of Operations Research}, 16(1):119--147, 1991.
+
+\bibitem[Rockafellar and Uryasev(2000)]{rockafellar2000}
+R.~T. Rockafellar and S.~Uryasev.
+Optimization of conditional value-at-risk.
+\textit{Journal of Risk}, 2(3):21--41, 2000.
+
+\bibitem[Kleywegt et~al.(2002)]{kleywegt2002}
+A.~J. Kleywegt, A.~Shapiro, and T.~Homem-de-Mello.
+The sample average approximation method for stochastic discrete optimization.
+\textit{SIAM Journal on Optimization}, 12(2):479--502, 2002.
+
+\bibitem[Birge and Louveaux(2011)]{birge2011}
+J.~R. Birge and F.~Louveaux.
+\textit{Introduction to Stochastic Programming}.
+Springer, New York, 2nd edition, 2011.
+
+\bibitem[Shapiro et~al.(2009)]{shapiro2009}
+A.~Shapiro, D.~Dentcheva, and A.~Ruszczy\'nski.
+\textit{Lectures on Stochastic Programming: Modeling and Theory}.
+SIAM, Philadelphia, 2009.
+
+\bibitem[Nemirovski et~al.(2009)]{nemirovski2009}
+A.~Nemirovski, A.~Juditsky, G.~Lan, and A.~Shapiro.
+Robust stochastic approximation approach to stochastic programming.
+\textit{SIAM Journal on Optimization}, 19(4):1574--1609, 2009.
+
+\bibitem[Conn et~al.(2009)]{conn2009}
+A.~R. Conn, K.~Scheinberg, and L.~N. Vicente.
+\textit{Introduction to Derivative-Free Optimization}.
+SIAM, Philadelphia, 2009.
+
+\bibitem[Nocedal and Wright(2006)]{nocedal2006}
+J.~Nocedal and S.~J. Wright.
+\textit{Numerical Optimization}.
+Springer, New York, 2nd edition, 2006.
+
+\bibitem[Sandve et al.(2013)]{sandve2013ten}
+G.~K. Sandve, A.~Nekrutenko, J.~Taylor, and E.~Hovig.
+\newblock Ten simple rules for reproducible computational research.
+\newblock \emph{PLoS Computational Biology}, 9(10):e1003285, 2013.
+
+\bibitem[Wilson et al.(2014)]{wilson2014best}
+G.~Wilson, D.~A. Aruliah, C.~T. Brown, N.~P. Chue~Hong, M.~Davis, R.~T. Guy,
+  S.~H. Haddock, K.~D. Huff, I.~M. Mitchell, M.~D. Plumbley, B.~Waugh,
+  E.~P. White, and P.~Wilson.
+\newblock Best practices for scientific computing.
+\newblock \emph{PLoS Biology}, 12(1):e1001745, 2014.
+
+\bibitem[Wilson(1927)]{wilson1927probable}
+E.~B. Wilson.
+\newblock Probable inference, the law of succession, and statistical inference.
+\newblock \emph{Journal of the American Statistical Association},
+  22(158):209--212, 1927.
+
+\end{thebibliography}
+
+\end{document}

@@ -62,14 +62,24 @@ BUILD = TEX / "build"
 
 # Checked in this order; only DEFAULT_CHAPTERS is assembled.
 ALL_CHAPTERS = [
+    ("introduction", "Introduction"),
+    ("related_work", "Background and related work"),
     ("formulation", "Formulation"),
     ("optimization", "Stochastic optimization"),
     ("results_2d", "Numerical results"),
     ("SolvingAlgorithms", "Solving algorithms"),
     ("current_equations_algorithms", "Equations and algorithms under test"),
     ("plans_2d_3d", "Plans"),
+    ("conclusions", "Conclusions"),
 ]
-DEFAULT_CHAPTERS = ["formulation", "optimization", "results_2d"]
+DEFAULT_CHAPTERS = ["introduction", "related_work", "formulation", "optimization",
+                    "results_2d", "conclusions"]
+
+# The thesis is one document with one title; the chapters are written as
+# standalone articles and carry their own, which are dropped like \maketitle.
+THESIS_TITLE = ("Verification-first simulation and chance-constrained\\"
+                " optimization for pump-and-treat remediation")
+THESIS_AUTHOR = "Sergio Lucero"
 
 # A preamble carries more than \newcommand: theorem environments, column
 # types and operator names are declared the same way and are just as fatal to
@@ -86,7 +96,7 @@ REF_RE = re.compile(r"\\(?:ref|eqref|autoref|pageref)\{([^}]*)\}")
 INPUT_RE = re.compile(r"\\(?:input|include)\{([^}]*)\}")
 GRAPHICS_RE = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]*)\}")
 ENV_RE = re.compile(r"\\(begin|end)\{([^}]*)\}")
-STRIP = re.compile(r"^\s*\\(maketitle|tableofcontents|title|author|date)\b")
+STRIP = re.compile(r"^\s*\\(maketitle|tableofcontents|title|author|date|appendix)\b")
 USE_RE = re.compile(r"\\usepackage(?:\[([^\]]*)\])?\{([^}]*)\}")
 COMMENT = re.compile(r"(?<!\\)%.*")
 
@@ -115,6 +125,61 @@ def drop_title_blocks(head: str) -> str:
     return "\n".join(out)
 
 
+ABS_BLOCK_RE = re.compile(r"\\begin\{abstract\}.*?\\end\{abstract\}", re.S)
+
+
+def drop_abstract(body: str) -> str:
+    """Remove a chapter's own ``abstract`` environment.
+
+    Standalone articles open with an abstract; a thesis has exactly one, in the
+    front matter. Left in, each chapter would print its own "Abstract" heading in
+    the middle of the document -- which is how this was noticed.
+    """
+    return ABS_BLOCK_RE.sub("", body)
+
+# Each selected file becomes a real \chapter, so a body whose first heading
+# merely repeats the chapter title ("Introduction", "Background and related
+# work") would print it twice and number the section 1.0.1 -- the section counter
+# is never incremented at that level. Every other body keeps its \section, which
+# then numbers as 1.1, 1.2, ... under the chapter.
+HEADING_RE = re.compile(
+    r"^(\s*)\\(subsubsection|subsection|section|paragraph)(\*?)(?=[\s\[{])",
+    re.M)
+OPENER_RE = re.compile(r"^[ \t]*\\(section|chapter)(\*?)\s*\{([^}]*)\}[ \t]*$",
+                       re.M)
+
+
+def _norm_heading(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+PROMOTE = {"subsection": "section", "subsubsection": "subsection"}
+
+
+def drop_duplicate_opener(body: str, chapter_title: str) -> str:
+    """Fold a chapter's own opener into the ``\\chapter`` heading.
+
+    A body that opens with ``\\section{Introduction}`` under
+    ``\\chapter{Introduction}`` would print the title twice and number its
+    subsections ``1.0.1`` (the section counter is never incremented at that
+    level). Dropping the opener therefore has to promote what followed it by one
+    level -- otherwise the chapter keeps a phantom section that does not exist.
+    Run-in ``\\paragraph`` headings stay put: promoting them to
+    ``\\subsubsection`` would turn a run-in lead-in into a display heading.
+    """
+    m = OPENER_RE.search(body)
+    if not m or _norm_heading(m.group(3)) != _norm_heading(chapter_title):
+        return body
+    rest = body[m.end():]
+
+    def bump(match: re.Match) -> str:
+        level = PROMOTE.get(match.group(2))
+        return (f"{match.group(1)}\\{level}{match.group(3)}" if level
+                else match.group(0))
+
+    return HEADING_RE.sub(bump, rest)
+
+
 def split_document(text: str, name: str) -> tuple[str, str]:
     """Return ``(preamble, body)`` for a standalone ``article`` file."""
     text = strip_comments(text)
@@ -126,7 +191,7 @@ def split_document(text: str, name: str) -> tuple[str, str]:
     tail = text[start + len("\\begin{document}"):]
     tail = tail.split("\\end{document}")[0]
     body = "\n".join(line for line in tail.splitlines() if not STRIP.match(line))
-    return head, body
+    return head, drop_abstract(body)
 
 
 BIB_BLOCK_RE = re.compile(
@@ -301,7 +366,33 @@ def main() -> int:
     ap.add_argument("--chapters", default=",".join(DEFAULT_CHAPTERS),
                     help="comma-separated chapters to assemble, in order "
                          "(default: %(default)s)")
+    ap.add_argument("--title", default=THESIS_TITLE, help="document title")
+    ap.add_argument("--author", default=THESIS_AUTHOR, help="document author")
+    ap.add_argument("--build-dir", default=None,
+                    help="where to write tesis.tex/body (default: TEX/build). "
+                         "Tests point this at a temp dir so they cannot delete a "
+                         "built PDF")
+    ap.add_argument("--abstract", default=str(TEX / "abstract.tex"),
+                    help="fragment emitted as the document abstract "
+                         "(default: %(default)s; '' to omit)")
     args = ap.parse_args()
+
+    global BUILD
+    if args.build_dir:
+        BUILD = Path(args.build_dir)
+        if not BUILD.is_absolute():
+            BUILD = ROOT / BUILD
+
+    abstract = ""
+    if args.abstract:
+        apath = Path(args.abstract)
+        if not apath.is_absolute():
+            apath = ROOT / apath
+        if apath.is_file():
+            abstract = strip_comments(apath.read_text(encoding="utf-8")).strip()
+        else:
+            print(f"[tex] no abstract at {args.abstract} -- assembling without one")
+    doc_title, doc_author = args.title, args.author
 
     selected = [c.strip() for c in args.chapters.split(",") if c.strip()]
     unknown = [c for c in selected if c not in dict(ALL_CHAPTERS)]
@@ -318,8 +409,9 @@ def main() -> int:
     labels: dict[str, str] = {}
     bib: dict[str, tuple[str, str]] = {}    # key -> (entry, chapter)
     bodies: list[tuple[str, str]] = []
+    pending_refs: list[tuple[str, str]] = []
 
-    for stem, title in ALL_CHAPTERS:
+    for stem, chapter_title in ALL_CHAPTERS:
         path = TEX / f"{stem}.tex"
         if not path.is_file():
             rep.error(f"missing chapter TEX/{stem}.tex")
@@ -362,13 +454,10 @@ def main() -> int:
             # duplicates are adjudicated below, once the selection is known
             labels.setdefault(label, stem)
 
-        for ref in REF_RE.findall(body):
-            if ref.startswith("#"):
-                continue
-            if ref not in labels and ref not in LABEL_RE.findall("\n".join(
-                    b for _, b in bodies)):
-                rep.warn(f"{stem}: \\ref{{{ref}}} is not defined in any chapter "
-                         "(fine if the target lives outside TEX/)")
+        # \ref targets are checked after every chapter has been read: the front
+        # matter points forward into chapters that have not been parsed yet, and
+        # an in-loop check called those references undefined on the first run.
+        pending_refs.extend((stem, ref) for ref in REF_RE.findall(body))
         body, entries = take_bibliography(body)
         for key, entry in entries:
             if key in bib and bib[key][0] != entry:
@@ -377,6 +466,13 @@ def main() -> int:
             else:
                 bib.setdefault(key, (entry, stem))
         bodies.append((stem, body))
+
+    defined = set(labels) | {lab for _, b in bodies for lab in LABEL_RE.findall(b)}
+    for stem, ref in pending_refs:
+        if ref.startswith("#") or ref in defined:
+            continue
+        rep.warn(f"{stem}: \\ref{{{ref}}} is not defined in any chapter "
+                 "(fine if the target lives outside TEX/)")
 
     for stem, body in bodies:
         cited: list[str] = []
@@ -428,11 +524,13 @@ def main() -> int:
         shutil.rmtree(BUILD)
     (BUILD / "body").mkdir(parents=True)
 
+    titles = dict(ALL_CHAPTERS)
     for stem, body in bodies:
+        body = drop_duplicate_opener(body, titles[stem])
         (BUILD / "body" / f"{stem}.tex").write_text(
             body.strip() + "\n", encoding="utf-8")
 
-    preamble = ["\\documentclass[11pt]{article}"]
+    preamble = ["\\documentclass[11pt]{report}"]
     for name in packages:
         opts = options.get(name) or []
         preamble.append(f"\\usepackage[{','.join(opts)}]{{{name}}}"
@@ -441,27 +539,31 @@ def main() -> int:
     preamble += [definition for definition, _ in macros.values()]
     preamble += [
         "",
-        "\\title{Stochastic optimization of pump-and-treat remediation\\\\"
-        "\\large assembled from TEX/*.tex by SCRIPTS/build\\_tex.py}",
-        "\\date{}",
-        "\\author{}",
+        f"\\title{{{doc_title}\\\\"
+        "\\large\\vspace{0.4em}\\normalsize assembled from TEX/*.tex by "
+        "\\texttt{SCRIPTS/build\\_tex.py}}",
+        "\\date{\\today}",
+        f"\\author{{{doc_author}}}",
         "",
         "\\begin{document}",
         "\\maketitle",
-        "\\tableofcontents",
     ]
+    if abstract:
+        preamble += ["", abstract]
+    preamble += ["\\setcounter{tocdepth}{2}", "\\tableofcontents"]
     # No wrapper headings: every chapter body already opens with a real
     # \section, so wrapping it in \section* would leave the inner counters at
     # zero (subsections numbered 0.1) and break \ref into those sections.
     for stem, _body in bodies:
-        preamble += ["\\clearpage", f"\\input{{body/{stem}}}"]
+        preamble += [f"\\chapter{{{titles[stem]}}}", f"\\input{{body/{stem}}}"]
     if bib:
         preamble += ["", "\\clearpage", "\\begin{thebibliography}{99}"]
         preamble += [entry for entry, _ in bib.values()]
         preamble += ["\\end{thebibliography}"]
     preamble += ["\\end{document}", ""]
     (BUILD / "tesis.tex").write_text("\n".join(preamble), encoding="utf-8")
-    print(f"[tex] wrote {BUILD.relative_to(ROOT)}/tesis.tex "
+    shown = BUILD.relative_to(ROOT) if BUILD.is_relative_to(ROOT) else BUILD
+    print(f"[tex] wrote {shown}/tesis.tex "
           f"({len(bodies)} chapters)")
 
     if args.compile:

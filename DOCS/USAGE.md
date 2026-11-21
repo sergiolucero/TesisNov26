@@ -299,6 +299,24 @@ report, use `seed_sweep.py` instead.
 
 ---
 
+### 3.5 `build_tex.py` — the thesis
+
+```bash
+python3 SCRIPTS/build_tex.py              # validate + assemble TEX/build/tesis.tex
+python3 SCRIPTS/build_tex.py --check-only # validate only, write nothing
+python3 SCRIPTS/build_tex.py --compile    # + PDF, on a host with TeX Live
+```
+
+`TEX/*.tex` are standalone `article` files, not chapters: `optimization.tex`
+restates material from `SolvingAlgorithms.tex` and `plans_2d_3d.tex`, so the
+assembled set is the disjoint subset `formulation` + `optimization` +
+`results_2d` (override with `--chapters`). The script checks brace/environment
+balance, every `\ref` against the labels of the assembled chapters, duplicate
+labels and missing `\input`/`\includegraphics` targets, merges the preambles,
+and writes the chapter bodies to `TEX/build/body/` — the sources are never
+modified. There is no LaTeX toolchain on the assembly host, so `--compile` is a
+no-op there.
+
 ## 4. Experiment harnesses
 
 ### 4.1 `seed_sweep.py` — seeds, medians, arm comparison

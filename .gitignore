@@ -82,3 +82,6 @@ runs/sweeps/**/checkpoint.pt
 # under site/plots/, so re-include the whole site/ tree last.
 !site/
 !site/**
+
+# LaTeX build output (regenerate with SCRIPTS/build_tex.py)
+TEX/build/

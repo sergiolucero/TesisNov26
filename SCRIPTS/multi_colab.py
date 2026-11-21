@@ -827,10 +827,18 @@ def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:
     for k in range(args.replicas):
         rdir = rundir / f"r{k}"
         rdir.mkdir(parents=True, exist_ok=True)
-        replica_cfg = deep_update(
-            json.loads(json.dumps(cfg)),
-            {"optim": {"seed": args.seed_base + k}},
-        )
+        # `optim.seed` only seeds well *placement*; the scenario draws come from
+        # `seed.train`/`seed.test`, so an experiment that wants replicas to see
+        # different aquifers (rather than to re-run the same one) has to offset
+        # those.  `--seed-step 0` keeps the old behaviour.
+        override = {"optim": {"seed": args.seed_base + k}}
+        if args.seed_step:
+            step = int(args.seed_step) * k
+            override["seed"] = {
+                "train": int(cfg["seed"]["train"]) + step,
+                "test": int(cfg["seed"]["test"]) + step,
+            }
+        replica_cfg = deep_update(json.loads(json.dumps(cfg)), override)
         cfg_name = f"config_r{k}.yaml"
         cfg_local = rdir / cfg_name
         cfg_local.write_text(yaml.safe_dump(replica_cfg, sort_keys=False),
@@ -1258,6 +1266,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="number of VMs / independent seeds (default: 1)")
     la.add_argument("--seed-base", type=int, default=0,
                     help="replica k gets optim.seed = seed_base + k")
+    la.add_argument("--seed-step", type=int, default=0,
+                    help="replica k also gets seed.train/seed.test shifted by "
+                         "k*SEED_STEP, i.e. a different aquifer per replica "
+                         "(0 = every replica draws the same scenarios, which "
+                         "only measures solver noise)")
     la.add_argument("--gpu", default="T4",
                     help="T4 | L4 | G4 | H100 | A100 | none (none = CPU runtime; "
                          "the opt stage is CPU-bound so a GPU buys nothing)")
@@ -1332,8 +1345,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     ap = build_parser()
     args, extra = ap.parse_known_args()
-    if extra and extra[0] == "--":
-        extra = extra[1:]  # separator for the forwarded collab_run.py args
+    # `--` separates our flags from the ones forwarded to collab_run.py; a bare
+    # `--` that survives into the forwarded list would end argparse's option
+    # parsing on the VM ("unrecognized arguments: -- --allow-nonfinite"), so
+    # drop every separator rather than only a leading one.
+    extra = [tok for tok in extra if tok != "--"]
     if extra and args.command == "launch":
         # Everything unknown is forwarded verbatim to collab_run.py on the VM.
         log(f"forwarding to collab_run.py: {shlex.join(extra)}")

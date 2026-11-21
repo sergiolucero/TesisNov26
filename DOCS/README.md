@@ -47,8 +47,9 @@ packages, configs and generated outputs.
 | `SCRIPTS/plot_plume_movie.py` | Animate the plume evolution from saved fields or a policy run |
 | `SCRIPTS/collab_run.py` | Colab/GPU dispatcher with `smoke`/`quick`/`full` presets |
 | `SCRIPTS/multi_colab.py` | Multi-VM Colab driver (`launch`/`status`/`logs`/`collect`/`stop`) |
+| `SCRIPTS/colab_status.py` | Current/recent Colab run snapshot (`--json`; backs `/runs`) |
 | `SCRIPTS/bench_backend.py` | NumPy vs batched-GPU backend benchmark + verdict |
-| `SCRIPTS/app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) |
+| `SCRIPTS/app.py` | Flask viewer: figures, plots, fleet health and Colab run status (`/`, `/plots`, `/fleet`, `/runs`, `/api/colab`) |
 | `physics/` | Finite-volume flow/transport (NumPy reference + batched torch) and analytical references |
 | `stoch/` | Random fields, wells, objective, SAA, chance, adjoint, optimizer, report — and their batched (`*_torch`) counterparts |
 | `configs/opt/` | Benchmark/exploration/certificate configurations |
@@ -80,9 +81,13 @@ python -u SCRIPTS/run_2d.py --quick
 # Stochastic optimization gates
 python -u SCRIPTS/run_optimization.py --config configs/opt/benchmark_small.yaml
 
-# Figure viewer + fleet dashboard — run_app.sh listens on 5001 by default;
-# the public instance at http://206.81.4.82:5000 was started manually on 5000
-./SCRIPTS/run_app.sh start   # / and /plots for figures, /fleet for node health
+# Figure viewer + dashboards (http://localhost:5001) — run_app.sh listens on
+# 5001 by default; the public instance at http://206.81.4.82:5000 was started
+# manually on 5000
+./SCRIPTS/run_app.sh start   # /plots, /fleet for nodes, /runs for Colab runs
+
+# Colab pipeline status as JSON (for scripts, cron, tailnet probes)
+curl -sf localhost:5001/api/colab | python3 -m json.tool | head -40
 ```
 
 On this machine use `/root/base/bin/python3`; the default `python3` has no
@@ -135,6 +140,7 @@ infrastructure and services from the platforms below.
       </a>
       <br>
       <a href="https://www.deepseek.com/"><strong>DeepSeek</strong></a>
+      (<a href="https://platform.deepseek.com/top_up">top up</a>)
       <br>
       Model assistance for code and analysis.
     </td>

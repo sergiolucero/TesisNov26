@@ -49,8 +49,9 @@ Prefix long jobs with `python3 -u` so progress lines reach the log immediately
 | `collab_run.py` | GPU/Colab dispatcher with `smoke`/`quick`/`full` presets and `--gpu/--nx/--ny` | preset-dependent |
 | `new_high_colab.py` | Same stages tuned for the **high-end** Colab GPUs (A100/H100/G4): measures the card, batches the transport sweep, drives `--backend torch` | minutes – hours |
 | `run_colab.sh` | Shell wrapper: GPU check + pip install + `collab_run.py` | preset-dependent |
-| `multi_colab.py` | Drive **several** Colab VMs from your laptop for large runs | hours |
-| `app.py` | Flask figure viewer + fleet dashboard (`/`, `/plots`, `/fleet`) | long-running |
+| `multi_colab.py` | Drive **several** Colab VMs from your laptop for large runs (`logs --source remote` reads a live run's VM log) | hours |
+| `app.py` | Flask viewer: figures, plots, fleet health and Colab run status (`/`, `/plots`, `/fleet`, `/runs`, `/api/colab`) | long-running |
+| `colab_status.py` | Read-only status of current/recent Colab runs (`--json`, `--live-logs`; backs `/runs`) | seconds |
 | `run_app.sh` | start/stop/status for `app.py` (port 5001) | — |
 | `deploy_do.sh` | Provision a DigitalOcean droplet, rsync the repo, run the job, fetch results | minutes – hours |
 | `remote_run.sh` | The script `deploy_do.sh` executes **on** the droplet | as `SIM_MODE` |
@@ -495,7 +496,7 @@ of whether the torch backend is ahead at all — see [`GPU.md`](GPU.md).
 ## 5. Serving and dashboards
 
 ```bash
-./SCRIPTS/run_app.sh start         # http://localhost:5001  (/ , /plots, /fleet)
+./SCRIPTS/run_app.sh start         # http://localhost:5001  (/ , /plots, /fleet, /runs, /api/colab)
 ./SCRIPTS/run_app.sh status
 ./SCRIPTS/run_app.sh stop
 PORT=8080 ./SCRIPTS/run_app.sh start
@@ -504,8 +505,32 @@ python3 SCRIPTS/app.py --port 5000            # foreground
 
 `app.py` serves the repo's `out/` as static files, `figs/` as `/figs/<name>`,
 renders `templates/*.html`, and shells out to `SCRIPTS/fleet_status.sh --json`
-for `/fleet` (15 s timeout so the page never hangs). `run_app.sh` keeps its
-pid/log in `SCRIPTS/app.pid` / `SCRIPTS/app.log`.
+for `/fleet` (15 s timeout so the page never hangs). `/runs` reads
+`runs/colab_multi/*/plan.json` and `out/high/*` through
+`SCRIPTS/colab_status.py`, shows per-replica progress and log tails, and only
+touches the network when you ask it to: `?live=1` runs `colab sessions`, and
+`?live_logs=1` pulls a live replica's `run.log` off the VM (bounded per
+replica, one retry) — without it a run in flight only shows the frozen local
+header, since the streaming `exec` returns nothing until the run ends.
+`run_app.sh` keeps its pid/log in `SCRIPTS/app.pid` / `SCRIPTS/app.log`.
+
+`/api/colab` (alias `/runs.json`) is the same snapshot as JSON for scripts and
+monitors, plus a `pipeline` block whose `state` is one word
+(`running`/`idle`/`finished`/`failed`/`stopped`/…):
+
+```bash
+curl -sf localhost:5001/api/colab | jq '.pipeline.state, .pipeline.progress_pct'
+curl -sf 'localhost:5001/api/colab?limit=1'      # newest run only
+curl -sf 'localhost:5001/api/colab?live=1'       # also probe `colab sessions`
+curl -sf 'localhost:5001/api/colab?live_logs=1'  # real progress from the VM
+curl -sf 'localhost:5001/api/colab?run=<run-id>' # one run, 404 if unknown
+curl -sf 'localhost:5001/api/colab/<run-id>'     # full detail: replicas, progress, tails
+curl -sf 'localhost:5001/runs/log/multi/<run-id>?replica=0&remote=1'  # live tail
+```
+
+A non-200 means the call itself failed (500 → `ok:false` + `error`, 404 →
+unknown run id), so `curl -sf` is a valid health check. Replies carry
+`Cache-Control: no-store`.
 
 ---
 

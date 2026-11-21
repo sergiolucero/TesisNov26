@@ -65,6 +65,7 @@ Usage
 
     ./SCRIPTS/multi_colab.py status         # sessions + last known state
     ./SCRIPTS/multi_colab.py logs -f        # tail every replica's log
+    ./SCRIPTS/multi_colab.py logs -f --source remote   # a live run's VM log
     ./SCRIPTS/multi_colab.py collect        # (re)download artifacts
     ./SCRIPTS/multi_colab.py stop           # release the VMs
 
@@ -94,6 +95,15 @@ its source:
 * a failing shell script inside a ``%%bash`` cell does **not** make the CLI
   return nonzero, so each cell echoes a ``[multi] ... exit=<code>`` marker and
   the driver reads the run's real status out of the streamed log.
+
+A fourth one only bites *while* a run is in flight: that same ``%%bash`` cell
+keeps the kernel busy for the whole run, and ``exec`` only answers when the
+cell ahead of it finishes, so ``exec`` can never be used to read a live run's
+log -- it would block for hours. Worse, the cell's output is only streamed home
+when it returns, so ``r<k>/run.log`` stays at the CLI header and the run looks
+stalled. Both problems are solved the same way: read the VM's own ``run.log``
+with ``colab download`` (filesystem API, immediate, read-only). ``logs`` does
+that automatically for a live run -- see ``--source``.
 
 Exit status: 0 when every replica finished and its artifacts arrived,
 1 when a replica failed, 2 on a usage/preflight error.
@@ -734,8 +744,14 @@ def launch_one(cli: ColabCLI, plan: dict, replica: dict,
         # One line per replica: where it ran, how long, and what it produced.
         est = plan.get("estimate") or {}
         pcfg = plan.get("config") or {}
+        plan_outdir = plan.get("outdir")
+        if not plan_outdir:
+            # Older plans in the wild predate the outdir key.  The run
+            # directory is still recoverable from the replica local_dir, and
+            # losing the runtime record must never mask the run result.
+            plan_outdir = Path(plan["replicas"][state["index"]]["local_dir"]).parent
         log_runtime(
-            Path(plan["outdir"]) / "runtimes.jsonl", "multi_colab.py", 
+            Path(plan_outdir) / "runtimes.jsonl", "multi_colab.py", 
             state["elapsed_h"] * 3600.0,
             stage=plan.get("opt_stage"), preset=plan.get("preset"),
             gpu=plan.get("gpu"), replica=state["index"], session=session,
@@ -748,6 +764,16 @@ def launch_one(cli: ColabCLI, plan: dict, replica: dict,
             state=state["state"], vm=state.get("vm"), exit=state.get("exit"),
             status="ok" if state["state"] == "finished" else state["state"],
         )
+
+
+def forwarded_backend(extra: list[str]) -> str:
+    """The --opt-backend value forwarded to collab_run.py ('auto' by default)."""
+    for i, tok in enumerate(extra):
+        if tok == "--opt-backend" and i + 1 < len(extra):
+            return extra[i + 1]
+        if tok.startswith("--opt-backend="):
+            return tok.split("=", 1)[1]
+    return "auto"
 
 
 def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:
@@ -771,9 +797,17 @@ def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:
     if args.estimate:
         log("stopping after the estimate (--estimate)")
         return 0
+    backend = forwarded_backend(extra)
     if est and args.models == ["opt"] and args.gpu:
-        log(f"note: the opt stage is CPU-bound, so --gpu {args.gpu} buys no speed-up "
-            "(use --gpu none for a CPU runtime and save compute units)")
+        if backend == "numpy":
+            log(f"note: --opt-backend numpy is CPU-bound, so --gpu {args.gpu} buys no "
+                "speed-up (use --gpu none to save compute units)")
+        else:
+            log(f"note: --gpu {args.gpu} enables the batched torch backend for the opt "
+                "stage (collab_run.py selects it on a CUDA runtime for --opt-stage opt); "
+                "the estimate above is the NumPy cost model, so override it with a "
+                "measured GPU number: --eval-seconds 0.10 is one SAA evaluation at the "
+                "paper geometry on a T4, i.e. 1.86 s per 18-candidate sweep")
     if est:
         estimate_guard(est, args.max_hours, sys.argv[0])
 
@@ -843,6 +877,7 @@ def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:
     plan = {
         "run_id": args.run_id,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "outdir": str(outdir),
         "models": args.models,
         "preset": args.preset,
         "gpu": args.gpu,
@@ -947,42 +982,149 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_logs(args: argparse.Namespace) -> int:
-    _, plan = load_plan(Path(args.outdir).resolve(), args.run_id)
-    replicas = plan["replicas"]
-    if args.replica is not None:
-        replicas = [r for r in replicas if r["index"] == args.replica]
-        if not replicas:
-            die(f"no replica {args.replica}")
-    paths = [Path(r["local_dir"]) / "run.log" for r in replicas]
+def _local_log_is_header_only(text: str) -> bool:
+    """Whether a local ``run.log`` holds nothing but the CLI's ``###`` header.
 
+    That is exactly what a live run looks like from the driver's side: the
+    streaming ``exec`` writes its header immediately and then nothing until the
+    cell returns, hours later.
+    """
+    for line in text.splitlines():
+        if line.startswith("### "):
+            continue
+        if line.strip():
+            return False
+    return True
+
+
+def _remote_run_log(plan: dict, rep: dict, remote_path: str,
+                    timeout: float) -> tuple[str | None, str]:
+    """One read-only pull of a remote file.  Never uses ``colab exec``.
+
+    The kernel is busy for the duration of the run cell, so ``exec`` would
+    queue behind it; ``colab download`` goes through the filesystem API and
+    answers immediately.  The implementation is shared with
+    ``colab_status.py`` so ``/runs`` and this command agree line for line.
+    """
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from colab_status import remote_log_text  # noqa: E402  (same directory)
+    return remote_log_text(
+        rep.get("session") or "", remote_path,
+        binary=plan.get("colab_bin", "colab"), auth=plan.get("auth"),
+        timeout=timeout,
+    )
+
+
+def _logs_need_remote(plan: dict, replicas: list[dict]) -> bool:
+    """Whether the VM has to be asked, i.e. the local log cannot answer.
+
+    A detached run streams nothing home by design; a foreground run streams
+    only when its cell returns.  So a *header-only* local log means "live",
+    while anything else (progress, a traceback, the exit marker) already
+    answers the question and costs no network round trip.
+    """
     if plan.get("detached"):
-        # Nothing was streamed home: ask the VM for the tail of its run.log.
-        cli = ColabCLI(plan.get("colab_bin", "colab"), auth=plan.get("auth"),
-                       dry_run=args.dry_run, verbose=args.verbose)
-        remote_root = REMOTE_ROOT.format(run_id=plan["run_id"])
-        t_start = time.time()
+        return True
+    for rep in replicas:
+        path = Path(rep["local_dir"]) / "run.log"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return True
+        if _local_log_is_header_only(text):
+            return True
+    return False
+
+
+def _pull_with_retry(plan: dict, rep: dict, remote_path: str, timeout: float,
+                     attempts: int = 2, pause: float = 2.0
+                     ) -> tuple[str | None, str]:
+    """One remote pull, retried once: `colab download` is occasionally slow.
+
+    A live session is also being polled by other readers (the dashboard, a
+    shell watcher), and two downloads racing on the same session state can
+    stall long enough to hit the timeout.  That is worth one retry -- far
+    cheaper than reporting "unavailable" for a log that is right there.
+    """
+    error = ""
+    for attempt in range(1, max(1, attempts) + 1):
+        text, error = _remote_run_log(plan, rep, remote_path, timeout)
+        if text is not None:
+            return text, ""
+        if attempt < attempts:
+            time.sleep(pause)
+    return None, error
+
+
+def _logs_remote(plan: dict, replicas: list[dict],
+                 args: argparse.Namespace) -> int:
+    """Print (and optionally follow) the VM's own ``run.log`` per replica."""
+    remote_root = REMOTE_ROOT.format(run_id=plan["run_id"])
+    remote_path = f"{remote_root}/run.log"
+    if args.dry_run:
+        for rep in replicas:
+            log_replica(f"r{rep['index']}",
+                        f"# dry-run: colab download -s {rep['session']} "
+                        f"{remote_path} <tmp>")
+        return 0
+
+    seen: dict[int, int] = {}
+    t_start = time.time()
+    try:
         while True:
+            finished = False
             for rep in replicas:
                 tag = f"r{rep['index']}"
-                tail = cli.run("exec", "-s", rep["session"], capture=True,
-                               stdin=f"!tail -n {args.lines} {remote_root}/run.log; "
-                                     f"cat {remote_root}/exit.code 2>/dev/null\n")
-                for line in ((tail.stdout or "") + (tail.stderr or "")).splitlines():
-                    log_replica(tag, line)
+                text, err = _pull_with_retry(plan, rep, remote_path,
+                                            args.remote_timeout)
+                if text is None:
+                    log_replica(tag, f"remote log unavailable: {err}")
+                    continue
+                lines = [ln for ln in text.splitlines() if ln.strip()]
+                index = rep["index"]
+                if index not in seen:
+                    log_replica(tag, f"# {rep['session']}:{remote_path} "
+                                     f"({len(lines)} lines, colab download)")
+                    for line in lines[-args.lines:]:
+                        log_replica(tag, line)
+                else:
+                    # A remote log that shrank (new run, new file) is re-read
+                    # from its tail instead of from a stale offset.
+                    fresh = (lines[seen[index]:] if len(lines) >= seen[index]
+                             else lines[-args.lines:])
+                    for line in fresh:
+                        log_replica(tag, line)
+                seen[index] = len(lines)
+                if any(MARKER_RUN in line for line in lines[-5:]):
+                    finished = True
             if not args.follow:
+                return 0
+            if finished:
+                log("run finished -- remote log complete")
                 return 0
             if args.follow_seconds and time.time() - t_start > args.follow_seconds:
                 return 0
             time.sleep(args.interval)
+    except KeyboardInterrupt:
+        log("stopped following")
+        return 0
+
+
+def _logs_local(replicas: list[dict], args: argparse.Namespace) -> int:
+    """Print (and optionally follow) the logs that were streamed home."""
+    paths = [Path(r["local_dir"]) / "run.log" for r in replicas]
 
     if not args.follow:
         for rep, path_ in zip(replicas, paths):
             log(f"{path_} ({'exists' if path_.exists() else 'missing'})")
             if path_.exists():
-                tail = path_.read_text(encoding="utf-8",
-                                       errors="replace").splitlines()[-args.lines:]
-                for line in tail:
+                text = path_.read_text(encoding="utf-8", errors="replace")
+                if _local_log_is_header_only(text):
+                    log(f"    header only -- the run is live, so its output is "
+                        f"still on the VM; try `logs --source remote`")
+                for line in text.splitlines()[-args.lines:]:
                     log_replica(f"r{rep['index']}", line)
         return 0
 
@@ -1008,6 +1150,23 @@ def cmd_logs(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         log("stopped following")
         return 0
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    _, plan = load_plan(Path(args.outdir).resolve(), args.run_id)
+    replicas = plan["replicas"]
+    if args.replica is not None:
+        replicas = [r for r in replicas if r["index"] == args.replica]
+        if not replicas:
+            die(f"no replica {args.replica}")
+
+    use_remote = args.source == "remote" or (
+        args.source == "auto" and _logs_need_remote(plan, replicas))
+    if use_remote:
+        log(f"source: VM run.log via `colab download` "
+            f"(local copies are frozen until the run cell returns)")
+        return _logs_remote(plan, replicas, args)
+    return _logs_local(replicas, args)
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
@@ -1153,6 +1312,13 @@ def build_parser() -> argparse.ArgumentParser:
     lo.add_argument("--follow-seconds", type=float, default=0.0,
                     help="stop following after N seconds (0 = forever)")
     lo.add_argument("--interval", type=float, default=5.0)
+    lo.add_argument("--source", choices=("auto", "local", "remote"),
+                    default="auto",
+                    help="where to read the log from: 'remote' pulls the VM's "
+                         "own run.log with `colab download`, which is the only "
+                         "way to see a live run (default: auto)")
+    lo.add_argument("--remote-timeout", type=float, default=30.0,
+                    help="timeout per remote pull (default: %(default)s s)")
 
     co = sub.add_parser("collect", help="download artifacts from the VMs")
     common(co)

@@ -191,7 +191,8 @@ drive.mount('/content/drive')
 
 - `SCRIPTS/collab_run.py` — Colab-friendly dispatcher for dataset, PINN, FNO, optimization, and tests.
 - `SCRIPTS/run_colab.sh` — shell wrapper that checks the GPU, installs deps, and calls the dispatcher.
-- `SCRIPTS/multi_colab.py` — drives several Colab VMs from your laptop (`launch/status/logs/collect/stop`) for runs too large for one notebook session.
+- `SCRIPTS/multi_colab.py` — drives several Colab VMs from your laptop (`launch/status/logs/collect/stop`) for runs too large for one notebook session. `logs` reads a live run's log off the VM (`--source auto|remote`), because the local copy is frozen until the run cell returns.
+- `SCRIPTS/colab_status.py` — read-only current/recent run snapshot (`--json`); the Flask viewer exposes it at `/runs` and as JSON at `/api/colab`. `--live-logs` (or `/runs?live_logs=1`) pulls live replicas' `run.log` off the VM so a foreground run shows real iteration progress instead of `quiet`.
 - `SCRIPTS/new_high_colab.py` — the same stages tuned for the high-end Colab GPUs (A100 = v5, H100/G4 = v6): measures the card, batches the transport sweep and drives the optimizer's `--backend torch`; `--launch` rents and drives the VM for you.
 - `requirements.txt` — Python dependencies.
 - `SCRIPTS/hydrology.py` — Generates 1D ADE scenarios/datasets.
@@ -204,7 +205,36 @@ inventory.
 
 ## Troubleshooting
 
+- A **live** run looks stalled: `runs/colab_multi/<id>/r0/run.log` ends at the
+  `### colab exec ... run.py` header and `/runs` calls the run `quiet` (or, with
+  `?live_logs=1`, `running` with real progress). Nothing is stuck: `colab exec`
+  only streams a cell's output home when the cell returns, and the run cell
+  holds the kernel for the whole run. Read the VM's own log instead —
+  `python3 SCRIPTS/multi_colab.py logs -f --source remote` (or click
+  `tail (VM)` on `/runs`). Do **not** reach for `colab exec '!tail run.log'`:
+  that cell queues behind the run and answers only when the run is over.
 - If `torch.cuda.is_available()` is `False`, restart Colab with **Runtime → Change runtime type → GPU**.
 - If installation upgrades PyTorch to a CPU-only build, reinstall the CUDA PyTorch wheel from the official PyTorch instructions.
 - If a full run exceeds Colab limits, use `--preset quick`, lower `--pinn-steps`, or lower `--fno-epochs`.
 - If you see stale outputs, remove them with `!rm -rf out/colab` before rerunning.
+
+## Do not pipe `multi_colab.py launch` into `head`
+
+`python3 SCRIPTS/multi_colab.py launch ... | head -20` looks harmless, but the
+driver keeps printing after those 20 lines; when `head` exits, the driver dies of
+SIGPIPE **after** the VM has been created and provisioned but **before** it issues
+the run cell. The result is a perfectly healthy, perfectly idle VM that bills
+until you notice. If it happens:
+
+```bash
+colab sessions                      # confirm the VM and its name
+# kick the run detached, then poll the log via the REST API (exec may be flaky)
+colab exec -s <session> -f kick.py  # nohup python3 -u SCRIPTS/collab_run.py <argv> &
+colab download -s <session> /content/tesis_<run_id>/run.log /tmp/run.log
+colab download -s <session> /content/tesis_<run_id>/artifacts.zip <local>/artifacts.zip
+colab stop -s <session>
+```
+
+The argv to reuse is in `runs/colab_multi/<run_id>/r0/run_argv.json`. Never tail a
+launch (or `run`) with `head`; redirect to a file and read it.
+

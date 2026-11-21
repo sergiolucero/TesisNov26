@@ -2,7 +2,8 @@
 
 Every number below comes from a run whose artifacts are in this repository, and
 each certificate has been re-derived independently by `SCRIPTS/check_tail.py`
-(fresh scenarios, NumPy reference) rather than taken from the run's own summary.
+(NumPy reference, including scenarios no run trained on) rather than taken from
+the run's own summary.
 Section 5 lists what is *not* established.
 
 ---
@@ -85,6 +86,25 @@ different rates), which is why a single M is never quoted without the interval:
 | reliability | 1.000 | 1.000 | 0.990 | 0.985 | 0.980 | 0.983 |
 | Wilson low | 0.912 | 0.940 | 0.946 | 0.957 | 0.957 | 0.964 |
 
+**A fully independent draw.** The 400 scenarios above continue from the run's
+train seed, so the first 100 of them *are* the training fields and the first
+ladder column is the run checking itself. Re-running with `--seed-base 900000`
+(nothing the optimizer ever saw, float32 policy) gives
+
+| M | violations | reliability | 95% Wilson CI | gate 0.94 |
+| :--- | ---: | ---: | :--- | :--- |
+| 100 | 4/100 | 0.960 | [0.902, 0.984] | **inconclusive** |
+| 200 | 5/200 | 0.975 | [0.943, 0.989] | PASS |
+| 400 | 9/400 | 0.978 | [0.958, 0.988] | PASS |
+
+with J = 428,509 (0.02% from the reported 428,592) and CVaR-5%(G) = +0.616 rather
+than +0.005. So the certificate holds on unseen scenarios, and the tail is worse
+than the run claimed: the run's own CVaR ≈ 0 is a training-set statement, while a
+fresh draw puts the mean of the worst 5% at +0.6 m³. The 100-scenario sample is
+the useful part of this table -- it is the sample size the search itself used, and
+it is *not* enough to certify anything: 4 violations out of 100 straddles the gate
+and only the larger draws resolve it.
+
 Both policies clear the 0.94 gate with certainty, but not equally: the float64
 policy violates in 1 of 400 scenarios, the float32 policy in 7 of 400. A point
 estimate of 0.975 at M = 40 cannot distinguish them -- both look identical there
@@ -139,7 +159,9 @@ python3 SCRIPTS/run_optimization.py --config configs/opt/hydrology_gpu.yaml \
     --stage opt --backend torch --dtype float64        # ~4 h on a T4
 python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip \
     --config runs/colab_multi/<run>/r0/config_r0.yaml --m-scen 400 --ladder
-python3 tests/run_tests.py                              # 129 tests
+python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip \
+    --seed-base 900000 --m-scen 400          # nothing the run ever saw
+python3 tests/run_tests.py                              # 153 tests
 ```
 
 ---

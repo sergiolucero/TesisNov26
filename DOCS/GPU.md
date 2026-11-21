@@ -572,6 +572,14 @@ re-evaluated with the NumPy reference backend on fresh scenarios:
 | :--- | :--- | :--- | :--- | :--- |
 | `20261118-041443` q* (M=16, 300 evals) | 422,900 (M=100) | **+1.920** | 0.950 (5/100) | train -0.045 / 1.000, test +1.863 / 0.925 |
 | `20261118-052228` q* (M=100, 200 evals) | 577,916.7 | **-1.000** | 1.000 (0/100) | train and test agree exactly |
+| `20261120-111849` q* (M=100, 400 evals, float32) | 428,509 (M=400) | **+0.616** | 0.978 (9/400) | train 428,592 / 0.990, test 428,579 / 0.975 |
+
+The third row is the certified 160x96 policy of section 7, re-derived on seeds
+900,000+ -- scenarios no run ever touched. Its J reproduces to 0.02%, its
+reliability clears the 0.94 gate with a Wilson interval of [0.958, 0.988], and its
+CVaR tail is *not* the +0.005 the run reported: the run measures its own training
+tail, a fresh draw puts the mean of the worst 5% at +0.6. Both readings are
+correct and they answer different questions, which is why `--seed-base` exists.
 
 Two things worth reading off this table. The M=100 policy is compliant at every
 sample size checked (M = 16, 20, 40, 100: zero violations), so it is certified

@@ -93,6 +93,16 @@ ranking therefore requires an evaluation sample substantially larger than the
 sample the search itself used --- a point that a single point-estimate
 reliability cannot make.
 
+Those \num{400} scenarios extend the run's training seed, so the first
+\num{100} of them are the fields the optimizer was trained on.  Re-drawing
+scenarios from a seed no run ever touched (\texttt{--seed-base 900000}) leaves the
+certificate intact but changes the tail: $J = \num{428509}$ against the run's
+\num{428592}, reliability $391/400 = 0.978$ with a Wilson interval of
+$[0.958,\ 0.988]$, and $\mathrm{CVaR}_{5\%}(G) = +0.616$ instead of the $+0.005$
+the run reports for its own training scenarios.  The tail statistic a run prints
+is a statement about the sample it optimized on; only a fresh draw says what the
+policy costs an aquifer.
+
 \subsection{Effect on the plume}
 
 Evaluated on $80$ held-out scenarios (medians), the float64 policy lowers the peak

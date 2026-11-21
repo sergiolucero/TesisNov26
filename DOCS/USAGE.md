@@ -312,10 +312,21 @@ restates material from `SolvingAlgorithms.tex` and `plans_2d_3d.tex`, so the
 assembled set is the disjoint subset `formulation` + `optimization` +
 `results_2d` (override with `--chapters`). The script checks brace/environment
 balance, every `\ref` against the labels of the assembled chapters, duplicate
-labels and missing `\input`/`\includegraphics` targets, merges the preambles,
-and writes the chapter bodies to `TEX/build/body/` — the sources are never
-modified. There is no LaTeX toolchain on the assembly host, so `--compile` is a
-no-op there.
+labels and missing `\input`/`\includegraphics` targets, merges the preambles
+(packages with unioned options, `\newcommand`/`\newtheorem`/`\newcolumntype`
+keyed by declared name) and the per-chapter `thebibliography` blocks (de-duped by
+`\bibitem` key), and writes the chapter bodies to `TEX/build/body/` — the
+sources are never modified. `--compile` rebuilds `TEX/build/tesis.pdf` and reads
+the final LaTeX log, failing when a reference or citation is still undefined
+(`latexmk` alone exits 0 for those).
+
+The toolchain here is a user-level [TinyTeX](https://yihui.org/tinytex/) in
+`~/.TinyTeX` (`curl -fsSL https://yihui.org/tinytex/install-bin-unix.sh | sh`,
+then `tlmgr install` whatever a build reports as missing); the script finds it
+without `PATH` help. Verified output: **42 pages, 0 undefined references, 0
+undefined citations**. `results_2d.tex` is a fragment (no `\documentclass`), so
+it only compiles inside the master; the other five chapters also still compile
+standalone.
 
 ## 4. Experiment harnesses
 

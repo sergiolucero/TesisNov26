@@ -284,10 +284,15 @@ uncertainty only.
   fresh draw (+0.005 in-run against +0.616 out of sample).
 
 **Open:**
-- Rebuild `TEX/formulation.pdf` — the `.tex` has been corrected (§2) but no
-  LaTeX toolchain exists on the assembly host (all five `.tex` files verified
-  brace-balanced with every `\ref`/`\eqref` resolving; the PDF rebuild belongs
-  on `do-relay`, which has TeX Live).
+- ~~Rebuild `TEX/formulation.pdf`~~ — **done** (2026-11-21). A user-level TinyTeX
+  lives in `~/.TinyTeX` on this host, all five chapter PDFs are rebuilt from the
+  current sources, and `SCRIPTS/build_tex.py --compile` assembles the three
+  disjoint chapters into a 42-page document with no undefined reference or
+  citation.
+- The assembled thesis is `TEX/build/tesis.pdf` (gitignored, regenerate with the
+  script). It is an assembly of existing chapters, **not** a written thesis:
+  there is no introduction, no related-work chapter and no conclusions chapter,
+  and `results_2d.tex` covers only the 2D campaign.
 - Apply per-seed medians to the FNO sweep table — **done for the 120-epoch
   coord-channel config** (§5, five seeds); the 250-epoch and mode-sweep rows
   remain single-seed.

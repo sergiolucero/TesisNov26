@@ -9,10 +9,19 @@ This script recomputes them independently, from the reported well layout and
 being taken on trust.  It also prints the empirical-CVaR tail at several sample
 sizes, which is how a chance constraint should be judged (see DOCS/GPU.md s7).
 
+Two different questions, two modes:
+
+* default (`--seed-base` unset) rebuilds the run's own *train* scenarios, so a
+  match means the two backends agree on the same 100 fields -- a cross-check of
+  the float32/torch pipeline against NumPy, not new evidence about the policy.
+* `--seed-base 900000` draws scenarios the optimizer never saw.  This is the
+  number to quote: the policy was selected on train samples, so only a fresh draw
+  tests whether it generalizes.
+
 Usage
 -----
     python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip
-    python3 SCRIPTS/check_tail.py --run out/opt/full_opt --m-scen 100
+    python3 SCRIPTS/check_tail.py --run out/opt/full_opt --seed-base 900000
 
 `--metrics` accepts either the artifacts zip or an extracted run directory; the
 script looks for `metrics.json` underneath it.
@@ -29,7 +38,8 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "SCRIPTS"))
+sys.path.insert(0, str(ROOT))              # `stoch`, `physics`
+sys.path.insert(0, str(ROOT / "SCRIPTS"))  # `run_optimization`
 
 from stoch.config import load_config  # noqa: E402
 from stoch.objective import cvar_and_weights  # noqa: E402
@@ -59,7 +69,8 @@ def load_metrics(path: Path) -> dict:
     return json.loads(Path(path).read_text())
 
 
-def build(config: str, nsteps: int | None, m_scen: int) -> dict:
+def build(config: str, nsteps: int | None, m_scen: int,
+          seed_base: int | None = None) -> dict:
     """Rebuild the run's scenario set with the run's own constructors.
 
     `run_optimization` owns the mapping config -> grid/KL/aquifer/forward/cost,
@@ -83,9 +94,10 @@ def build(config: str, nsteps: int | None, m_scen: int) -> dict:
         random_source=bool(cfg["random_field"]["random_source"]),
         random_gradient=bool(cfg["random_field"]["random_gradient"]),
     )
-    scen = [gen.sample(int(cfg["seed"]["train"]) + i) for i in range(m_scen)]
+    base = int(cfg["seed"]["train"]) if seed_base is None else int(seed_base)
+    scen = [gen.sample(base + i) for i in range(m_scen)]
     return {"grid": grid, "aq": aq, "scen": scen, "fwd": ropt.make_forward(cfg),
-            "cost": ropt.make_cost(cfg), "n_kl": kl.n_kl}
+            "cost": ropt.make_cost(cfg), "n_kl": kl.n_kl, "seed_base": base}
 
 
 def wilson_interval(k: int, n: int, z: float = 1.959963985) -> tuple[float, float]:
@@ -116,6 +128,10 @@ def main() -> int:
     ap.add_argument("--m-scen", type=int, default=100,
                     help="scenarios to re-evaluate on (default 100)")
     ap.add_argument("--nsteps", type=int, default=None)
+    ap.add_argument("--seed-base", type=int, default=None,
+                    help="scenario seed to start from (default: the run's train "
+                         "seed, i.e. a backend cross-check; pass a fresh base "
+                         "for an out-of-sample check)")
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--ladder", action="store_true",
                     help="walk M=16..(--m-scen) in fixed steps instead of a few points")
@@ -133,10 +149,11 @@ def main() -> int:
     opt = met["stages"]["opt"]
     q = np.array(opt["q_star"], float)
 
-    b = build(cfg_path, args.nsteps, args.m_scen)
+    b = build(cfg_path, args.nsteps, args.m_scen, args.seed_base)
     arch = Archive(b["grid"], b["aq"], wells, b["scen"], b["fwd"])
     print(f"[check_tail] grid {b['grid'].ny}x{b['grid'].nx} n_kl {b['n_kl']} "
-          f"wells {wells.shape[0]} scenarios {len(b['scen'])}")
+          f"wells {wells.shape[0]} scenarios {len(b['scen'])} "
+          f"seeds {b['seed_base']}..{b['seed_base'] + len(b['scen']) - 1}")
     print(f"[check_tail] q* {np.round(q, 3).tolist()}  total {q.sum():.2f}")
 
     ev = arch.evaluate(q, b["cost"], keep=False)
@@ -175,6 +192,7 @@ def main() -> int:
     if args.json:
         Path(args.json).write_text(json.dumps(
             {"config": cfg_path, "q_star": q.tolist(), "alpha": args.alpha,
+             "seed_base": b["seed_base"],
              "J": float(ev.mean_J), "mean_G": float(G.mean()), "cvar": float(cvar),
              "reliability": n_ok / len(G), "wilson": [lo, hi], "ladder": summary},
             indent=2))

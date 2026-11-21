@@ -470,38 +470,6 @@ caveat for `bench_backend.py`: because it derives ms/slice at the configured
 `M`, it over-estimates a realistic `M=40` evaluation by ~4×, so its projection
 is an upper bound, not a forecast.
 
-### Decision rule
-
-| what you actually run | verdict |
-| :--- | :--- |
-| `--models smoke` / `--preset quick` (450 cells, `nsteps=40`, `M=8`) | **No.** The GPU is at parity with the CPU there; a subscription buys nothing. |
-| full `--stage opt` at the paper geometry (80×40, `M=40`, thousands of evaluations) | **Yes.** ~8 min on a T4 against ~21 h on one core. |
-| the same, on an A100 at this batch size | **No.** It ties the T4 on a compass sweep; the overhead dominates. |
-| 160×80 and larger | Yes, and more so: batch further and the fixed cost amortises better. |
-
-`--dtype float32` is the screening mode (field error ~1e-5, mass balance ~1e-6,
-`--verify` 4.4e-05): enough to rank policies, not enough to publish. Any policy
-selected in float32 must be re-scored in float64 (NumPy) before it appears in a
-table.
-
-Solver properties (`O1`–`O4`: exact-adjoint gradient, 1e-15 mass balance,
-chance-constraint reformulations) deliberately stay on the NumPy reference: they
-certify the *solver*, not the throughput, and porting them would weaken exactly
-the numbers they exist to pin down. `SLSQP`/the discrete adjoint is NumPy-only
-and raises a clear error under `--backend torch` rather than returning a
-gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
-(the exact transpose of the transport operator, checked in
-`tests/test_fv2d_torch.py`), so batching the adjoint is a port, not a redesign.
-
----
-
-*Sources: `runs/sweeps/baseline_n5/`, `runs/phase3_tau_ramp.json`,
-`out/fno10/` (superseded), `configs/opt/benchmark_bounded.yaml` (b508372),
-`SCRIPTS/seed_sweep.py`, `runs/runtimes.jsonl`. §9 additionally: `DOCS/GPU.md`,
-`SCRIPTS/bench_backend.py`, `tests/test_fv2d_torch.py`,
-`tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
-Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*
-
 **Update (2026-11-21): measured on an A100, and the 5x is 2.8x.**
 
 Two things were done about the paragraph above: the launch count was measured
@@ -560,6 +528,7 @@ these docs keeps its stated provenance.
 | `--models smoke` / `--preset quick` (450 cells, `nsteps=40`, `M=8`) | **No.** The GPU is at parity with the CPU there; a subscription buys nothing. |
 | full `--stage opt` at the paper geometry (80×40, `M=40`, thousands of evaluations) | **Yes.** ~8 min on a T4 against ~21 h on one core. |
 | the same, on an A100 at this batch size | **No.** It ties the T4 on a compass sweep; the overhead dominates. |
+| the same, on an A100 with `TESIS_FUSE_KRYLOV=1` | Re-measure. The T4 parity was a *launch-bound* result; fused, the A100 does a 160×96 sweep in 7.7 s against 21.4 s, so "a better card buys nothing" describes the unfused code only. |
 | 160×80 and larger | Yes, and more so: batch further and the fixed cost amortises better. |
 
 `--dtype float32` is the screening mode (field error ~1e-5, mass balance ~1e-6,
@@ -581,30 +550,9 @@ gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
 *Sources: `runs/sweeps/baseline_n5/`, `runs/phase3_tau_ramp.json`,
 `out/fno10/` (superseded), `configs/opt/benchmark_bounded.yaml` (b508372),
 `SCRIPTS/seed_sweep.py`, `runs/runtimes.jsonl`. §9 additionally: `DOCS/GPU.md`,
-`SCRIPTS/bench_backend.py`, `tests/test_fv2d_torch.py`,
-`tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
+`SCRIPTS/bench_backend.py`, `SCRIPTS/bench_krylov_fusion.py`,
+`runs/bench/fusion_a100_80x40.json`, `runs/bench/fusion_a100_160x96.json`,
+`tests/test_fv2d_torch.py`, `tests/test_saa_torch.py`,
+`tests/test_krylov_fusion.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
 Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*
 
-**Update (2026-11-21): the launch count, measured.** The estimate above
-("~100 time steps × ~24 dependent BiCGSTAB iterations") was a reading of the
-code, not a measurement. Instrumenting `bicgstab_solve` in
-`physics/fv2d_torch.py` and running one evaluation of the paper geometry
-(80×40, `nsteps=100`, `M=8`, float64, CPU) gives **100 solves and 4022 batched
-matvecs — 40.2 matvecs per solve**, i.e. ~4000 dependent kernel launches per
-evaluation rather than the ~2400 assumed. The launch budget is 1.7× worse than
-the estimate, so the 81 %-overhead figure is if anything optimistic; it is not
-inflation.
-
-What the 5× therefore requires, concretely: each BiCGSTAB iteration currently
-issues ~10 small kernels (`_dot`, `_scale`, stencil apply, axpy) before the next
-iteration can start, and the time loop makes the whole sequence sequential
-(`transport_batch`, the `for k in range(nsteps)` at `physics/fv2d_torch.py:1123`).
-Either fuse the recurrence so an iteration is one or two kernels
-(`torch.compile` around the recurrence body is the cheapest form — inductor is
-available here and gcc is present, but the numerics change reduction order, so
-parity must be re-gated: field error against NumPy plus the 1e-6 mass balance,
-both already in `--verify`), or replace the iteration with a banded/scan solve.
-Neither is a refactor: both change the arithmetic, which is why the 5× stays
-**unverified** until measured on a T4/A100 -- the recipe is the existing
-`wall = 1.52 s + 8.9 ms × M` sweep run twice, flag off and on, at `M=18` and
-`M=40`. Do not quote the 5× in a paper before that.

@@ -34,6 +34,7 @@ configs/opt/benchmark_new.yaml
 *.pdf
 # Keep compiled write-ups readable on GitHub
 !TEX/*.pdf
+!ARTICLE/*.pdf
 
 # Local scratch / duplicated packaging
 Untitled.ipynb

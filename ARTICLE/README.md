@@ -17,8 +17,9 @@ Requirements: a LaTeX toolchain with `latexmk`, `natbib`, `booktabs`,
 TinyTeX lives in `~/.TinyTeX`; `listings` was installed with
 `tlmgr install listings` (caption likewise).
 
-The built PDF is `article.pdf` (23 pages at the time of writing). It is
-gitignored like the other build products; rebuild it rather than committing it.
+The built PDF is `article.pdf` (23 pages at the time of writing). The
+first-draft PDF is committed so it can be read without a LaTeX toolchain;
+rebuild and re-commit it when the sources change.
 
 ## What is here
 

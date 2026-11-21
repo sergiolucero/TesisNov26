@@ -171,13 +171,15 @@ python3 tests/run_tests.py                              # 153 tests
 1. **Global optimality.** Both policies are local optima of a non-convex program;
    the 1.2% spread suggests a flat basin, not that nothing better exists. A
    multi-start sweep at M = 100 is in flight.
-2. **2.5D / 3D.** `physics/fv3d.py` implements the 3D flow and transport
-   operators. Flow is verified exactly (uniform velocity and transverse
-   invariance to 1e-16, G3.1 flow gate). The transport gate is **open**: the 3D
-   extraction reproduces `y`/`z`-invariance to 1e-20 and the correct front speed,
-   but its mass ledger does not close and the Ogata–Banks shape error is ~0.37
-   against a 1.5e-2 gate. Those two gates are marked `expectedFailure` in
-   `tests/test_fv3d.py` rather than deleted.
+2. **2.5D / 3D.** The 3D results are separate work with their own runner,
+   config and document (`SCRIPTS/run_3d.py`, `configs/opt/full3d.yaml`,
+   `DOCS/3D_results.md`); the paper preset validates at 32×16×8 = 4096 cells with
+   `q*` on 4 of 9 wells and test reliability 0.969. What is not established is
+   the *analytical* side: `physics/fv3d.py` has no Ogata–Banks/Thiem gate yet, so
+   its evidence is agreement with the batched torch path
+   (`tests/test_fv3d_torch_colab.py`) and with the 2D kernels by extrusion, not
+   agreement with a closed-form solution. The 2.5D axisymmetric bridge
+   (`DOCS/3D_plan.md` phase 3D-0) is untouched.
 3. **Long-horizon supply reliability.** All certificates are for the fixed
    deterministic source/gradient used in this config; source-strength and
    gradient uncertainty are implemented (`random_source` / `random_gradient`) but

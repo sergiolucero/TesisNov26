@@ -16,12 +16,23 @@ Adam with resampled collocation + L-BFGS polish on a fixed grid.
 | Surrogate | BC treatment | full-grid rel-L2 | interior rel-L2 | notes |
 | :--- | :--- | ---: | ---: | :--- |
 | PINN | soft penalty | 2.43e-2 | — | baseline |
-| PINN | hard (`eps = 1e-3`) | **1.35e-2** | **8.0e-3** | residual error is the measure-zero inlet corner |
+| PINN | hard (`eps = 1e-3`) | **1.61e-2** | **1.35e-2** | residual error is the measure-zero inlet corner |
 | FNO | — | see `DOCS/Conclusions.md` §5 | — | normalized coordinates were required |
 
 The hard-constraint answer `u = (1-ξ)s(τ) + ξ(1-ξ)s(τ)·NN` encodes the inlet
 discontinuity exactly, which is why the corner error disappears from the interior
 metric. Full narrative and the FNO negative-then-fixed story: `DOCS/Conclusions.md`.
+
+*Metric caveat, stated in the paper as well:* `solve_1d_pinn.region_errors` reports
+a family of regions on the 256×256 space–time grid. The checkpoint archived in
+`out/pinn/model.pt` evaluates to `full = 1.61e-2`, `tau,xi>0.005 = 1.35e-2`,
+`tau,xi>0.05 = 1.42e-2`, `left_layer = 7.8e-3`. The often-quoted
+"1.35e-2 full / 8.0e-3 interior" pair is therefore two *different* region
+definitions, not the strict full grid — and 1.35e-2 is also the best of five
+seeds, whose full-grid spread is 1.17e-2 … 8.14e-2 (factor 7, median 1.61e-2).
+Quote the median and the interval, never the best seed alone.
+`FIGURES/fig1_1d_verification.png` annotates exactly the two entries it plots so
+the figure cannot drift from the table.
 
 ---
 
@@ -171,6 +182,20 @@ the incumbent on 40 disjoint scenarios every 8 sweeps (14 s per check). That gua
 is what distinguishes a certificate from a training-set artefact: a 43%-cheaper
 policy found with `M_train = 16` looked compliant on its training tail and failed
 out of sample (0.925 < 0.94 gate).
+
+---
+
+## 3b. Figures
+
+`DOCS/FIGURES.md` indexes the article figure set produced by
+`SCRIPTS/make_figures.py` (`FIGURES/*.png`, 300 dpi): the 1D target and Peclet
+family, the conductivity realization with the certified well layout and the KL
+truncation, the plume with and without pumping, the compliance traces and
+peak-concentration distributions, the search trajectories, the tail of the chance
+constraint, the reliability-vs-sample-size certificate, and the measured compute
+costs. Every panel is generated from the production code paths or from a
+finished run's artifacts; only the cost panel plots hard-coded numbers, and it
+says so.
 
 ---
 

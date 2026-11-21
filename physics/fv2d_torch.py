@@ -109,6 +109,28 @@ def torch_dtype(spec: str | torch.dtype = "float64") -> torch.dtype:
         raise ValueError(f"dtype must be one of {sorted(DTYPES)}, got {spec!r}") from None
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+#: Fuse the BiCGSTAB iteration into one compiled call (``TESIS_FUSE_KRYLOV=1``).
+#: Opt-in: the first call pays a Dynamo compile, and fusing reorders elementwise
+#: reductions, so parity against the unfused path has to be re-checked per
+#: geometry.  Default off keeps the numerics bit-comparable to every number
+#: already in DOCS/.
+FUSE_KRYLOV = _env_flag("TESIS_FUSE_KRYLOV", False)
+
+#: Check the residual every N iterations instead of every one
+#: (``TESIS_KRYLOV_CHECK_EVERY``).  Each check is a device-to-host sync, which on
+#: a GPU drains the pipeline; checking every 8 costs at most 7 extra iterations
+#: and removes 7/8 of the syncs.  Default 1 reproduces the historical iteration
+#: sequence exactly.
+KRYLOV_CHECK_EVERY = max(1, int(os.environ.get("TESIS_KRYLOV_CHECK_EVERY", "1")))
+
+
 def default_rtol(dtype: torch.dtype) -> float:
     """Relative Krylov tolerance that the given dtype can actually reach.
 
@@ -348,6 +370,61 @@ def cg_solve(
     return x, report
 
 
+def _apply_coeffs(c: torch.Tensor, sd: torch.Tensor, sxe: torch.Tensor,
+                  sxw: torch.Tensor, syn: torch.Tensor,
+                  sys_: torch.Tensor) -> torch.Tensor:
+    """``A c`` from five coefficient tensors, no captured state.
+
+    Same arithmetic and accumulation order as :meth:`Stencil5.apply` (diagonal,
+    then east, west, north, south) so the two paths agree bit for bit; the
+    difference is that everything arrives as an argument, which is what lets
+    ``torch.compile`` fuse it without re-compiling per candidate batch.
+    """
+    out = sd * c
+    out = out.clone() if not out.is_leaf else out
+    out[:, :, :-1] = out[:, :, :-1] + sxe * c[:, :, 1:]
+    out[:, :, 1:] = out[:, :, 1:] + sxw * c[:, :, :-1]
+    out[:, :-1, :] = out[:, :-1, :] + syn * c[:, 1:, :]
+    out[:, 1:, :] = out[:, 1:, :] + sys_ * c[:, :-1, :]
+    return out
+
+
+def _stencil_step(r, rhat, p, v, x, rho, rho_old, alpha, omega, scale,
+                  diagp, sd, sxe, sxw, syn, sys_):
+    """One BiCGSTAB iteration, as a single pure-tensor function.
+
+    Returns the state after the half step (``x_s``/``r_s``), after the full step
+    (``x_full``/``r_full``), the half-step residual norm (a device scalar, so the
+    caller decides the convergence test and pays exactly one sync) and the
+    updated ``alpha``/``omega``/``p``/``v`` the recurrence carries forward.
+    """
+    beta = _safe_div(rho, rho_old) * _safe_div(alpha, omega)
+    p_new = r + _scale(beta, r) * (p - _scale(omega, p) * v)
+    phat = p_new / diagp
+    v_new = _apply_coeffs(phat, sd, sxe, sxw, syn, sys_)
+    alpha_new = _safe_div(rho, _dot(rhat, v_new))
+    s = r - _scale(alpha_new, r) * v_new
+    x_s = x + _scale(alpha_new, x) * phat
+    s_norm = (_flat_norm(s) / scale).max()
+    shat = s / diagp
+    t = _apply_coeffs(shat, sd, sxe, sxw, syn, sys_)
+    omega_new = _safe_div(_dot(t, s), _dot(t, t))
+    x_full = x + _scale(alpha_new, x) * phat + _scale(omega_new, x) * shat
+    r_full = s - _scale(omega_new, r) * t
+    return (p_new, v_new, x_s, s, x_full, r_full, s_norm, alpha_new, omega_new)
+
+
+#: Lazily created so that merely importing this module never invokes Dynamo.
+_compiled_step: Optional[Callable] = None
+
+
+def _get_compiled_step() -> Callable:
+    global _compiled_step
+    if _compiled_step is None:
+        _compiled_step = torch.compile(_stencil_step, dynamic=False)
+    return _compiled_step
+
+
 def bicgstab_solve(
     matvec: Callable[[torch.Tensor], torch.Tensor],
     b: torch.Tensor,
@@ -356,6 +433,9 @@ def bicgstab_solve(
     rtol: float = 1e-11,
     maxiter: int = 4000,
     mixed_precision: Optional[bool] = None,
+    stencil: Optional["Stencil5"] = None,
+    check_every: Optional[int] = None,
+    fuse: Optional[bool] = None,
 ) -> tuple[torch.Tensor, KrylovReport]:
     """Batched preconditioned BiCGSTAB for nonsingular systems.
 
@@ -365,6 +445,11 @@ def bicgstab_solve(
     ``mixed_precision`` (default ``MIXED_KRYLOV``) runs the recurrence in
     float64 for float32 inputs; it is a no-op for float64 inputs.
     """
+    if stencil is not None:
+        return _bicgstab_stencil_solve(
+            stencil, b, x0=x0, diag=diag, rtol=rtol, maxiter=maxiter,
+            mixed_precision=mixed_precision, check_every=check_every,
+            fuse=fuse)
     if mixed_precision is None:
         mixed_precision = MIXED_KRYLOV
     # Mixed-precision mode: the recurrence runs in float64 while the operator
@@ -401,12 +486,18 @@ def bicgstab_solve(
 
     guard = _StallGuard()
     it = 0
+    check_every = (KRYLOV_CHECK_EVERY if check_every is None
+                   else max(1, int(check_every)))
     for it in range(1, maxiter + 1):
-        cur = _scalar((_flat_norm(r) / scale).max())
-        if cur <= rtol:
-            break
-        if guard.check(it, cur):
-            break
+        # Each residual check is a device-to-host sync (a full pipeline drain on
+        # a GPU), so `check_every` > 1 trades at most check_every-1 extra
+        # iterations for 1/check_every of the syncs.
+        if it == 1 or check_every == 1 or (it - 1) % check_every == 0:
+            cur = _scalar((_flat_norm(r) / scale).max())
+            if cur <= rtol:
+                break
+            if guard.check(it, cur):
+                break
         rho = _dot(rhat, r)
         # BiCGSTAB breakdown guard.  <rhat, r> can vanish (or turn non-finite
         # after an alpha/omega blow-up), and the next beta = rho/rho_old *
@@ -439,6 +530,108 @@ def bicgstab_solve(
         x = x + _scale(alpha, x) * phat + _scale(omega, x) * shat
         r = s - _scale(omega, r) * t
         rho_old = rho
+
+    residual = _scalar((_flat_norm(r) / scale).max())
+    if mixed:
+        x = x.to(b0_dtype)
+    report = KrylovReport(iterations=it, solves=1, worst_iterations=it,
+                          worst_residual=residual,
+                          converged=residual <= max(rtol, 10.0 * rtol),
+                          stalled=guard.stalled)
+    return x, report
+
+
+def _bicgstab_stencil_solve(
+    stencil: "Stencil5",
+    b: torch.Tensor,
+    x0: Optional[torch.Tensor] = None,
+    diag: Optional[torch.Tensor] = None,
+    rtol: float = 1e-11,
+    maxiter: int = 4000,
+    mixed_precision: Optional[bool] = None,
+    check_every: Optional[int] = None,
+    fuse: Optional[bool] = None,
+) -> tuple[torch.Tensor, KrylovReport]:
+    """BiCGSTAB for a five-point operator, with an optional fused iteration.
+
+    Same recurrence, same tolerances and the same breakdown guard as
+    :func:`bicgstab_solve`; the differences are structural and both are about
+    device launches rather than arithmetic:
+
+    * the iteration is one pure-tensor function (:func:`_stencil_step`) that can
+      be ``torch.compile``d once -- the coefficients are arguments, so a new
+      candidate batch does not trigger a recompile;
+    * the residual is checked every ``check_every`` iterations instead of every
+      iteration, which is where the host syncs are.
+
+    Requires ``diag`` (the Jacobi preconditioner): without it the recurrence
+    differs from the legacy one closely enough that keeping two code paths is
+    not worth the risk, and the legacy path is used instead.
+    """
+    if mixed_precision is None:
+        mixed_precision = MIXED_KRYLOV
+    b0_dtype = b.dtype
+    mixed = mixed_precision and b.dtype == torch.float32
+    work = torch.float64 if mixed else b.dtype
+    b = b.to(work)
+    if x0 is not None:
+        x0 = x0.to(work)
+    if diag is None:
+        return bicgstab_solve(
+            stencil.apply, b, x0=x0, rtol=rtol, maxiter=maxiter,
+            mixed_precision=mixed_precision, check_every=check_every)
+    diagp = diag.to(work)
+    sd = stencil.diag.to(work)
+    sxe, sxw = stencil.xe.to(work), stencil.xw.to(work)
+    syn, sys_ = stencil.yn.to(work), stencil.ys.to(work)
+
+    x = torch.zeros_like(b) if x0 is None else x0.clone()
+    r = b - _apply_coeffs(x, sd, sxe, sxw, syn, sys_)
+    bnorm = _flat_norm(b)
+    scale = torch.where(bnorm > 0, bnorm, torch.ones_like(bnorm))
+
+    rhat = r.clone()
+    v = torch.zeros_like(b)
+    p = torch.zeros_like(b)
+    rho_old = torch.ones(b.shape[0], dtype=b.dtype, device=b.device)
+    alpha = torch.ones_like(rho_old)
+    omega = torch.ones_like(rho_old)
+
+    check_every = (KRYLOV_CHECK_EVERY if check_every is None
+                   else max(1, int(check_every)))
+    fuse = FUSE_KRYLOV if fuse is None else bool(fuse)
+    step = _get_compiled_step() if fuse else _stencil_step
+
+    guard = _StallGuard()
+    it = 0
+    for it in range(1, maxiter + 1):
+        if it == 1 or check_every == 1 or (it - 1) % check_every == 0:
+            cur = _scalar((_flat_norm(r) / scale).max())
+            if cur <= rtol:
+                break
+            if guard.check(it, cur):
+                break
+        rho = _dot(rhat, r)
+        if not bool(torch.isfinite(rho).all()):
+            okay = torch.isfinite(rho) & (rho.abs() > 0)
+            mask = (~okay).reshape(-1, *([1] * (r.dim() - 1)))
+            rhat = torch.where(mask, r, rhat)
+            p = torch.where(mask, torch.zeros_like(p), p)
+            v = torch.where(mask, torch.zeros_like(v), v)
+            rho_old = torch.where(okay, rho_old, torch.ones_like(rho_old))
+            alpha = torch.where(okay, alpha, torch.ones_like(alpha))
+            omega = torch.where(okay, omega, torch.ones_like(omega))
+            rho = _dot(rhat, r)
+        (p, v, x_s, r_s, x_full, r_full, s_norm, alpha_new,
+         omega_new) = step(r, rhat, p, v, x, rho, rho_old, alpha, omega,
+                           scale, diagp, sd, sxe, sxw, syn, sys_)
+        alpha, omega = alpha_new, omega_new
+        # One sync per iteration (this read), and the same early exit as the
+        # legacy loop: when the half step already converged, drop the full step.
+        if _scalar(s_norm) <= rtol:
+            x, r = x_s, r_s
+            break
+        x, r, rho_old = x_full, r_full, rho
 
     residual = _scalar((_flat_norm(r) / scale).max())
     if mixed:
@@ -1008,6 +1201,8 @@ def transport_batch(
     rtol: Optional[float] = None,
     maxiter: int = 4000,
     warm_start: bool = True,
+    check_every: Optional[int] = None,
+    fuse: Optional[bool] = None,
 ) -> TransportBatch:
     """Batched implicit-Euler transport for ``S`` candidates x ``M`` scenarios.
 
@@ -1124,7 +1319,9 @@ def transport_batch(
         active = src if (source_steps is None or k < source_steps) else torch.zeros_like(src)
         rhs = st.reshape(B, ny, nx) * C + active
         C, rep = bicgstab_solve(A.apply, rhs, x0=C if warm_start else None,
-                                diag=A_diag, rtol=rtol, maxiter=maxiter)
+                                diag=A_diag, rtol=rtol, maxiter=maxiter,
+                                stencil=A, check_every=check_every,
+                                fuse=fuse)
         report.add(rep)
         if C_fields is not None:
             C_fields[k + 1] = C.reshape(S, M, n)

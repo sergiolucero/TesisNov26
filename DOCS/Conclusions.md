@@ -502,6 +502,89 @@ gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
 `tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
 Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*
 
+**Update (2026-11-21): measured on an A100, and the 5x is 2.8x.**
+
+Two things were done about the paragraph above: the launch count was measured
+instead of read off the code, and then the proposed lever was implemented and
+timed on an A100-SXM4-40GB (`SCRIPTS/bench_krylov_fusion.py`,
+`runs/bench/fusion_a100_*.json`, float32, `S=18`, `nsteps=100`, 2-3 reps).
+
+*The launch count.* Instrumenting `bicgstab_solve` at 80×40 / `nsteps=100` /
+`M=8` gives **100 solves and 4022 batched matvecs, 40.2 per solve**: ~4000
+dependent kernel launches per evaluation, 1.7× the ~2400 assumed here.
+
+*Implementation.* `physics/fv2d_torch.py` gained a stencil fast path that passes
+the five coefficient tensors **as arguments**, so the whole BiCGSTAB iteration is
+one pure-tensor function (`_stencil_step`) that `torch.compile` can fuse without
+capturing anything -- a capture would recompile per candidate batch and cost more
+than it saves. Off by default (`TESIS_FUSE_KRYLOV=1` to enable); the legacy
+matvec path is untouched and the suite asserts the two agree bit for bit.
+
+*The measurement.* One compass sweep of 18 candidates:
+
+| geometry (float32, A100) | baseline | check every 8 | fused | fused + check8 |
+| :--- | ---: | ---: | ---: | ---: |
+| 80×40, M=40 | 2.83 s | 2.97 s (0.95×) | **1.30 s (2.18×)** | 1.29 s (2.20×) |
+| 160×96, M=40 | 21.42 s | 22.34 s (0.96×) | **7.73 s (2.77×)** | 7.92 s (2.70×) |
+
+So: **fusing the iteration is worth 2.2-2.8×, not 5×.** The direction of the
+argument above is right -- the win is software and it is large -- but at the
+geometry the campaign actually runs (160×96) it is 2.8×, and the "2.3 h → 0.45 h"
+projection is 1.8× optimistic. Parity holds: the objective moves by 1.3e-07 in
+float32 (the same order as the check8 slack) and is bit-identical in float64.
+
+Two by-products worth keeping:
+
+- **The host syncs are not the cost.** Checking the residual every 8 iterations
+  instead of every one is *neutral to slightly negative* (0.95-0.96×). The
+  bottleneck is kernel launches, not the device-to-host reads, which is the
+  opposite of what the "one batched solve per step" framing suggests.
+- **The two-point cost model is not reproducible to better than ~15%.** Fitting
+  `wall(M)` inside one run predicted 18.2 s for the 160×96, M=40 sweep that had
+  just been measured directly at 21.4 s. The `wall = 1.52 s + 8.9 ms × M` line
+  above (and therefore the "81% overhead at M=40") came from the same kind of
+  two-point fit and should be read as an order of magnitude, not a number. On the
+  160×96 run the fused path cost `0.50 s + 153 ms × M` against the baseline's
+  `0.46 s + 445 ms × M`: fusion cut the *marginal* cost 2.9×, which is where the
+  win is, and left the fixed cost alone.
+
+Practical consequence for the campaign: enabling the flag on a GPU run leaves the
+answer unchanged and turns a 1.7 h float32 optimization into ~40 min, for a
+one-off ~1-2 min Dynamo compile. It stays opt-in so that every number already in
+these docs keeps its stated provenance.
+
+### Decision rule
+
+| what you actually run | verdict |
+| :--- | :--- |
+| `--models smoke` / `--preset quick` (450 cells, `nsteps=40`, `M=8`) | **No.** The GPU is at parity with the CPU there; a subscription buys nothing. |
+| full `--stage opt` at the paper geometry (80×40, `M=40`, thousands of evaluations) | **Yes.** ~8 min on a T4 against ~21 h on one core. |
+| the same, on an A100 at this batch size | **No.** It ties the T4 on a compass sweep; the overhead dominates. |
+| 160×80 and larger | Yes, and more so: batch further and the fixed cost amortises better. |
+
+`--dtype float32` is the screening mode (field error ~1e-5, mass balance ~1e-6,
+`--verify` 4.4e-05): enough to rank policies, not enough to publish. Any policy
+selected in float32 must be re-scored in float64 (NumPy) before it appears in a
+table.
+
+Solver properties (`O1`–`O4`: exact-adjoint gradient, 1e-15 mass balance,
+chance-constraint reformulations) deliberately stay on the NumPy reference: they
+certify the *solver*, not the throughput, and porting them would weaken exactly
+the numbers they exist to pin down. `SLSQP`/the discrete adjoint is NumPy-only
+and raises a clear error under `--backend torch` rather than returning a
+gradient. The same stencil machinery already exposes `Stencil5.apply_transpose`
+(the exact transpose of the transport operator, checked in
+`tests/test_fv2d_torch.py`), so batching the adjoint is a port, not a redesign.
+
+---
+
+*Sources: `runs/sweeps/baseline_n5/`, `runs/phase3_tau_ramp.json`,
+`out/fno10/` (superseded), `configs/opt/benchmark_bounded.yaml` (b508372),
+`SCRIPTS/seed_sweep.py`, `runs/runtimes.jsonl`. §9 additionally: `DOCS/GPU.md`,
+`SCRIPTS/bench_backend.py`, `tests/test_fv2d_torch.py`,
+`tests/test_saa_torch.py`, `physics/fv2d_torch.py`, `stoch/saa_torch.py`.
+Per-phase detail in `Actions.md`; per-phase plans in `plan.md`.*
+
 **Update (2026-11-21): the launch count, measured.** The estimate above
 ("~100 time steps × ~24 dependent BiCGSTAB iterations") was a reading of the
 code, not a measurement. Instrumenting `bicgstab_solve` in

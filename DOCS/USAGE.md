@@ -614,6 +614,23 @@ it produces.
 
 ---
 
+### 7.4 Krylov solver knobs
+
+Two environment variables reach the batched transport solver
+(`physics/fv2d_torch.py`); both default to the historical behaviour, so an unset
+shell reproduces every number already in `DOCS/`.
+
+| variable | default | effect |
+| :--- | :--- | :--- |
+| `TESIS_FUSE_KRYLOV` | `0` | compile the BiCGSTAB iteration into one call (~2.8x on an A100 at 160×96, one-off ~1-2 min Dynamo compile, same answer: 1.3e-07 in float32, bit-identical in float64) |
+| `TESIS_KRYLOV_CHECK_EVERY` | `1` | check the residual every N iterations; each check is a device-to-host sync. Measured **no gain** on an A100 (0.96x) -- the bottleneck is launches, not syncs |
+
+`SCRIPTS/bench_krylov_fusion.py --grid 160x96 --nsteps 100 --m-scen 40 --s-cand 18
+--dtype float32` produces the table in `DOCS/Conclusions.md` §9; `--json` writes
+it for comparison. It asserts nothing about speed -- it prints baseline, check8,
+fused and fused+check8 side by side with the objective difference, so a fast path
+that moved the answer would be visible, not hidden.
+
 ## 8. Conventions and gotchas
 
 - **Relative defaults are cwd-relative.** `out/`, `figs/`, `runs/`, and the

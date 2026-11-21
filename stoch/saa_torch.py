@@ -287,8 +287,14 @@ class TorchArchive:
             )
         return Q
 
-    def transport(self, Q: torch.Tensor, store_fields: bool = False) -> TransportBatch:
-        """Batched transport solve for rate vectors ``Q`` (shape ``(S, nw)``)."""
+    def transport(self, Q: torch.Tensor, store_fields: bool = False,
+                  check_every: Optional[int] = None,
+                  fuse: Optional[bool] = None) -> TransportBatch:
+        """Batched transport solve for rate vectors ``Q`` (shape ``(S, nw)``).
+
+        ``check_every``/``fuse`` reach the Krylov solver; both default to the
+        module knobs (``TESIS_KRYLOV_CHECK_EVERY``/``TESIS_FUSE_KRYLOV``).
+        """
         fwd = self.fwd
         batch = transport_batch(
             self.grid,
@@ -305,6 +311,8 @@ class TorchArchive:
             store_fields=store_fields,
             rtol=self.rtol,
             maxiter=self.maxiter,
+            check_every=check_every,
+            fuse=fuse,
         )
         self._record_krylov(batch.report)
         return batch
@@ -314,10 +322,17 @@ class TorchArchive:
         Q,
         cost: CostConfig,
         keep: bool = False,
+        check_every: Optional[int] = None,
+        fuse: Optional[bool] = None,
     ) -> SAAEvaluationBatch:
-        """Evaluate ``S`` candidates on all ``M`` scenarios in one batch."""
+        """Evaluate ``S`` candidates on all ``M`` scenarios in one batch.
+
+        ``check_every``/``fuse`` are forwarded to the Krylov solver (see
+        ``TorchArchive.transport``); passing nothing keeps the historical path.
+        """
         Q = self._as_Q(Q)
-        res = self.transport(Q, store_fields=keep)
+        res = self.transport(Q, store_fields=keep, check_every=check_every,
+                             fuse=fuse)
         h = self.resp.head(Q)                                  # (S, M, n)
         h_obs = h[:, :, self.obs_cells]                        # (S, M, n_obs)
         out = scenario_objective_batch(

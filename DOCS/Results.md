@@ -282,6 +282,59 @@ pumping cost 821,250).
 
 ---
 
+### 2.4 Three dimensions: the first certified policy at 8,000 cells
+
+The 3D runner has two geometries worth quoting. The **paper preset**
+(`32x16x8` = 4,096 cells, `n_KL` 1419, 64/128 scenarios, 9 wells) gives
+`q* = [12.5, 12.5, 12.5, 12.5, 0, 0, 0, 0, 0]` m3/d, train J 547,605.94 / test
+547,665.31, test reliability 0.969 and mass balance 7e-15 — reproduced exactly on
+a third machine with a different BLAS. But the paper preset resolves the 20 m
+correlation length with only 2.4 cells, so a larger geometry
+**`size_mid`** (`40x20x10` = 8,000 cells, dx=dy=5 m, dz=2 m, `n_KL` 2062) was
+added: four cells per correlation length and three screened layers, so the
+partially penetrating wells produce real vertical flow.
+
+On that geometry two searches ran with the same wells, same seeds, same cost
+model, differing only in how many scenarios the search could afford. Both
+policies were then audited on **400 fresh fields** (seed base 900,000) that no
+search saw:
+
+| search | M_train | train J | in-run test rel. | 400-field reliability [95% Wilson] | verdict |
+|---|---|---|---|---|---|
+| NumPy, 90-min budget | 24 | 519,263 | 0.875 | 0.9075 [0.875, 0.932] | **FAIL** |
+| torch on a T4 | 100 | 501,060 | 0.938 | **0.9675 [0.945, 0.981]** | **PASS** |
+| | | | | fresh J: 519,433 vs 501,050 | |
+
+- **The M_train=24 policy is rejected**, not merely unproven: its interval's
+  upper bound (0.932) is below the 0.94 gate. `alpha*M_train = 1.2`, so the tail
+  was priced from about one scenario, the search pushed CVaR(G) onto the
+  constraint (+0.036) and bought 37 violations in 400 fields.
+- **The M_train=100 policy is the first certified 3D policy** at this geometry:
+  13/400 violations, lower bound 0.945 > 0.94. It is also 3.5% cheaper on the
+  audit draw (501,050 vs 519,433).
+- **The in-run test row is not a certificate either way.** The passing policy's
+  own test row (0.9375 at M=48) fails the gate its audit passes; at M=48 the
+  interval is [0.83, 0.98]. A 128-field draw still cannot separate the policies
+  (0.961 [0.912, 0.983] vs 0.930 [0.872, 0.963], both INCONCLUSIVE) although the
+  ordering is right. 400 fields decide it.
+- **The two optima are different designs**: 42.19 m3/d over five wells versus
+  37.27 m3/d from a single well, and the single well gives the tighter plume
+  (final peak 3.7 vs 6.0 mg/L; 3.9% vs 6.3% of cells above 1 mg/L).
+
+What made M_train=100 affordable is the cost lever, not the hardware name: the
+batched torch backend evaluates 100 scenarios in **6.2 s** where NumPy needs
+~78 s (~11x), because one batched Krylov solve replaces 100 sparse
+factorisations. CPU torch is already 2.4x faster than NumPy at this geometry
+(7.75 s vs 18.5 s per 8-scenario evaluation), so the honest statement is that
+the *backend* bought the scenario count and the GPU bought the wall clock
+(1,057 s total, search 1,003 s, converged at nit=23). Krylov health is recorded
+in `metrics.json`: flow CG 217 iterations to 8.6e-12, transport 100 solves x 100
+steps converged, `stalled: false`.
+
+Artifacts: `out3d_colab/plume3d_size_mid_gpu/{metrics.json,policy.json,
+movies/,cert/fresh_400.json}` and `out3d_colab/plume3d_size_mid/cert/`. Movie
+statistics come from `SCRIPTS/plume_movie3d.stack_stats` on `movies/fields.npz`.
+
 ## 3. Compute: what the GPU actually buys
 
 Measured, not estimated (`DOCS/GPU.md` has the full audit):
@@ -331,16 +384,22 @@ python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip 
     --config runs/colab_multi/<run>/r0/config_r0.yaml --m-scen 400 --ladder
 python3 SCRIPTS/check_tail.py --metrics runs/colab_multi/<run>/r0/artifacts.zip \
     --seed-base 900000 --m-scen 400          # nothing the run ever saw
-python3 tests/run_tests.py                              # 153 tests
+python3 SCRIPTS/check_tail3d.py --run out3d_colab/plume3d_size_mid_gpu \
+    --m-scen 400 --json out3d_colab/plume3d_size_mid_gpu/cert/fresh_400.json
+python3 tests/run_tests.py                              # 293 tests
 ```
 
 ---
 
 ## 5. What is *not* established
 
-1. **Global optimality.** Both policies are local optima of a non-convex program;
-   the 1.2% spread suggests a flat basin, not that nothing better exists. A
-   multi-start sweep at M = 100 is in flight.
+1. **Global optimality.** Every certified policy is a local optimum of a
+   non-convex program, and the 2D restart experiment is the evidence that this
+   matters: at M_train = 40 both random restarts converged to the *same*
+   attractor from two different seeds, one of them 3% worse, so restarts sample
+   the basin rather than proving it is the only one. A 3D restart probe is in
+   flight; until it lands, "the single-well 3D design is the best design" is
+   not a claim this document makes.
 2. **2.5D / 3D.** The 3D results are separate work with their own runner,
    config and document (`SCRIPTS/run_3d.py`, `configs/opt/full3d.yaml`,
    `DOCS/3D_results.md`); the paper preset validates at 32×16×8 = 4096 cells with
@@ -356,3 +415,11 @@ python3 tests/run_tests.py                              # 153 tests
    off in these runs.
 4. **Surrogate-in-the-loop.** The FNO/PINN surrogates were never used inside the
    optimization loop; all optimization results use the finite-volume model.
+5. **What the 3D audit does and does not certify.** It certifies one policy, at
+   one geometry, on one seed base. It does not establish that the single-well
+   design is globally optimal, nor that 400 fields would separate it from other
+   certified 3D candidates (none have been found yet). The `size_mid` versus
+   `full` comparison is **not** a resolution study: the two grids have different
+   KL bases (n_kl 2062 vs 819), so they are two different aquifers. And the 3D
+   movie is one scenario's maximum-intensity projection, which answers *where*,
+   not *how much* — the numbers in §2.4 come from `stack_stats`, not the image.

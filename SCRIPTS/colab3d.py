@@ -112,6 +112,62 @@ def build_bundle(path: Path) -> int:
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
+def build_chain(remote: str, remote_argv: list, certify: int) -> str:
+    """Source of the on-VM chain: run the search, then certify what it found.
+
+    Kept as a pure function so it can be parsed and inspected before a paid
+    launch: the chain is the one piece of the driver that only ever executes on
+    the VM, where a typo costs a rented GPU-hour.
+    """
+    out_idx = remote_argv.index("--out") + 1
+    run_out = remote_argv[out_idx]
+    lines = [
+        "import subprocess",
+        f"R = {remote!r}",
+        "def stage(argv, logname):",
+        "    with open(R + '/' + logname, 'w') as fh:",
+        "        p = subprocess.Popen(argv, cwd=R + '/repo', stdout=fh,",
+        "                             stderr=subprocess.STDOUT,",
+        "                             start_new_session=True)",
+        "        return p.wait()",
+        "def main():",
+        f"    argv = {remote_argv!r}",
+        "    rc = stage(argv, 'run.log')",
+        "    print('opt rc', rc, flush=True)",
+    ]
+    if certify and certify > 0:
+        lines += [
+            f"    if rc == 0 and {int(certify)} > 0:",
+            f"        c = {int(certify)}",
+            f"        run_out = {run_out!r}",
+            "        cert = ['python3', '-u', 'SCRIPTS/check_tail3d.py',",
+            "                '--run', run_out, '--m-scen', str(c), '--ladder',",
+            "                '--json', run_out + '/cert/fresh_%d.json' % c]",
+            "        print('cert rc', stage(cert, 'cert.log'), flush=True)",
+        ]
+    lines += ["    print('chain done', flush=True)", "main()", ""]
+    return "\n".join(lines)
+
+
+def kick_cell(remote: str, chain: str) -> str:
+    """Cell that writes the chain to the VM and starts it detached.
+
+    Detached on purpose: a cell that blocks for 30 minutes dies with the
+    websocket, and the exec channel disconnects routinely.
+    """
+    return (
+        "import subprocess\n"
+        f"src = {chain!r}\n"
+        f"open({remote!r} + '/chain.py', 'w').write(src)\n"
+        f"logf = open({remote!r} + '/chain.log', 'w')\n"
+        "p = subprocess.Popen(['python3', '-u', "
+        f"{remote!r} + '/chain.py'], cwd={remote!r},\n"
+        "                     stdout=logf, stderr=subprocess.STDOUT,\n"
+        "                     start_new_session=True)\n"
+        "print('kicked chain pid', p.pid)\n"
+    )
+
+
 def cmd_launch(args) -> None:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     session = args.session or f"tesis3d-{stamp[-6:]}"
@@ -120,7 +176,9 @@ def cmd_launch(args) -> None:
     remote = f"{REMOTE_ROOT}/{stamp}"
 
     # Refuse to launch while somebody else's GPU is up: Colab allows two.
-    rc_out = run_cli(["sessions"])
+    # Not checked for a dry run -- it provisions nothing, so it must be usable
+    # precisely when the cap is full.
+    rc_out = None if args.dry_run else run_cli(["sessions"])
     if rc_out and "No active sessions" not in rc_out[1]:
         log("! an active Colab session exists:")
         log(rc_out[1].strip()[:800])
@@ -145,10 +203,23 @@ def cmd_launch(args) -> None:
                         ("--max-evals", args.max_evals),
                         ("--n-starts", args.n_starts),
                         ("--krylov-rtol", args.krylov_rtol),
-                        ("--krylov-maxiter", args.krylov_maxiter)):
+                        ("--krylov-maxiter", args.krylov_maxiter),
+                        ("--seed", args.seed)):
         if value is not None:
             remote_argv += [flag, str(value)]
     remote_argv += list(args.extra or [])
+
+    chain = build_chain(remote, remote_argv, int(args.certify or 0))
+    kick = kick_cell(remote, chain)
+
+    if args.dry_run:
+        # A paid launch deserves a look before the meter starts.
+        print("session:", session, "| gpu:", args.gpu, "| remote:", remote)
+        print("argv:", " ".join(remote_argv))
+        print("--- chain.py that would run on the VM ---")
+        print(chain)
+        print("dry run: no VM is provisioned")
+        return
 
     log(f"launching session {session} gpu={args.gpu} high_mem={args.high_mem}")
     run_cli(["new", "-s", session, "--gpu", args.gpu]
@@ -180,16 +251,6 @@ def cmd_launch(args) -> None:
     if rc:
         log(rc[1].strip()[-400:])
 
-    # Kick detached: the exec channel will not survive a multi-hour cell, and a
-    # disconnect must not kill the run.
-    kick = (
-        "import subprocess\n"
-        f"argv = {remote_argv!r}\n"
-        f"logf = open({remote!r} + '/run.log', 'w')\n"
-        f"p = subprocess.Popen(argv, cwd={remote!r} + '/repo', stdout=logf,\n"
-        "                     stderr=subprocess.STDOUT, start_new_session=True)\n"
-        "print('kicked pid', p.pid)\n"
-    )
     rc = exec_cell(session, kick, timeout=300, wait=120)
     if rc:
         log(rc[1].strip()[-300:])
@@ -236,9 +297,13 @@ def cmd_collect(args) -> None:
     out_idx = argv.index("--out") + 1
     remote_run_dir = f"{plan['remote']}/repo/{argv[out_idx]}"
     got = []
+    cert_files = []
+    if args.certify and args.certify > 0:
+        for ext in ("json", "log"):
+            cert_files.append(f"cert/fresh_{args.certify}.{ext}")
     for name in ("metrics.json", "policy.json", "run_config.json",
-                 "colab3d_results.zip"):
-        dest = local / name
+                 "colab3d_results.zip", *cert_files):
+        dest = local / Path(name).name if "/" in name else local / name
         rc = run_cli(["download", "-s", plan["session"],
                       f"{remote_run_dir}/{name}", str(dest)], timeout=900)
         if rc and rc[0] == 0 and dest.exists() and dest.stat().st_size > 0:
@@ -283,7 +348,15 @@ def main() -> None:
     lp.add_argument("--n-starts", type=int, default=None)
     lp.add_argument("--krylov-rtol", type=float, default=None)
     lp.add_argument("--krylov-maxiter", type=int, default=None)
+    lp.add_argument("--seed", type=int, default=None,
+                    help="optim.seed: with n_starts=1 this alone changes the "
+                         "search trajectory (start k=0 is deterministic)")
+    lp.add_argument("--certify", type=int, default=0,
+                    help="after the search, run check_tail3d.py on this many "
+                         "FRESH scenarios on the VM and keep the result")
     lp.add_argument("--cli-timeout", type=int, default=900)
+    lp.add_argument("--dry-run", action="store_true",
+                    help="print the remote command and the chain, create nothing")
     lp.add_argument("--force", action="store_true",
                     help="launch even if another session appears active")
     lp.add_argument("extra", nargs="*", help="extra args forwarded to the 3D runner")
@@ -296,6 +369,8 @@ def main() -> None:
 
     cp = sub.add_parser("collect", help="download metrics/policy/zip")
     cp.add_argument("--run", required=True)
+    cp.add_argument("--certify", type=int, default=0,
+                    help="also fetch cert/fresh_<N>.json produced by --certify")
     cp.set_defaults(func=cmd_collect)
 
     tp = sub.add_parser("stop", help="terminate the VM")

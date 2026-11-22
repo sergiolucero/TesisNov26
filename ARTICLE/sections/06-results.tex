@@ -264,6 +264,61 @@ machine with a different BLAS: $q^\star$ and $J$ reproduced exactly
 \label{fig:3d}
 \end{figure}
 
+\subsection{Three dimensions at $8{,}000$ cells: certification is bought by
+scenario count}
+\label{sec:res3dcert}
+
+The paper preset resolves the $20$\,m correlation length with $2.4$ cells, so a
+second 3D geometry was run at $40\times20\times10=8{,}000$ cells
+($\Delta x=\Delta y=5$\,m, $\Delta z=2$\,m, $n_{KL}=2062$), where the same
+correlation length spans four cells and the screened interval covers three
+layers, so partially penetrating wells produce real vertical flow. Two searches
+were run on that geometry with the same wells, seeds and cost model, differing
+only in how many scenarios the sample average could afford.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{The same $8{,}000$-cell problem, twice. The right-hand columns are an
+independent audit on 400 fresh fields (seed base $900{,}000$) that no search
+saw. The cheaper policy fails it; the policy whose search could see the tail
+passes.}
+\label{tab:3dcert}
+\begin{tabular}{lrrrrr}
+\toprule
+search & $M_{\text{train}}$ & train $J$ & in-run test rel. & 400-field rel.\;[CI] & verdict \\
+\midrule
+NumPy, $90$\,min budget & $24$  & $519{,}263$ & $0.875$ & $0.9075$;\;[0.875, 0.932] & \textbf{fail} \\
+torch on a T4           & $100$ & $501{,}060$ & $0.938$ & $0.9675$;\;[0.945, 0.981] & \textbf{pass} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three things follow. First, the failure at $M_{\text{train}}=24$ is statistical,
+not numerical: $\alpha M_{\text{train}}=1.2$, so the tail is priced from about
+one scenario, the search pushes $\mathrm{CVaR}(G)$ onto the constraint
+($+0.036$) and buys a policy that violates $37$ of $400$ fresh fields. The
+same search in two dimensions at $M_{\text{train}}=16$ failed identically, which
+is why the audit is now routine rather than exceptional. Second, the in-run test
+row is not a certificate in either direction: the passing policy's own test row
+($0.9375$ at $M=48$) would have failed the gate that its $400$-field audit
+passes, and an intermediate $128$-field draw could not separate the two policies
+at all ($0.961$ versus $0.930$, both inconclusive). Third, the two optima are
+different designs, not two noisy readings of one: $42.19$\,m$^3$/d spread over
+five wells versus $37.27$\,m$^3$/d from a single well, with the single well
+yielding the tighter plume (final peak $3.7$ versus $6.0$\,mg/L; $3.9\%$ versus
+$6.3\%$ of cells above the limit).
+
+What made $M_{\text{train}}=100$ affordable is exactly the lever of
+Section~\ref{sec:rescost}: the batched backend evaluates $100$ scenarios in
+$6.2$\,s where the NumPy reference needs about $78$\,s, an $11\times$ gain that
+comes from replacing $100$ sparse factorisations with one batched Krylov solve.
+It is not a property of the card -- CPU torch is already $2.4\times$ faster than
+NumPy on this geometry ($7.75$\,s versus $18.5$\,s per eight-scenario
+evaluation) -- and the T4 run cost $1{,}057$\,s in total, of which the search was
+$1{,}003$\,s. Certification, in other words, was bought with scenario count, and
+scenario count was bought by batching.
+
 \subsection{Cost: the accelerator is not the lever}
 \label{sec:rescost}
 
@@ -285,7 +340,10 @@ A100 vs T4 & same geometry; fixed launch overhead dominates & no gain \\
 \end{table}
 
 Table~\ref{tab:cost} is the cost section in one line: batching and precision
-are levers, the accelerator name is not. The workload is latency-bound in
+are levers, the accelerator name is not. Section~\ref{sec:res3dcert} is what
+that advice buys when it is followed: batching a 3D sweep and its scenarios is
+what made a $100$-scenario search affordable, and the affordable search is the
+one that produced a policy that passes its audit. The workload is latency-bound in
 float32 and fp64-throughput-bound in float64, so the choice of accelerator is
 regime-dependent rather than monotone in price. The honest conclusion is the
 one in \code{DOCS/GPU.md}: do not rent a GPU for this problem until the kernel

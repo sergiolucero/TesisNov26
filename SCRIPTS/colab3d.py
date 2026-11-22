@@ -113,7 +113,12 @@ def build_bundle(path: Path) -> int:
 # commands
 # --------------------------------------------------------------------------- #
 def build_chain(remote: str, remote_argv: list, certify: int) -> str:
-    """Source of the on-VM chain: run the search, then certify what it found.
+    """Source of the on-VM chain: run the search, then optionally certify.
+
+    Prefer certify=0. The VM is reclaimed after ~40-50 min (three launches, three
+    reclaims, none explained by the workload), so anything chained onto the end
+    of the search is gambling with the artifact that already exists. A 400-field
+    certificate costs ~12 min on 8 local cores and needs no GPU.
 
     Kept as a pure function so it can be parsed and inspected before a paid
     launch: the chain is the one piece of the driver that only ever executes on
@@ -353,7 +358,9 @@ def main() -> None:
                          "search trajectory (start k=0 is deterministic)")
     lp.add_argument("--certify", type=int, default=0,
                     help="after the search, run check_tail3d.py on this many "
-                         "FRESH scenarios on the VM and keep the result")
+                         "FRESH scenarios on the VM. Usually the wrong trade: "
+                         "the VM lives ~40-50 min and the certificate needs no "
+                         "GPU -- collect the artifacts, then certify locally")
     lp.add_argument("--cli-timeout", type=int, default=900)
     lp.add_argument("--dry-run", action="store_true",
                     help="print the remote command and the chain, create nothing")

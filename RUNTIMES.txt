@@ -315,7 +315,7 @@ Command:
 Geometry    40x20x10 = 8000 cells (dx=dy=5.0 m, dz=2.0 m), n_kl=2062 (95.0%),
             24 train / 48 test scenarios, nsteps=100, 6 partially penetrating wells
 Cost        calibration 25.333 s per full-archive evaluation (24 scenarios),
-            => 0.775 s per scenario (numpy splu).  Run wall clock 4486 s (74.8 min).
+            => 1.06 s per scenario (25.333 s per 24-scenario evaluation).  Run wall clock 4486 s (74.8 min).
             Scaling vs paper preset (32x16x8, 0.195 s/scenario): 3.4x cost for 2x
             cells, i.e. ~n^1.9 -- sparse 3D LU fill-in.
 Search      90-min budget clamped max_evals 200 -> 107 per start.  13 candidates
@@ -338,7 +338,7 @@ Certificate python3 SCRIPTS/check_tail3d.py --run out3d_colab/plume3d_size_mid \
             violation rate is real and not a draw artifact.
 Reading     Same failure mode as 2D: alpha*M_train = 1.2, so the tail is estimated
             from about one scenario and the search cannot price the violation it
-            buys.  A converged 3D search needs M_train~100 (78 s/eval) => ~6.5 h
+            buys.  A converged 3D search needs M_train~100 (~105 s/eval) => ~9 h
             per start here, 2 starts ~13 h: do it on the GPU backend or overnight.
             NOT a resolution study: 'full' and 'size_mid' use different KL bases
             (819 vs 2062 modes), hence different realisations of K.
@@ -358,7 +358,7 @@ Geometry    identical to the NumPy size_mid run: 40x20x10 = 8000 cells,
             n_kl=2062, nsteps=100, 6 partially penetrating wells.
 Cost        archives (100 train + 48 test) 4.7 s (NumPy: 27.6 s).
             calibration 7.12 s per 100-scenario evaluation = 0.071 s/scenario
-            vs NumPy's 0.775 s/scenario => ~11x.  Search: 161 evaluations in
+            vs NumPy's 1.06 s/scenario => ~15x.  Search: 161 evaluations in
             1003.5 s, converged at nit=23 (step tolerance, not the budget).
             Whole run 1056.7 s.  CPU torch is already faster than NumPy here
             (7.75 s vs 18.5 s per 8-scenario eval): the win is the batched
@@ -383,6 +383,28 @@ CERTIFICATE (fresh fields, seeds 900000+, SCRIPTS/check_tail3d.py)
        M=24 policy is REJECTED (upper bound 0.932 < 0.94 gate).  128 draws
        cannot separate them; 400 can.  An in-run test row (0.9375 at M=48)
        neither certifies nor condemns.
+
+THE VM LIFETIME IS ~40-50 MIN, NOT THE 2-2.5 h ASSUMED EARLIER
+---------------------------------------------------------------
+Three launches, three reclaims, all inside an hour and none explained by the
+workload: 20261122-100338 died at ~43 min mid-start-2; 20261122-184211 and
+20261122-184242 both died between 22:03 and 23:17 UTC after a 21:41/21:42 launch
+(~40-50 min), and neither was idle -- 184211 had finished its search at 22:00
+(1053.9 s, q* = [0,0,0,37.27,0,0], train J 501060.49 / test 501260.88, zip written
+22:00:25) and was mid-certificate when the VM vanished. Everything the VM had
+written died with it: the zip was never downloaded, so the plotted figures and
+the bundle are gone even though the numbers they came from are not.
+
+Rules that follow, in order of how much they cost when ignored:
+  1. DOWNLOAD THE MOMENT THE ARTIFACT EXISTS. Do not chain a certificate, a
+     second start or a re-zip onto the end of a paid run and then collect. The
+     search finishing is the deadline, not the process exiting.
+  2. Certify on the CPU, locally. A 400-scenario NumPy certificate costs ~12 min
+     on 8 cores; running it on a 2-CPU VM doubles the window for no benefit and
+     spends GPU money on the one stage that needs no GPU.
+  3. Size one VM to one purpose (~20-25 min of work), not 45.
+  4. `colab sessions` after every collection: 'No active sessions' plus a missing
+     artifact means the artifact is gone, not pending.
 
 LAUNCH FOOTGUNS HIT THIS SESSION
   * `colab upload` to a non-existent remote directory fails with 500; create it

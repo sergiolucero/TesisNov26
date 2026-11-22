@@ -156,7 +156,7 @@ confine it, which is exactly the picture the 0.93 reliability implies: on the
 violating scenarios the residual plume still reaches the compliance point. The
 same panel pair in a picture: `movies/plume3d_contact.png`.
 
-## The same problem on a GPU: 11x faster, a different policy, and the same tail problem
+## The same problem on a GPU: 15x faster, a different policy, and the same tail problem
 
 `SCRIPTS/colab3d.py launch --preset size_mid --gpu T4 --dtype float64 --m-train 100
 --max-evals 200 --n-starts 1 --budget 60` (run `runs/colab3d/20261122-1349`).
@@ -167,7 +167,7 @@ differences are the backend and a training set the geometry can afford.
 |---|---|---|
 | train / test scenarios | 24 / 48 | **100** / 48 |
 | cost per 24-scenario evaluation | 25.3 s | — |
-| cost per 100-scenario evaluation | ~78 s (measured 0.775 s/scenario) | **6.2 s** (`per_eval_s` 7.12 at calibration) |
+| cost per 100-scenario evaluation | ~105 s (25.333 s per 24-scenario evaluation = 1.06 s/scenario) | **6.2-7.1 s** (0.071 s/scenario) |
 | archive build (148 scenarios) | 27.6 s | **4.7 s** |
 | search | 2 starts x 107 evals, budget-truncated | 1 start, **converged at nit=23** (161 evals) |
 | wall clock | 4,486 s | **1,057 s** (search 1,003 s) |
@@ -180,9 +180,9 @@ differences are the backend and a training set the geometry can afford.
 
 Three findings, in decreasing order of importance:
 
-1. **The GPU is worth ~11x here, and the win is batching, not arithmetic — which
+1. **The GPU is worth ~15x here, and the win is batching, not arithmetic — which
    is what makes M_train=100 affordable at all.** One
-   full-archive evaluation of 100 scenarios costs 6.2 s against the 78 s the NumPy
+   full-archive evaluation of 100 scenarios costs ~6.2 s against the ~105 s the NumPy
    backend needs for the same work. The T4's fp64 throughput is weak, so this is
    not floating-point throughput: it is one batched Krylov solve replacing 100
    sparse factorisations. The 3D `splu` is the expensive part (cost ~n^1.9 in
@@ -217,6 +217,16 @@ Three findings, in decreasing order of importance:
    42.19 m³/d over five wells; both sit on the constraint (CVaR ≈ +0.02 train)
    and both are ~0.96-0.98 reliable. A policy-multiplicity statement needs the
    same 400-draw audit for each candidate, not a comparison of their in-run rows.
+
+**A note on the museum piece above.** The run that produced these numbers was
+reproduced bit-for-bit on a second VM the same evening (identical trajectory,
+`f* = 501,360.88`, `q* = [0,0,0,37.27,0,0]`), which is what makes it a
+measurement rather than an anecdote. That second VM was reclaimed by Colab
+~45 min after launch, while it was certifying — the third reclaim in three
+launches, all inside an hour — so its figures and zip were never downloaded.
+The policy, the movie and every number quoted here survive because they had been
+collected from the first run; the lesson is in `RUNTIMES.txt`: download the
+artifact the moment it exists, and certify on the CPU.
 
 Krylov health on the GPU (recorded in `metrics.json` because a stalled transport
 solve silently poisons J): flow CG 217 iterations to 8.6e-12, converged, not

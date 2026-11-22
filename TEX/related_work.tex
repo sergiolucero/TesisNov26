@@ -129,6 +129,32 @@ batching: a whole sweep of compass directions can be evaluated as one batch of
 initial-value problems, which turns a sequence of small linear solves into one
 large one and is where the GPU speedups of Chapter~\ref{chap:results_2d} come from.
 
+\subsection{Decomposition and adaptive design}
+
+A stochastic program with per-scenario decision variables admits a second
+solution strategy besides solving the deterministic equivalent: price the
+disagreement between the scenario solutions and a consensus. Progressive
+hedging \citep{rockafellar1991,watson2011} does exactly that, iterating between
+scenario subproblems (with a proximal term pulling them toward the consensus)
+and a consensus step with an augmented-Lagrangian multiplier update. It is
+attractive when the deterministic equivalent is too large to assemble, because
+each subproblem sees one scenario and each subproblem is independent.
+
+The property that decides whether the decomposition has anything to decompose is
+nonanticipativity. If the decision is a single here-and-now vector --- as in this
+thesis, where the design is nine well rates chosen before any observation ---
+then every scenario copy of that vector must be equal, the consensus step is the
+projection of an average onto the admissible set, and progressive hedging
+reproduces what a direct nonlinear solve finds, at higher cost. The decomposition
+only buys something once the decision is allowed to adapt, i.e. in a two-stage
+program with first-stage rates and second-stage (recourse) rates that may depend
+on what has been observed. That structure also produces two quantities a
+here-and-now formulation cannot report: the value of the stochastic solution,
+$\mathrm{VSS} = \mathrm{EEV} - \mathrm{RP}$, and the value of perfect information
+$\mathrm{EVPI}$ \citep{birge2011}. Chapter~\ref{chap:results_3d} returns to this
+point, because the three-dimensional campaign is where the derivative-free search
+first becomes the binding cost.
+
 \subsection{Verification, validation, and reproducible computational results}
 
 The vocabulary used throughout is the standard one. \emph{Code verification}
@@ -336,6 +362,12 @@ E.~B. Wilson.
 \newblock Probable inference, the law of succession, and statistical inference.
 \newblock \emph{Journal of the American Statistical Association},
   22(158):209--212, 1927.
+
+\bibitem[Watson and Woodruff(2011)]{watson2011}
+J.-P. Watson and D.~L. Woodruff.
+Progressive hedging innovations for a class of stochastic mixed-integer
+resource allocation problems.
+\textit{Computational Management Science}, 8(4):355--370, 2011.
 
 \end{thebibliography}
 

@@ -85,12 +85,22 @@ continue the training seed reproduce the run rather than test it.
         the precision at which reliability is known would require thousands of
         scenarios, i.e.\ an order of magnitude more transport solves than the
         optimization itself.
-  \item \textbf{The three-dimensional model has no analytical gate.} The 3D
-        solver reproduces the 2D solution under extrusion to $10^{-13}$ and closes
-        its mass ledger to $10^{-15}$, and its paper preset reproduces across
-        machines; but it has no Ogata--Banks- or Thiem-type verification of its
-        own, so its correctness rests on dimensional reduction and parity rather
-        than on an independent solution.
+  \item \textbf{The three-dimensional model is verified but not certified, and
+        is coarse.} Seven gates are asserted on the solver --- exact seepage
+        velocity, transversally invariant head, a Thiem shape to $8.1\times
+        10^{-3}$, agreement with the 2D code under extrusion to $10^{-13}$, the
+        advection front speed to $1.2\%$, a breakthrough variance consistent
+        with $\alpha_L v$, and a mass ledger closing to $10^{-15}$ --- but there is
+        no analytical \emph{shape} gate for 3D transport, deliberately: the
+        Ogata--Banks solution is a continuous Dirichlet step, and against a finite
+        inlet it differs by a truncation error that shrinks with time ($0.32\to
+        0.13$), so it would test the upwinding both codes share rather than the
+        dimensional extension. What the 3D results lack is a \emph{certificate}:
+        the paper preset's interval is $[0.922,0.988]$ and the $8\,000$-cell
+        policy's is $[0.872,0.963]$, neither clearing the $0.94$ gate, and the
+        4\,096-cell geometry is an order of magnitude coarser than the 2D
+        campaign with a single log-normal conductivity family rather than a
+        layered geology.
   \item \textbf{Timings are single-machine.} Reported GPU costs come from rented
         T4 and A100 instances with the batch sizes stated; the fixed-cost model
         behind the larger projections is a two-point fit that was not
@@ -100,12 +110,12 @@ continue the training seed reproduce the run rather than test it.
 \subsection{Work that would remove these limitations}
 
 \begin{enumerate}
-  \item \textbf{An analytical gate for the 3D solver.} The cheapest available is a
-        fully penetrating well in a slab, whose drawdown must reproduce the Thiem
-        shape to about $10^{-2}$, plus a one-dimensional extruded column for
-        which the Ogata--Banks front location and breakthrough variance are known
-        to a few percent. Both are CPU-only tests and neither requires a new
-        solver; the current 3D evidence is dimensional rather than analytical.
+  \item \textbf{A certified 3D policy, and an affordable way to compute one.}
+        Certifying at the 2D standard means $M_{\text{test}}\approx400$ and
+        $M_{\text{train}}\approx100$ --- about $18$\,h per two-start search on
+        one CPU at $8\,000$ cells --- so the work is as much computational as
+        statistical: the batched torch backend on the $32\,768$-cell preset, and
+        a search that uses the adjoint instead of a thousand forward solves.
   \item \textbf{A 2.5D axisymmetric bridge} between the 2D and 3D models, which
         would give a second independent route to the same answer and make the
         dimensional reduction a check instead of an assumption.
@@ -118,6 +128,16 @@ continue the training seed reproduce the run rather than test it.
         to be paid for: $M$ of a few thousand, drawn from a frozen policy, with
         the standard error reported as a matter of course. Until then the honest
         claim is about reliability.
+  \item \textbf{Adaptive design, solved by progressive hedging.} The formulation
+        is written down and checked --- first-stage rates, recourse rates that may
+        depend on what has been observed at $t_{\text{obs}}$, nonanticipativity on
+        the first stage only, and a value of the stochastic solution and of perfect
+        information that a here-and-now model cannot report --- and the
+        decomposition on the one-stage problem is explicitly degenerate (a
+        nine-dimensional consensus block has nothing to decompose). Running it at
+        benchmark scale is the experiment that would say whether observing an
+        aquifer for a year is cheaper than installing more wells, which is the
+        question the 3D cost wall makes urgent.
   \item \textbf{Removing the per-step kernel launches.} The measured $2.2$--$2.8\times$
         came from compiling the iteration body; the sequential dependence of
         implicit time stepping remains, and a formulation that solves the whole

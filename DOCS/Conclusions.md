@@ -327,17 +327,24 @@ uncertainty only.
   optimization under uncertainty, SAA, verification practice, tail statistics)
   and `conclusions` (results, the methodological result, five limitations, five
   pieces of future work) --- plus an abstract and a title page. 55 pages, 0
-  undefined references. `results_3d.tex` is now Chapter 6 ("Three dimensions"):
-model and partial-penetration wells, the seven solver gates (the decisive one
-being 3D-vs-2D extrusion agreement at 1.9e-13), the paper preset
-(`q* = 4 x 12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d), the
-two trivial baselines (doing nothing; uniform half capacity, which is 3% cheaper
-in J and fails 55% of the time), reproducibility on three machines, and an
-explicit "what this does not establish" section. That section's sharpest point
-is self-inflicted: at M_test = 128 the point estimate 0.969 clears the 0.94 gate
-but the Wilson interval [0.922, 0.988] does not, so by this thesis's own rule the
-3D policy is *not* certified -- it needs ~400 test scenarios (~2 h of CPU) to
-become the statement the 2D policy earned. What it still is *not*: a complete
+  undefined references. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
+sections: model and partial-penetration wells; the seven solver gates (decisive
+one: 3D-vs-2D extrusion agreement at 1.9e-13); the paper preset (`q* = 4 x
+12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d) with the two
+trivial baselines (doing nothing; uniform half capacity, 3% cheaper in J and
+failing 55% of the time) and three-machine reproducibility; **eight thousand
+cells and the search that breaks** (the size_mid run: test reliability 0.875,
+fresh 128-draw certificate 0.930 [0.872, 0.963] INCONCLUSIVE, flat ladder, and
+the alpha*M_train = 1.2 mechanism, with the cost of a converged start -- 8-9 h,
+not the 6.5 h the run notes first projected); **what the plume movie shows**
+(untreated/vs/q* panels plus peak 44.8 -> 6.0 mg/L, cells above the limit 35.7%
+-> 6.3%); **the wall is the search, not the solver**, which is where the
+progressive-hedging line enters: degenerate on the one-stage model (a 9-dim
+consensus block has nothing to decompose, so the implementation is a parity
+harness), substantive with two-stage recourse, where VSS and EVPI become
+reportable; and the limits. Two caveats are stated up front in the chapter and
+are self-inflicted: at M_test = 128 the paper preset's interval [0.922, 0.988]
+does not clear the 0.94 gate, and no tail is quoted in 3D at all. What it still is *not*: a complete
 monograph. The two half-written chapters (`SolvingAlgorithms`, `plans_2d_3d`)
 remain outside the assembly because they restate material that
 `optimization.tex` already contains.

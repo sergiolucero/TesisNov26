@@ -14,6 +14,8 @@ venv/
 out/
 out3d_colab/
 figs/
+# ...but the chapter figures are source, not build output
+!TEX/figs/
 do_results/
 *.npz
 *.pt

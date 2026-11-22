@@ -66,6 +66,16 @@ exactly: `q* = [12.5, 12.5, 12.5, 12.5, 0×5]`, test `J = 547,665.31`, reliabili
 machine and a different BLAS after the 3D and opt branches were merged, so the
 agreement is not just the same binary.
 
+**Rewritten as thesis Chapter 6 (2026-11-22).** `TEX/results_3d.tex` is now
+seven sections: the model and its seven gates, the paper preset (with the
+baselines and the reproducibility table), *eight thousand cells and the search
+that breaks* (this run, the fresh 128-draw certificate, the α·M mechanism, the
+cost of a converged start), *what the plume movie shows* (the contact sheet and
+the final-frame statistics), *the wall is the search, not the solver* (the
+progressive-hedging line: degenerate on the one-stage model, substantive with
+recourse, and what has and has not been verified), and the limits. The earlier
+note on this chapter follows.
+
 **Written up as thesis Chapter 6 (2026-11-21).** `TEX/results_3d.tex` turns this
 into prose (model, solver gates, presets, baselines, reproducibility, limits) and
 adds one caveat that the run's own gate does not express: the test reliability
@@ -114,9 +124,13 @@ Two things this run establishes, and one it does not:
   cost grows roughly as n^1.9 — sparse 3D LU fill-in, as expected.
 - The budget is what limits the *search*, not the node count: 90 min buys 214
   evaluations, i.e. ~10 sweeps per start with the compass step never halving.
-  A converged 3D search at this geometry needs M_train ≈ 100 (78 s per
-  evaluation), so 300 evaluations per start is ≈ 6.5 h per start on this
-  machine, 2 starts ≈ 13 h. That is the honest price of a certified mid-size 3D
+  A converged 3D search at this geometry needs M_train ≈ 100. **Correction
+  (2026-11-22):** the per-scenario cost is 25.333/24 = 1.06 s, not the 0.775 s
+  quoted above (25.333 s is per 24-scenario evaluation), so M=100 is ~105 s per
+  evaluation and 300 evaluations per start is 8–9 h per start on this machine,
+  2 starts ≈ 18 h. The paper preset's 18.63 s per 64-scenario evaluation gives
+  0.29 s per scenario, so the ratio is 3.6x cost for 1.95x cells — the claimed
+  ~n^1.9 holds, the hours do not. That is the honest price of a certified mid-size 3D
   policy; it should be run on the GPU backend or overnight, not inside a 90-minute
   budget.
 - **Not** a resolution study. The `full` and `size_mid` runs use different KL

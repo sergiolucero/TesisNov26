@@ -161,11 +161,19 @@ papered over.
         interval transports across draws and backends; the CVaR tail does not,
         and ranking policies by tail value at affordable sample sizes is not
         supportable.
-  \item \textbf{A three-dimensional reference and a reproducible paper preset.}
-        The $32\times16\times8$ preset with $1\,419$ modes yields test cost
-        $547\,665$, reliability $0.969$, cleanup time $110.6$\,d and a mass
-        balance error of $10^{-15}$, with all gates passing, on both a CPU and a
-        GPU.
+  \item \textbf{A three-dimensional reference solver, and where the method
+        stops working.} The $32\times16\times8$ preset with $1\,419$ modes yields
+        test cost $547\,665$, reliability $0.969$, cleanup time $110.6$\,d and a
+        mass balance error of $10^{-15}$, reproduced identically on three
+        machines. Doubling the resolution to $8\,000$ cells at $24$ training
+        scenarios fails its own reliability gate ($0.875$, and $0.930$ $[0.872,
+        0.963]$ on fresh draws) for the reason the 2D campaign already
+        established --- at $\alpha M_{\text{train}}=1.2$ the tail is one
+        scenario --- and the cost accounting that follows ($8$--$9$\,h per
+        converged start) is what makes the algorithm, not the solver, the
+        binding constraint: the adjoint exists and the search does not use it, and
+        the adaptive design in which progressive hedging would earn its keep is
+        formulated and checked but not run at benchmark scale.
 \end{enumerate}
 
 \subsection{How to read this thesis}

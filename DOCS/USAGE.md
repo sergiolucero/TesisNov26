@@ -336,12 +336,12 @@ those).
 | `\appendix` | dropped: it is a standalone-document device, and left in it flipped every later chapter into appendix numbering (Chapters 5 and 6 became A and B). A chapter's appendix sections stay in that chapter |
 | `\begin{thebibliography}` blocks | lifted out, de-duped by key (first wins, warning when the texts differ), emitted once before `\end{document}` |
 | `\label{chap:...}` for its own chapter | supplied by the assembler as `\chapter{Title}\label{chap:<stem>}`; a label placed after the first `\section` would make `Chapter~\ref{}` read "Chapter 3.1" |
-| `\includegraphics{figs/x.png}` | resolved against `TEX/` via a generated `\graphicspath`, since the bodies are written into `TEX/build/body/` |
+| `\includegraphics{figs/x.png}` | resolved against `TEX/` via a generated `\graphicspath`, since the bodies are written into `TEX/build/body/`; chapter figures live in `TEX/figs/` (some are crops of the tracked `FIGURES/` panels, made with PIL) |
 
 The toolchain here is a user-level [TinyTeX](https://yihui.org/tinytex/) in
 `~/.TinyTeX` (`curl -fsSL https://yihui.org/tinytex/install-bin-unix.sh | sh`,
 then `tlmgr install` whatever a build reports as missing); the script finds it
-without `PATH` help. Verified output: **60 pages, 7 chapters, 0 undefined
+without `PATH` help. Verified output: **65 pages, 7 chapters, 0 undefined
 references, 0 undefined citations, 0 overfull boxes**. The compiled result is
 tracked as `TEX/tesis.pdf` (a published snapshot; `TEX/build/` itself stays
 gitignored), and each chapter is also tracked as its own PDF next to its source.

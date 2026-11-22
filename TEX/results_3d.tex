@@ -1,11 +1,14 @@
 % Three-dimensional results.  A fragment: include from the master with
 % \input{results_3d}.
 % Requires: booktabs, amsmath, siunitx (as results_2d.tex does).
-% Numbers are verbatim from full3D_colab_run.py --preset paper, whose metrics are
-% out3d_colab/run_paper/metrics.json; the solver gates are
-% tests/test_fv3d_reference.py and DOCS/3D_results.md.
+% Numbers are verbatim from full3D_colab_run.py (presets paper and size_mid,
+% metrics under out3d_colab/), SCRIPTS/check_tail3d.py (fresh certificate), the
+% solver gates in tests/test_fv3d_reference.py, the movie statistics in
+% DOCS/3D_results.md, and the progressive-hedging implementation in
+% stoch/pha.py + stoch/recourse.py (DOCS/RESEARCH_LINES.md L1).
 
 \label{sec:results-3d}
+
 \section{What changes in three dimensions}
 
 The two-dimensional campaign treats a well as a line source that spans the whole
@@ -17,36 +20,35 @@ depth average; vertical anisotropy decides how much of the plume a screen can
 see; and the same total pumping rate can be a good or a useless design depending
 on where along the vertical the screen sits.
 
-This chapter asks a narrower question than the 2D campaign: does the protocol of
-Chapter~\ref{chap:results_2d} --- sample-average objective, CVaR chance constraint,
-derivative-free search, out-of-sample certificate --- survive the change of
-dimension, and what does it cost? It is not an attempt to model a field site,
-and Section~\ref{sec:3d-not} is explicit about what it therefore cannot claim.
+This chapter asks three questions in order, and the third is the one that
+matters for the thesis. Does the protocol of Chapter~\ref{chap:results_2d} ---
+sample-average objective, CVaR chance constraint, derivative-free search,
+out-of-sample certificate --- survive the change of dimension? What does it cost,
+and where does it break? And once it breaks, which part of the method is
+actually the binding constraint?
 
 \section{Model, discretization, and the reference solver}
 
-The 3D model keeps the same governing equations as
-Chapter~\ref{chap:formulation} and adds only the vertical direction:
+The 3D model keeps the governing equations of Chapter~\ref{chap:formulation} and
+adds only the vertical direction:
 \begin{align}
   -\nabla\cdot\bigl(K\nabla h\bigr) &= W, \\
   \frac{\partial(\phi R C)}{\partial t} + \nabla\cdot(\mathbf{v}C)
   - \nabla\cdot(\mathbf{D}\nabla C) &= S,
 \end{align}
-with $K$ log-normal, separable in the three axes and truncated at $1419$
-Karhunen--Lo\`eve modes ($95\%$ of the variance, $\sigma=0.5$,
-$\ell_x=\ell_y=20$\,m, $\ell_z=6$\,m), $K_v=0.1\,K_h$
+with $K$ log-normal, separable in the three axes and truncated at $95\%$ of the
+variance, and $K_v=\kappa\,K_h$ with $\kappa=0.1$
 \citep{bear1972,li2020fourier}. Flow uses a seven-point two-point-flux
 approximation with harmonic face conductances and a sparse LU factorization;
 transport is implicit Euler with first-order upwinding and the diagonal part of
-the Bear dispersion tensor ($\alpha_L=5$, $\alpha_{TH}=0.5$,
-$\alpha_{TV}=0.05$\,m). Wells are partially penetrating, with a Gaussian
+the Bear dispersion tensor. Wells are partially penetrating, with a Gaussian
 footprint in the horizontal plane and a screened interval covering the middle
 $30\%$ of the thickness.
 
 The discretization is verified before anything is optimized, and the gates were
-chosen to test the \emph{extension}, not to re-test the scheme: agreement with the 2D
-code is the claim, and an analytical 1D shape gate would test the upwinding that
-both codes share.
+chosen to test the \emph{extension}, not to re-test the scheme: agreement with
+the 2D code is the claim, and an analytical 1D shape gate would test the
+upwinding that both codes share.
 
 \begin{table}[t]
   \centering
@@ -71,63 +73,50 @@ both codes share.
   \end{tabular}
 \end{table}
 
-Table~\ref{tab:3d-gates} lists what was measured. Two entries deserve comment.
-The front travels at the pore velocity to within $1.2\%$, short by a constant
-$0.8\Delta x$: that is first-order upwinding, not a defect, and it is why the
-gate is stated with the lag rather than against the exact front position. The
-breakthrough variance implies an effective dispersion of
-$0.24/0.29/0.31$ of $\alpha_L v$ at $t=1000/2000/3000$\,d, approaching the
+Two entries deserve comment. The front travels at the pore velocity to within
+$1.2\%$, short by a constant $0.8\Delta x$: that is first-order upwinding, not a
+defect, and it is why the gate is stated with the lag rather than against the
+exact front position. The breakthrough variance implies an effective dispersion
+of $0.24/0.29/0.31$ of $\alpha_L v$ at $t=1000/2000/3000$\,d, approaching the
 analytical value from below: the numerical profile is \emph{steeper} than the
-analytical one at early time, i.e. the scheme under-disperses rather than
+analytical one at early time, i.e.\ the scheme under-disperses rather than
 over-smears.
 
-There is deliberately no Ogata--Banks shape gate
-\citep{ogata1961solution}. The analytical solution is a continuous
-Dirichlet-source step, and comparing it against a finite inlet profile gives a
-relative $L^2$ error of $0.32$ that decays to $0.13$ as the profile develops ---
-a statement about truncation error, not about three dimensions. The trustworthy
-gate for a second implementation is agreement with the first, and that is what
-row four of the table provides.
+There is deliberately no Ogata--Banks shape gate \citep{ogata1961solution}. The
+analytical solution is a continuous Dirichlet-source step, and comparing it
+against a finite inlet profile gives a relative $L^2$ error of $0.32$ that decays
+to $0.13$ as the profile develops --- a statement about truncation error, not
+about three dimensions. The trustworthy gate for a second implementation is
+agreement with the first, and that is what row four of the table provides.
 
-\section{The paper preset}
+\section{The paper preset: the protocol transfers}
 
-The 3D campaign runs on a $200\times100\times20$\,m aquifer discretized on
+The first 3D campaign runs on a $200\times100\times20$\,m aquifer discretized on
 $32\times16\times8$ cells ($4096$ unknowns, $6.25\times6.25\times2.5$\,m),
-$64$ training and $128$ test scenarios, and the same nine candidate wells, cost
-model, penalty weights ($\rho_g=\rho_h=10^{6}$), $5\%$ concentration chance
-constraint and $1\%$ head constraint as the 2D runs. Table~\ref{tab:3d-presets}
-places it beside the two smaller presets that were used to debug the pipeline.
+$\sigma=0.5$, $\ell=(20,20,6)$\,m, $1419$ Karhunen--Lo\`eve modes, $64$ training
+and $128$ test scenarios, and the same nine candidate wells, cost model, penalty
+weights ($\rho_g=\rho_h=10^{6}$), $5\%$ concentration chance constraint and $1\%$
+head constraint as the 2D runs.
 
 \begin{table}[t]
   \centering
   \caption{Presets of the 3D pipeline. The smoke preset is degenerate on purpose
   --- the source is weak enough that the unpumped plume already complies, so
   $\mathbf{q}^*=\mathbf{0}$ is the correct answer there and it is not a
-  candidate for a result.}
+  candidate for a result. The last column is the test-set reliability, and the
+  third entry is the failure Section~\ref{sec:3d-wall} is about.}
   \label{tab:3d-presets}
   \begin{tabular}{@{}lrrrrl@{}}
     \toprule
-    preset & cells & $n_{KL}$ & scenarios (tr/te) & wells & outcome \\
+    preset & cells & $n_{KL}$ & scenarios (tr/te) & wells & test reliability \\
     \midrule
     smoke & $12\cdot6\cdot3=216$ & 164 & 6 / 12 & 4 & degenerate, $\mathbf{q}^*=\mathbf{0}$ \\
-    full & $24\cdot12\cdot6=1728$ & 819 & 24 / 48 & 6 & 4 active wells, test rel.\ $0.979$ \\
-    paper & $32\cdot16\cdot8=4096$ & 1419 & 64 / 128 & 9 & 4 active wells, test rel.\ $0.969$ \\
+    full & $24\cdot12\cdot6=1728$ & 819 & 24 / 48 & 6 & $0.979$ (4 active wells) \\
+    paper & $32\cdot16\cdot8=4096$ & 1419 & 64 / 128 & 9 & $0.969$ (4 active wells) \\
+    size\_mid & $40\cdot20\cdot10=8000$ & 2062 & 24 / 48 & 6 & $0.875$ --- \emph{fails} \\
     \bottomrule
   \end{tabular}
 \end{table}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.86\linewidth]{figs/well_layout_3d.png}
-  \caption{Depth-averaged mean concentration of the design plume with the nine
-    candidate wells, on the paper preset. Triangles mark the wells in plan view;
-    the four the optimizer activates are the ones adjacent to the plume, and in
-    the vertical they draw from the $6$\,m screened interval rather than the full
-    $20$\,m thickness. The plume is confined to roughly the middle third of the
-    thickness at the source and spreads vertically as it travels, which is what
-    makes the screen placement matter.}
-  \label{fig:3d-layout}
-\end{figure}
 
 The paper preset converges to
 \[
@@ -153,12 +142,23 @@ plausibility arguments:
     and the flow mass ledger closes to machine precision.
 \end{itemize}
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.86\linewidth]{figs/well_layout_3d.png}
+  \caption{Depth-averaged mean concentration of the design plume with the nine
+    candidate wells, on the paper preset. Triangles mark the wells in plan view;
+    the four the optimizer activates are the ones adjacent to the plume, and in
+    the vertical they draw from the $6$\,m screened interval rather than the full
+    $20$\,m thickness.}
+  \label{fig:3d-layout}
+\end{figure}
+
 The comparison that makes the policy legible is against the two trivial designs
 (Table~\ref{tab:3d-baselines}). Doing nothing is cheap only because nothing is
 cleaned up: $J=314\,330$ with a reliability of $0.000$ and a plume that never
 complies within the $3650$\,d horizon. Pumping every well at half capacity is
-*cheaper in objective* than the optimized policy ($531\,412$ vs $547\,665$) and
-fails more than half the time, with a mean cleanup time of $1996$\,d against
+\emph{cheaper in objective} than the optimized policy ($531\,412$ vs $547\,665$)
+and fails more than half the time, with a mean cleanup time of $1996$\,d against
 $110.6$\,d. The optimized policy therefore spends about $3\%$ of the objective
 to move reliability from $0.453$ to $0.969$ and the cleanup time by a factor of
 eighteen. On this geometry the chance constraint, not the pumping cost, is what
@@ -186,74 +186,230 @@ from the other side.
 All six gates of the run pass: retained KL variance $\ge 0.95$,
 reproducibility, mass balance $\le 1\%$, test reliability $\ge 1-\alpha-1\%$,
 improvement over no pumping, and a no-pump reliability that is not itself
-compliant. The optimization took $49$ evaluations and $3$ compass iterations in
-$1217$\,s on a four-core laptop at $18.6$\,s per evaluation; the workload is a
-sparse LU factorization rather than dense linear algebra, so a GPU buys nothing
-and the CPU is the right machine.
+compliant.
 
-\section{Reproducibility across machines}
+Two caveats belong here rather than in a later section, because they apply to
+every result in this chapter. First, $124/128$ has a Wilson interval of
+$[0.922,\,0.988]$: the point estimate clears the $0.94$ gate and the interval
+does not, so by the reporting rule of Chapter~\ref{chap:results_2d} the paper
+preset is \emph{encouraging but not certified}. Second, no tail is quoted
+anywhere in this chapter. At $M=128$ a $5\%$ tail averages six draws, and the
+2D campaign showed that a CVaR estimated from a few hundred draws moves between
+draws by more than its own standard error. The tail column of
+Table~\ref{tab:3d-baselines} exists to show that the optimized policy's tail is
+near zero, not to measure it.
 
 Because the 3D results rest on a single-file NumPy/SciPy runner rather than on
-the 2D optimization stack, the run was repeated on three different machines and
-BLAS builds, including one after the 3D and optimization branches were merged
-(Table~\ref{tab:3d-repro}). Agreement to five significant figures on the policy
-and to $10^{-15}$ on the mass ledger is what allows the result to be quoted as a
-number rather than as an anecdote.
+the 2D optimization stack, the paper preset was repeated on three machines and
+BLAS builds, including one after the 3D and optimization branches were merged:
+the policy, the test objective ($547\,665.31$), the reliability ($0.96875$) and
+the mass-ledger error ($9.7\times10^{-15}$) are identical on all three, and the
+first-start objective reproduces the partial Colab run to five figures.
 
-\begin{table}[t]
+\section{Eight thousand cells, and the search that breaks}
+\label{sec:3d-wall}
+
+The paper preset is small enough that the derivative-free search finishes. The
+next configuration in Table~\ref{tab:3d-presets} is the step between it and the
+GPU-sized grid, and it was chosen for a physical reason rather than a
+convenience: at $40\times20\times10$ cells ($\mathrm{d}x=\mathrm{d}y=5$\,m,
+$\mathrm{d}z=2$\,m) the $20$\,m horizontal correlation length is resolved by
+four cells instead of three, and a $30\%$ screen spans three layers instead of
+1.8, so the vertical structure of a partially penetrating well is finally
+representable.
+
+The run completes and it produces a policy that fails its own gate:
+
+\begin{itemize}
+  \item $\mathbf{q}^* = [3.125,\,0,\,1.5625,\,12.5,\,12.5,\,12.5]$\,m$^3$/d
+    ($42.19$ total, five of six wells active);
+  \item train $J=519\,263$ with reliability $0.958$ and
+    $\mathrm{CVaR}_{5\%}(G)=+0.036$; test $J=519\,493$ with reliability
+    $\mathbf{0.875}$, $\mathrm{CVaR}_{5\%}(G)=+0.533$, mean cleanup $456$\,d;
+  \item five of six gates pass; \texttt{test\_reliability} $\ge 0.94$ does not;
+  \item mass balance exact to float precision, and the per-scenario evaluation
+    cost rises from $0.29$\,s at $4096$ cells to $1.06$\,s at $8000$ cells ---
+    $3.6\times$ for $1.95\times$ the cells, i.e.\ $t\propto n^{1.9}$, the
+    sparse-LU fill-in one expects when the half-bandwidth is $n_x n_y$.
+\end{itemize}
+
+An independent draw of $128$ fresh scenarios, through the 3D verifier
+(\texttt{check\_tail3d.py}), gives $9/128 = 0.930$ with Wilson
+$[0.872,\,0.963]$: \emph{inconclusive}, with the point estimate below the gate.
+The nested ladder is flat --- $1/16$, $1/24$, $3/40$, $4/64$, $7/100$, $9/128$ ---
+so the policy is not an artifact of one draw. It genuinely violates about $7\%$
+of scenarios.
+
+The mechanism is the one Chapter~\ref{chap:results_2d} already identified, and
+it is worth stating in the general form because it is dimension-independent. The
+CVaR tail at level $\alpha$ is estimated from $\alpha M$ draws; at
+$M_{\text{train}}=24$ and $\alpha=0.05$ that is $1.2$ draws, so the optimizer
+prices the violation it is buying from approximately one scenario, and any
+scenario that is slightly worse than that one is free. The consequence is a
+policy that is optimal for its sample and unsafe for the aquifer --- here
+$0.875$ on the run's own test draw and $0.930$ on fresh draws, against a target
+of $0.95$. The 2D M$=16$ policy failed the same way ($0.912$ against $1.000$
+in-sample); what is new here is only the price of discovering it.
+
+The other half of the failure is the budget, and this is the part with
+consequences for the rest of the thesis. The run was given $90$ minutes, which
+the calibration turned into $107$ evaluations per start: eight compass sweeps
+per start, with the step size never halving. The compass never entered
+its refinement phase. A converged search at this geometry needs
+$M_{\text{train}}\approx100$, which at $1.06$\,s per scenario is about
+$105$\,s per evaluation, so $300$ evaluations per start is $8$--$9$\,h per
+start and nearly $18$\,h for two. That is the honest price of a certified
+mid-size 3D policy on one CPU, and it is the first time in this thesis that the
+search, rather than the forward solve, is the binding constraint.
+
+One thing the comparison with the paper preset must \emph{not} be read as: a
+resolution study. The two runs use different Karhunen--Lo\`eve bases ($1419$ vs
+$2062$ modes) and therefore different realizations of $K$; comparing their plume
+peaks or their $J$ compares two different aquifers.
+
+\section{What the plume movie shows}
+
+Each 3D run now also writes a movie of the same scenario untreated beside the
+same scenario under the optimized policy, with a shared colour scale: the stage
+is unconditional, self-guarded, rendered before the metrics file is written, and
+costs under $2\%$ of the run. It is not decoration. A reliability number says how
+often the compliance point is exceeded; it says nothing about where the mass
+goes, and in three dimensions that is the question an operator asks.
+
+\begin{figure}[p]
   \centering
-  \caption{The paper preset on three machines. The first column is the value the
-  preset reports at its first start; the last is the local rerun on the assembled
-  tree, which reproduced the policy and the test objective exactly.}
-  \label{tab:3d-repro}
-  \begin{tabular}{@{}lllrr@{}}
-    \toprule
-    run & hardware & $\mathbf{q}^*$ (active) & test $J$ & rel. \\
-    \midrule
-    Colab, partial & 2-core CPU & $4\times12.5$ & --- & --- \\
-    laptop, first & 4-core CPU & $4\times12.5$ & $547\,665.31$ & $0.96875$ \\
-    laptop, after merge & 4-core CPU & $4\times12.5$ & $547\,665.31$ & $0.96875$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+  \includegraphics[width=0.66\linewidth]{figs/plume3d_pairs.png}
+  \caption{Four frames of the plume movie, $t=36$, $912$, $2044$ and
+    $2920$\,d from top to bottom: untreated (left of each pair) beside the same
+    scenario under $\mathbf{q}^*$ (right), same colour scale, wells drawn as
+    their screened intervals, compliance-point history underneath each frame with
+    the $1$\,mg/L limit in red. The untreated plume crosses the compliance point;
+    under the optimized policy it is reduced to a faint residual that still
+    reaches it in the late frames --- the picture the $0.93$ out-of-sample
+    reliability implies.}
+  \label{fig:3d-movie}
+\end{figure}
+
+On the $8000$-cell run, statistics on the saved fields ($32$ frames, final
+frame) give peak $44.8\to6.0$\,mg/L, mean $2.94\to0.19$\,mg/L, and cells above
+the $1$\,mg/L limit $35.7\%\to6.3\%$ (Figure~\ref{fig:3d-movie}). The policy
+reduces the plume by roughly an order of magnitude and does not confine it: the
+residual that remains is precisely the plume that reaches the compliance point
+on the violating scenarios. A screening claim and a compliance claim are
+therefore visibly different claims, and only the second one is a certificate.
+
+\section{The wall is the search, not the solver}
+\label{sec:3d-algorithm}
+
+Section~\ref{sec:3d-wall} leaves two ways out, and they are not
+interchangeable. One is to make each evaluation cheaper: batching, mixed
+precision and a compiled Krylov iteration, measured in
+Chapter~\ref{chap:results_2d}. The other is to need fewer evaluations, which is a
+question about the algorithm rather than the machine. The 3D case makes the
+distinction sharp because the forward solve is already $n^{1.9}$: at
+$40\times20\times10$ the LU fill-in costs $25$\,s per $24$-scenario archive and
+about $105$\,s per $100$-scenario one, so the machine stops being a free
+variable.
+
+\subsection*{Why progressive hedging degenerates here, and what it needs}
+
+The derivative-free search is not the only option: this thesis also implements a
+discrete adjoint, verified against finite differences, and the search never used
+it. The obvious gradient-based alternative, on a problem with scenario structure,
+is progressive hedging \citep{rockafellar1991,watson2011}. It is worth reporting
+precisely why it does not help \emph{this} problem, because that is a property of
+the model and can be checked.
+
+The design here is a single here-and-now vector $\mathbf{q}\in\mathbb{R}^9$. Give
+each scenario its own copy $\mathbf{q}^m$ and progressive hedging must drive all
+$M$ copies to a common value: the consensus step is the projection of an average
+onto $\mathcal{Q}$, and the multiplier update is a fixed-point iteration on a
+nine-dimensional space. There are no per-scenario decision variables to
+decompose, so the decomposition can only reproduce what a direct solve finds ---
+at the cost of $M$ subproblems per iteration. The implementation in
+\texttt{stoch/pha.py} is therefore a \emph{parity harness}
+(\texttt{mode="one"}): its job is to reproduce the compass-search optimum and to
+serve as the audit for the Pyomo layer, and any disagreement would be a bug
+rather than an algorithmic improvement.
+
+Progressive hedging becomes the natural algorithm once the design is allowed to
+adapt, and that is a different model, not a better algorithm for the same one:
+\begin{itemize}
+  \item stage 1 (here and now): installed rates $\mathbf{q}^1\in\mathbb{R}^9$;
+  \item stage 2 (recourse, per scenario): after observing the compliance-point
+    history $C(\mathbf{x}_c,t\le t_{\text{obs}})$ and the extracted mass, the
+    operator may re-set rates $\mathbf{q}^2(\omega)\in\mathbb{R}^9$ for the
+    remaining horizon, subject to the same capacity and per-well bounds.
+\end{itemize}
+Nonanticipativity now binds only $\mathbf{q}^1$, so the decomposition has
+something to decompose, and the two-stage formulation yields quantities a
+here-and-now model cannot report: the value of the stochastic solution
+$\mathrm{VSS}=\mathrm{EEV}-\mathrm{RP}$ and the value of perfect information
+$\mathrm{EVPI}$ \citep{birge2011}. For a remediation design that is a decision
+made in stages with monitoring, this is the physically honest formulation, and
+the question it answers --- how much reliability can be bought by observing the
+aquifer rather than by installing more wells --- is the one the cost wall above
+makes urgent.
+
+Two implementation facts matter for anyone repeating this. First, the chance
+constraint is \emph{not} scenario-separable: its CVaR form couples scenarios
+through the shared value-at-risk variable $\eta$ \citep{rockafellar2000}. The
+implementation freezes the Rockafellar--Uryasev weights at the current consensus,
+which turns the coupling into a scenario-local penalty --- a Gauss--Seidel step
+on the same fixed point rather than an exact decomposition; the exact coupled
+program, with $\eta$ and a multiplier as first-class variables, is written down
+as a Pyomo model and used as the audit reference, not as the fast path. Second,
+the cost model has to be diagonal: progressive hedging needs $M$ \emph{distinct}
+candidate policies evaluated on their own scenarios, so a dense $(S,M)$ batch
+would pay $M^2$ and a mask that evaluates each policy on one scenario costs $M$.
+That is the same batching lever as Chapter~\ref{chap:results_2d}, applied to a
+transposed access pattern.
+
+What has been verified so far is the mechanics, not a benchmark result: the
+two-phase transport reproduces the single-phase fields exactly, the two-phase mass
+ledger closes to $10^{-16}$, the chained adjoint agrees with finite differences
+to $2.6\times10^{-9}$ in $J$ and $1.4\times10^{-10}$ in $G$, and on a
+$12\times6$ smoke geometry the two-stage model beats the one-stage one (a
+recourse value of $8\%$) --- a consistency check on a grid far too small to be a
+claim. The benchmark-scale comparison, and with it the sign and size of the
+VSS, is the next experiment this thesis sets up and does not report.
 
 \section{What the 3D results do not establish}
 \label{sec:3d-not}
 
-The protocol transfers, and that is the claim. Four things are deliberately not
+The protocol transfers, and that is the claim. Five things are deliberately not
 claimed.
 
 \begin{enumerate}
-  \item \textbf{The 3D policy is not certified to the standard of
-    Chapter~\ref{chap:results_2d}.} Its point-estimate reliability is $0.969$, which
-    clears the $0.94$ gate; its Wilson interval at $M=128$ is
-    $[0.922,\,0.988]$, which does not. By the reporting rule of
-    Chapter~\ref{chap:results_2d} --- certify with the interval, not the point ---
-    this is an encouraging but inconclusive certificate, and it needs roughly
-    $400$ test scenarios to become the kind of statement the 2D policy earned. That is a compute assertion, not a modelling one: $400$
-    scenarios at $18.6$\,s per evaluation is about two hours on one core.
-  \item \textbf{No tail is quoted at all.} The 2D campaign showed that
-    $\mathrm{CVaR}_{5\%}$ estimated from a few hundred draws moves between draws
-    by more than its own standard error. At $M=128$ a $5\%$ tail averages six
-    realizations; the number in Table~\ref{tab:3d-baselines} is reported to show
-    that the optimized policy's tail is near zero, not as a measurement of it.
-  \item \textbf{The discretization is coarse relative to the 2D campaign}:
-    $4096$ cells and $1419$ modes against $15\,360$ and $1529$, with a vertical
-    resolution of $2.5$\,m and a screened interval of $6$\,m. The vertical
-    direction is intentionally coarse, because vertical transport is diffusive at
-    $\alpha_{TV}=0.05$\,m and a handful of layers already carries the screen
-    contrast, but it means this is a model of partial penetration, not a
-    converged solution of a layered aquifer.
+  \item \textbf{No 3D policy in this chapter is certified.} The paper preset's
+    interval is $[0.922,\,0.988]$ and the $8{,}000$-cell policy's is
+    $[0.872,\,0.963]$; neither clears the $0.94$ gate as an interval. The first
+    is a sample-size limitation ($M_{\text{test}}=128$), the second is a real
+    ~$7\%$ violation rate caused by $\alpha M_{\text{train}}=1.2$.
+  \item \textbf{The $8{,}000$-cell run is not a resolution study.} Different KL
+    bases, hence different aquifers; a resolution claim needs one realization on
+    two grids, which the truncated expansion does not provide.
   \item \textbf{The physics is deliberately narrower than a site model}: the
     dispersion tensor is diagonal (cross terms omitted), there is no density
     coupling and no NAPL phase, the conductivity is a single log-normal family
     rather than a layered geology, and there is one source and one compliance
-    point.
+    point. The vertical direction is coarse by design, because vertical
+    transport is diffusive at $\alpha_{TV}=0.05$\,m.
+  \item \textbf{The adaptive design is a model, not yet a result.} The two-stage
+    recourse formulation, its progressive-hedging solver and its checks exist;
+    the VSS and the adaptivity frontier at benchmark scale do not, and a recourse
+    model also carries a physical assumption (what is observable at
+    $t_{\text{obs}}$, and how fast a rate can be retuned) that has to be stated
+    as a scenario-tree assumption rather than buried in code.
+  \item \textbf{No tail is reported in 3D}, for the reason given with
+    Table~\ref{tab:3d-baselines}: at these sample sizes a $5\%$ CVaR is not a
+    measurement.
 \end{enumerate}
 
-The obvious next step is the one the pipeline was built for and has not yet been
-run: the \texttt{paperGPU} preset, which keeps the scenario count and the time
-span and refines the grid $2\times$ per axis to $32\,768$ cells, where the batched
-torch backend beats sparse LU. Together with layer-resolved conductivity, that
-would make the 3D result a statement about a heterogeneous aquifer rather than
-about the transferability of a protocol.
+The next step the pipeline was built for has not been run either: the
+\texttt{paperGPU} preset keeps the scenario count and the time span and refines
+the grid $2\times$ per axis to $32\,768$ cells, where the batched torch backend
+beats sparse LU. Together with layer-resolved conductivity and the two-stage
+recourse model, that would turn the 3D result from a statement about the
+transferability of a protocol into a statement about a heterogeneous aquifer
+under adaptive management.

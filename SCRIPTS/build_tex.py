@@ -85,9 +85,7 @@ THESIS_SUBTITLE = ("Applied to two- and three-dimensional aquifer "
                    "remediation design")
 # A dedication page between the title and the abstract. Plain text, or the path
 # of a file holding it (--dedication accepts either, like --abstract).
-THESIS_DEDICATION = ("To Roger Wets, Alejandro Jofr\\'e and Terry Rockafellar, "
-                     "who taught us that a stochastic program is a statement "
-                     "about a decision, not about a number.")
+THESIS_DEDICATION = "To Roger Wets, Alejandro Jofr\\'e and Terry Rockafellar."
 
 # A preamble carries more than \newcommand: theorem environments, column
 # types and operator names are declared the same way and are just as fatal to

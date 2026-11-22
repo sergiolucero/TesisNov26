@@ -8,11 +8,13 @@
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{siunitx}
+\usepackage{tabularx}
+\usepackage{array}
 \usepackage[round,numbers,sort&compress]{natbib}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 
-\title{Verification-first simulation and chance-constrained optimization\\
-\large for pump-and-treat remediation of contaminated aquifers}
+\title{A Stochastic Groundwater Remediation Problem solved 25 years later with AI\\
+\large Introduction}
 \author{Sergio Lucero}
 \date{\today}
 
@@ -20,44 +22,236 @@
 \maketitle
 
 \section{Introduction}
-\subsection{The remediation decision}
+\subsection{Twenty-five years ago, at Davis}
+
+Twenty-five years ago, as a doctoral student in Applied Mathematics at the
+University of California, Davis, I was handed this problem by my advisor, Roger
+Wets: a contaminant plume is moving through an aquifer; a set of wells can pump
+it out and treat it; where do you put the wells, and at what rates do you run
+them, when the conductivity field that decides where the plume actually goes is
+known only as a random field? The question arrived already in the language of
+stochastic programming, because that is the language the group spoke. A decision
+has to be taken before the uncertainty is resolved, the physical state responds
+to it, the regulator asks for a probability rather than a guarantee, and the cost
+of being wrong is measured in decades of pumping. Decomposition by scenarios
+\citep{rockafellar1991}, the L-shaped lineage of cutting-plane methods
+\citep{vanslyke1969,benders1962}, and the sample average approximation
+\citep{kleywegt2002} were the available machinery; the risk measure that this
+thesis ends up using was being written down at the same time
+\citep{rockafellar2000}.
+
+The problem had exactly the structure those methods were built for, and it had
+one property they could not tolerate: the evaluation of the objective required
+solving partial differential equations on a realization of the conductivity
+field. Not one solve --- a scenario set of them, for every candidate decision,
+inside every iteration of every subproblem. What the computation of that period
+could actually support was, in practice, a coarse two-dimensional grid, a handful
+of realizations, a linearized response matrix built from unit-rate solves
+\citep{gorelick1983,wagner1995,mayer2002,ahlfeld2000}, and a risk measure that
+had to be a variance rather than a tail, or a chance constraint replaced by a
+Gaussian assumption. The design that came out of that was defensible. The
+\emph{evidence} for it was thin, and in a way that was nearly invisible: it was
+validated on the same realizations that had been used to build it, so it looked
+better than it was, and there was no affordable way to find out how much better.
+
+The thesis I wrote then answered the question it could ask. This document returns
+to the same program and asks the question the intervening twenty-five years made
+askable. What changed is not the formulation --- it is written again below, in
+essentially the same form --- but the price of an answer, and the standard of
+proof applied to it.
+
+\subsection{The decision, and why it is a stochastic program}
 
 Pumping groundwater out of an aquifer, treating it at the surface and returning
-it is the most widely used remedy for a dissolved contaminant plume, and it is a
-design problem before it is an engineering one: how many wells, where, and at
-what rates. The physics is classical. Steady Darcian flow through a heterogeneous
-conductivity field carries a dissolved species that spreads by dispersion, and the
-design objective is to keep the concentration at a compliance surface below a
-regulatory limit while pumping as little water as possible for as short a time as
-possible. What makes the problem hard is not the partial differential equation; it
-is that the conductivity field that determines where the plume goes is known only
-through a statistical model fitted to a handful of boreholes. A design that is
-optimal for the ``most likely'' aquifer is not optimal for the aquifer that is
-actually there, and the constraint that matters --- \emph{the compliance limit is
-met with high probability} --- is a statement about a distribution, not about a
-field.
+it is still the most widely used remedy for a dissolved contaminant plume, and it
+is a design problem before it is an engineering one. The physics is classical:
+steady Darcian flow through a heterogeneous conductivity field carries a
+dissolved species that spreads by dispersion, and the design objective is to keep
+the concentration at a compliance surface below a regulatory limit while pumping
+as little water as possible for as short a time as possible. What makes the
+problem hard is not the partial differential equation. It is that the
+conductivity field which determines where the plume goes is known only through a
+statistical model fitted to a handful of boreholes, so the object that has to be
+optimized is not a number computed from a field but an expectation over fields,
+and the constraint that matters is a statement about a distribution.
 
-This thesis treats that statement literally. The design variables are well rates
-$\mathbf{q}$; the uncertainty is a log-normal conductivity field
-$\xi$; the constraint is
+Written out, the problem this thesis solves is
+
 \begin{equation}
-  \mathbb{P}\bigl(G(\mathbf{q},\xi) \le 0\bigr) \;\ge\; 1-\alpha ,
-  \qquad \alpha = 0.05 ,
+\begin{aligned}
+(\mathrm{P})\qquad
+\min_{\mathbf q\in\mathcal Q}\quad
+& \mathbb{E}\bigl[J(\mathbf q,\xi)\bigr]
+  \;+\; \rho_g\Bigl[\operatorname{CVaR}_{\alpha}\bigl(G(\mathbf q,\xi)\bigr)\Bigr]_+^{2}
+  \;+\; \rho_h\Bigl[\operatorname{CVaR}_{\alpha_h}\bigl(-H(\mathbf q,\xi)\bigr)\Bigr]_+^{2}
+\\[0.5em]
+\text{subject to}\quad
+& \nabla\cdot\bigl(K(\mathbf x,\xi)\,\nabla h\bigr)
+   = \sum_{i=1}^{n_w} q_i\,\delta(\mathbf x-\mathbf x_i),
+  \qquad \mathbf v = -\frac{K(\mathbf x,\xi)}{\phi}\,\nabla h,
+\\
+& \phi R\,\partial_t c
+   + \nabla\cdot\bigl(\mathbf v\,c - \mathbf D\,\nabla c\bigr)
+   = s(\mathbf x,t),
+\\
+& G(\mathbf q,\xi) = \max_{t\ge t_0} c(\mathbf x_c,t;\mathbf q,\xi) - c_{\lim},
+  \qquad H(\mathbf q,\xi) = \min_{j}\bigl(h(\mathbf x_j,t;\mathbf q,\xi) - h_{\min}\bigr),
+\\
+& \mathbb{P}\bigl(G(\mathbf q,\xi)\le 0\bigr)\;\ge\;1-\alpha,
+  \qquad \alpha = 0.05,
+\\
+& \mathcal Q = \Bigl\{\mathbf q:\; 0\le q_i\le \bar q,\;\;
+  \textstyle\sum_{i=1}^{n_w} q_i \le \bar Q\Bigr\},
+\end{aligned}
+\label{eq:int-problem}
 \end{equation}
-where $G$ measures the overshoot of the compliance-point concentration above its
-limit over the late part of the remediation horizon; and the objective is the
-expected cost of pumping, treatment and the time until the plume is contained.
-The resulting program is a chance-constrained optimization problem over a
-non-convex, derivative-free, simulation-based objective, and every evaluation of
-it requires a transport solve on a field realization.
 
-Two computational questions follow immediately, and they organize the thesis.
-The first is whether the forward solves can be made cheap enough to optimize
-against --- the answer pursued here is batching a whole set of candidates into one
-linear-algebra call on a GPU. The second is whether the numbers that come out of
-the optimizer can be trusted. These are not independent. A cheap forward model
-that is subtly wrong, and an optimizer that reports the statistics of its own
-training sample, both produce results that look convincing and are not.
+in which the decision $\mathbf q$ is the vector of pumping rates at
+$n_w$ candidate wells; the uncertainty $\xi$ is the log-normal conductivity field
+$K(\mathbf x,\xi)$; the state $(h,c)$ is the pair of random fields solving the
+Darcy and transport equations; $J$ is the operating cost of the remediation
+(energy for pumping, treatment of the extracted water, residual mass left in the
+aquifer, and the time until the plume is contained); $G\ge 0$ is the amount by
+which the compliance-point concentration exceeds its limit $c_{\lim}$ over the
+late part of the horizon; and $H\ge 0$ is the head-feasibility margin at the
+drawdown observation points, so that $H<0$ means the wells are drawing the water
+table down further than the permit allows. The chance constraint is the
+regulatory requirement; the two penalty terms implement it --- and a second,
+stricter one on drawdown --- as an exact penalization through the
+Rockafellar--Uryasev representation of conditional value-at-risk, which is what
+makes the problem differentiable in the risk argument and finite-dimensional in
+$\eta$. Chapter~\ref{chap:optimization} shows that this substitution is exact for
+$\rho$ large enough, and it is the reason the policies of
+Chapter~\ref{chap:results_2d} sit \emph{on} the constraint rather than inside it.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabularx}{\textwidth}{@{}l l X@{}}
+    \toprule
+    Object & Symbol & What it is here \\
+    \midrule
+    decision & $\mathbf q\in\mathbb{R}^{n_w}$ &
+      pumping rate of each candidate well; $n_w=9$ on a hexagonal lattice,
+      $0\le q_i\le 50$\,m$^3$/d, $\sum_i q_i\le 200$\,m$^3$/d \\
+    uncertainty & $\xi$ &
+      log-normal $K$ with $\sigma=0.65$ and correlation length $15$\,m,
+      truncated at $1\,529$ Karhunen--Lo\`eve modes (95\% of the variance) \\
+    state & $(h,c)$ &
+      heads and concentrations from the two equations in (P), on
+      $160\times96$ cells ($15\,360$ unknowns), $100$ implicit time steps \\
+    source & $s$ &
+      $10$\,m$^3$/d of water at $100$\,mg/L for $3\,650$\,d, at one point \\
+    compliance & $c_{\lim}$ &
+      $1.0$\,mg/L at a single compliance point down-gradient; $G$ is the
+      overshoot of its maximum over the late horizon \\
+    permit & $h_{\min}$ &
+      $-10$\,m of drawdown at the observation points; $H$ is the margin \\
+    risk & $\alpha,\alpha_h$ &
+      $5\%$ for compliance, $1\%$ for drawdown, both as CVaR \\
+    cost & $J$ &
+      pumping energy, treatment, residual mass and clean-up time; weights in
+      Chapter~\ref{chap:optimization} \\
+    \bottomrule
+  \end{tabularx}
+  \caption{What is decided, what is uncertain and what is computed, for the
+    two-dimensional benchmark that carries most of this thesis. The
+    three-dimensional model of Chapter~\ref{chap:results_3d} changes the geometry,
+    not the structure of (P).}
+  \label{tab:int-objects}
+\end{table}
+
+Two features of (P) are worth naming, because the thesis is organized around
+them. First, the constraint set is defined by \emph{stochastic} partial
+differential equations: the coefficient $K$ is random, so the state is a random
+field, and the constraint functions $G$ and $H$ are nonlinear functionals of that
+state. A scenario is therefore not a row of data but a PDE solve. Second, the
+objective is an expectation of a quantity that is itself the output of a
+simulator, and the decision appears in it only through the solution --- there is
+no closed form, no adjoint that the present search uses
+(Chapter~\ref{chap:results_3d}), and no convexity to exploit. Everything
+expensive in what follows is a consequence of these two sentences.
+
+\subsection{What was missing then, and what changed}
+
+Three things had to change before (P) could be solved as written rather than
+approximated into something else. Only one of them is hardware.
+
+\paragraph{The forward solve.} A compass sweep at the benchmark geometry evaluates
+eighteen candidate rate vectors on forty scenarios at once, which on one modern
+accelerator takes seconds when the candidates are batched into a single
+linear-algebra call and the Krylov iteration is compiled
+(Chapter~\ref{chap:results_2d}). Per-solve, the hardware of the period was two to
+three orders of magnitude slower; more importantly, nothing in that period
+evaluated a whole candidate set in one call, so the amortization that makes a
+derivative-free search affordable did not exist. An iteration of this search then
+cost what the entire campaign costs now, which is why the searches of that era
+were over response-matrix surrogates and not over the simulator.
+
+\paragraph{The surrogate.} Where a forward solve is still too expensive --- and in
+three dimensions it is, by a factor that grows like the square of the cell count
+(Chapter~\ref{chap:results_3d}) --- a learned surrogate can stand in, but only if
+it has been verified against an exact solution on a problem where the exact
+solution exists. That is what the one-dimensional sandbox of
+Chapter~\ref{chap:formulation} is for: the advection--dispersion equation has the
+Ogata--Banks solution \citep{ogata1961solution} in uniform flow, so an
+architecture can be scored against truth instead of against a previous run of
+itself. This was not available twenty-five years ago either, and neither was the
+evidence that it needs to be done carefully: networks that fit the training
+distribution perfectly can fail to be operators at all
+\citep{krishnapriyan2021failure,wang2021gradient}.
+
+\paragraph{The standard of proof.} The third change is free. The statistics used
+here --- a Wilson score interval \citep{wilson1927probable} on a fresh draw of
+scenarios, a standard error on the tail, and the refusal to rank policies by a
+statistic the sample cannot resolve --- were all available in 2000 and cost
+nothing but the decision to spend a validation draw instead of reusing the
+training one. The finding that the tail statistic does not transport while the
+reliability does (Chapter~\ref{chap:results_2d}) is a statement about how many
+scenarios a tail needs, not about how fast a computer is; it could have been
+measured then. That it was not is the honest answer to the question of why this
+thesis exists.
+
+\subsection{Approach: verification first}
+
+The thesis is organized as three layers of increasing physical complexity, each
+carrying its own verification rather than deferring it to the end.
+
+\begin{enumerate}
+  \item \textbf{A one-dimensional sandbox with a closed-form answer}
+        (Chapter~\ref{chap:formulation}). The advection--dispersion equation has the
+        Ogata--Banks solution \citep{ogata1961solution} for a step source in a
+        uniform flow, which makes it the right place to test a surrogate
+        architecture: the reference is exact, cheap, and covers the parameter
+        range. Physics-informed neural networks \citep{raissi2019pinn} and
+        Fourier neural operators \citep{li2020fourier,li2021fno} are trained
+        there and scored against the analytical solution, with the seed spread
+        reported rather than the best seed.
+  \item \textbf{A two-dimensional finite-volume model and the stochastic program}
+        (Chapters~\ref{chap:formulation} and~\ref{chap:optimization}). Darcy flow
+        with partially penetrating wells and advection--dispersion transport are
+        discretized on the grid of Table~\ref{tab:int-objects} with a
+        Karhunen--Lo\`eve truncation of the log-normal conductivity. The chance
+        constraint enters as the CVaR penalty of (P) in a sample-average
+        approximation \citep{rockafellar2000,shapiro2009}, and the resulting
+        non-convex program is solved by a derivative-free pattern search in which
+        an entire compass sweep of candidate rate vectors is evaluated in one
+        batched linear solve.
+  \item \textbf{An out-of-sample certificate} (Chapter~\ref{chap:results_2d}). A policy is
+        not reported until it has been re-solved on scenarios no run has seen, on
+        an independent implementation, with reliability quoted as a Wilson
+        interval \citep{wilson1927probable} and the tail quoted with its own
+        standard error. This layer is where the thesis's methodological claim
+        lives, and it is where the strongest negative result appears.
+\end{enumerate}
+
+Dimensional fidelity is checked against the same discipline in a third setting: a
+three-dimensional finite-volume solver with partially penetrating wells, whose
+policy at the paper resolution ($32\times16\times8$) reproduces to the reported
+cost on machines as different as a laptop CPU and a rented GPU, with a mass
+ledger closing to machine precision. What the 3D model does \emph{not} have is an
+analytical gate of its own, and that gap is stated as a limitation rather than
+papered over.
 
 \subsection{Two numbers that are easy to get wrong}
 
@@ -88,47 +282,6 @@ than their own standard errors, because a $5\%$ tail of $400$ draws is an averag
 over twenty of the most variable realizations in the set and nothing more. The
 reliability over the same draws is $0.978$, $0.975$ and $0.978$. One of these
 statistics is a property of the policy; the other is a property of the sample.
-
-\subsection{Approach: verification first}
-
-The thesis is organized as three layers of increasing physical complexity, each
-carrying its own verification rather than deferring it to the end.
-
-\begin{enumerate}
-  \item \textbf{A one-dimensional sandbox with a closed-form answer}
-        (Chapter~\ref{chap:formulation}). The advection--dispersion equation has the
-        Ogata--Banks solution \citep{ogata1961solution} for a step source in a
-        uniform flow, which makes it the right place to test a surrogate
-        architecture: the reference is exact, cheap, and covers the parameter
-        range. Physics-informed neural networks \citep{raissi2019pinn} and
-        Fourier neural operators \citep{li2020fourier,li2021fno} are trained
-        there and scored against the analytical solution, with the seed spread
-        reported rather than the best seed.
-  \item \textbf{A two-dimensional finite-volume model and a stochastic program}
-        (Chapter~\ref{chap:optimization}). Darcy flow with partially penetrating wells
-        and advection--dispersion transport are discretized on a
-        $160\times96$ grid ($15\,360$ cells) with a Karhunen--Lo\`eve truncation of
-        the log-normal conductivity at $1\,529$ modes. The chance constraint is
-        handled as a conditional-value-at-risk penalty in a sample-average
-        approximation \citep{rockafellar2000,shapiro2009}, and the resulting
-        non-convex program is solved by a derivative-free pattern search in which
-        an entire compass sweep of candidate rate vectors is evaluated in one
-        batched linear solve.
-  \item \textbf{An out-of-sample certificate} (Chapter~\ref{chap:results_2d}). A policy is
-        not reported until it has been re-solved on scenarios no run has seen, on
-        an independent implementation, with reliability quoted as a Wilson
-        interval \citep{wilson1927probable} and the tail quoted with its own
-        standard error. This layer is where the thesis's methodological claim
-        lives, and it is where the strongest negative result appears.
-\end{enumerate}
-
-Dimensional fidelity is checked against the same discipline in a third setting: a
-three-dimensional finite-volume solver with partially penetrating wells, whose
-policy at the paper resolution ($32\times16\times8$) reproduces to the reported
-cost on machines as different as a laptop CPU and a rented GPU, with a mass
-ledger closing to machine precision. What the 3D model does \emph{not} have is an
-analytical gate of its own, and that gap is stated as a limitation rather than
-papered over.
 
 \subsection{Contributions}
 
@@ -187,8 +340,13 @@ cost model, risk measure, sample average approximation, and the derivative-free
 search with its batched evaluation. Chapter~\ref{chap:results_2d} reports the
 two-dimensional results, the certification protocol, and the calibration
 experiment that delimits what a tail statistic can support.
+Chapter~\ref{chap:results_3d} repeats the protocol in three dimensions, where it
+holds at the paper resolution and fails at double the resolution, and follows the
+failure to the cost of a forward solve rather than to the solver itself.
 Chapter~\ref{chap:conclusions} collects the conclusions, the limitations of the present
-evidence, and the work that would be needed to remove them.
+evidence, and the work that would be needed to remove them --- of which the most
+substantial is the adaptive design in which the decomposition methods of the
+Davis years would finally have something to decompose.
 
 \begin{thebibliography}{99}
 

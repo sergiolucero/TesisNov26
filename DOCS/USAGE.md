@@ -341,7 +341,7 @@ those).
 The toolchain here is a user-level [TinyTeX](https://yihui.org/tinytex/) in
 `~/.TinyTeX` (`curl -fsSL https://yihui.org/tinytex/install-bin-unix.sh | sh`,
 then `tlmgr install` whatever a build reports as missing); the script finds it
-without `PATH` help. Verified output: **66 pages, 7 chapters, 0 undefined
+without `PATH` help. Verified output: **68 pages, 7 chapters, 0 undefined
 references, 0 undefined citations, 0 overfull boxes**. The compiled result is
 tracked as `TEX/tesis.pdf` (a published snapshot; `TEX/build/` itself stays
 gitignored), and each chapter is also tracked as its own PDF next to its source.

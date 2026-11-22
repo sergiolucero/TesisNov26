@@ -327,11 +327,20 @@ uncertainty only.
   optimization under uncertainty, SAA, verification practice, tail statistics)
   and `conclusions` (results, the methodological result, five limitations, five
   pieces of future work) --- plus a title page, a dedication and an abstract.
-  66 pages, 0 undefined references. On the `doc-latex` branch the master is
+  68 pages, 0 undefined references. On the `doc-latex` branch the master is
   titled *A Stochastic Groundwater Remediation Problem solved 25 years later
-  with AI* (subtitle unchanged) and carries a dedication page to Roger Wets,
+  with AI* (subtitle unchanged) and carries a dedication page naming Roger Wets,
   Alejandro Jofré and Terry Rockafellar; both are `--title` / `--dedication`
-  arguments of `build_tex.py`, so they are one edit each, not a fork. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
+  arguments of `build_tex.py`, so they are one edit each, not a fork. On that
+  branch Chapter 1 also opens with the provenance (the problem as a doctoral
+  thesis at UC Davis under Wets, what the computation of 2000 could and could not
+  support) and states the thesis's problem as a single stochastic program,
+  `(P) min E[J] + rho_g [CVaR(G)]^2_+ + rho_h [CVaR(-H)]^2_+` subject to the
+  heterogeneous Darcy and transport equations, the chance constraint and the
+  well bounds, with a table fixing decisions, uncertainty, state, source,
+  compliance, permit and risk. Discretization, the surrogates and the algorithm
+  stay in Chapters 3-4, by design: the introduction states the program, it does
+  not derive it. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
 sections: model and partial-penetration wells; the seven solver gates (decisive
 one: 3D-vs-2D extrusion agreement at 1.9e-13); the paper preset (`q* = 4 x
 12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d) with the two

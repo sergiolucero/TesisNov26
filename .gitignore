@@ -88,3 +88,5 @@ runs/sweeps/**/checkpoint.pt
 
 # LaTeX build output (regenerate with SCRIPTS/build_tex.py)
 TEX/build/
+# Colab GPU run bookkeeping (plan.json/run logs); artifacts are copied into DOCS
+runs/colab3d/

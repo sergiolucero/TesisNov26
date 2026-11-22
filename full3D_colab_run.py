@@ -103,6 +103,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -1166,7 +1167,15 @@ def torch_dtype_of(spec="float64") -> torch.dtype:
 
 
 def torch_default_rtol(dtype: torch.dtype) -> float:
-    return 1e-11 if dtype == torch.float64 else 1e-6
+    """float32 asks for 1e-5, not 1e-6.
+
+    The float32 residual floor of this solver sits right around 1e-6, so a 1e-6
+    request is a coin flip: some operating points converge at 9.9e-7 and others
+    stagnate just above the target.  With a stall guard that is no longer a 4000-
+    iteration trap, but asking for a tolerance the arithmetic can reach is the
+    real fix.
+    """
+    return 1e-11 if dtype == torch.float64 else 1e-5
 
 
 @dataclass
@@ -1176,13 +1185,22 @@ class TorchKrylovReport:
     worst_iterations: int = 0
     worst_residual: float = 0.0
     converged: bool = True
+    stalled: bool = False
 
     def add(self, other: "TorchKrylovReport") -> None:
         self.iterations += other.iterations
         self.solves += other.solves
         self.worst_iterations = max(self.worst_iterations, other.worst_iterations)
-        self.worst_residual = max(self.worst_residual, other.worst_residual)
+        # Python's max(0.0, nan) == 0.0, which would swallow a nan residual and
+        # report a perfectly converged solve.  Propagate non-finiteness instead.
+        if not math.isfinite(other.worst_residual):
+            self.worst_residual = float("nan")
+        elif not math.isfinite(self.worst_residual):
+            pass                      # keep the nan we already have
+        else:
+            self.worst_residual = max(self.worst_residual, other.worst_residual)
         self.converged = self.converged and other.converged
+        self.stalled = self.stalled or other.stalled
 
     def as_dict(self) -> dict:
         return {
@@ -1193,15 +1211,55 @@ class TorchKrylovReport:
             "worst_iterations": int(self.worst_iterations),
             "worst_residual": float(self.worst_residual),
             "converged": bool(self.converged),
+            "stalled": bool(self.stalled),
         }
 
 
+STALL_WINDOW = 60
+"""Consecutive iterations without a new best residual before a solve is called
+stalled.  It must be *no new best*, never *insufficient fractional improvement*:
+a well-conditioned solve converges slowly and steadily, and an earlier
+fractional-improvement rule aborted such solves at iteration 31 (and, on a real
+GPU, turned a healthy run into nan objectives)."""
+
+
 def _t_norm(t: torch.Tensor) -> torch.Tensor:
-    return torch.linalg.vector_norm(t.reshape(t.shape[0], -1), dim=1)
+    """Row-wise 2-norm, computed in float64 when the input is float32.
+
+    A Krylov residual is a sum of ~n positive terms; in float32 the rounding of
+    that reduction sets a floor near 1e-6 that no tolerance below it can reach,
+    and the resulting stall used to burn the full maxiter on every time step.
+    """
+    flat = t.reshape(t.shape[0], -1)
+    if flat.dtype == torch.float32:
+        return torch.linalg.vector_norm(flat.double(), dim=1).to(flat.dtype)
+    return torch.linalg.vector_norm(flat, dim=1)
 
 
 def _t_dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    return (a * b).reshape(a.shape[0], -1).sum(dim=1)
+    fa = a.reshape(a.shape[0], -1)
+    fb = b.reshape(b.shape[0], -1)
+    if fa.dtype == torch.float32:
+        return (fa.double() * fb.double()).sum(dim=1).to(fa.dtype)
+    return (fa * fb).sum(dim=1)
+
+
+class _Stall3D:
+    """Break a solve that stops improving, instead of running to maxiter."""
+
+    def __init__(self) -> None:
+        self.best = float("inf")
+        self.since = 0
+
+    def check(self, residual: float) -> bool:
+        if not math.isfinite(residual):
+            return True                       # a nan residual is already dead
+        if residual < self.best:
+            self.best = residual
+            self.since = 0
+            return False
+        self.since += 1
+        return self.since >= STALL_WINDOW
 
 
 def _t_safe_div(num: torch.Tensor, den: torch.Tensor) -> torch.Tensor:
@@ -1228,8 +1286,11 @@ def cg3d(matvec, b: torch.Tensor, x0=None, diag=None, rtol: float = 1e-11,
     p = z.clone()
     rz = _t_dot(r, z)
     it = 0
+    guard = _Stall3D()
     for it in range(1, maxiter + 1):
         if _t_item((_t_norm(r) / scale).max()) <= rtol:
+            break
+        if guard.check(_t_item((_t_norm(r) / scale).max())):
             break
         ap = matvec(p)
         alpha = _t_safe_div(rz, _t_dot(p, ap))
@@ -1243,7 +1304,8 @@ def cg3d(matvec, b: torch.Tensor, x0=None, diag=None, rtol: float = 1e-11,
     residual = _t_item((_t_norm(r) / scale).max())
     report = TorchKrylovReport(iterations=it, solves=1, worst_iterations=it,
                                worst_residual=residual,
-                               converged=residual <= max(rtol, 10.0 * rtol))
+                               converged=residual <= max(rtol, 10.0 * rtol),
+                               stalled=guard.since >= STALL_WINDOW)
     return x, report
 
 
@@ -1261,8 +1323,11 @@ def bicgstab3d(matvec, b: torch.Tensor, x0=None, diag=None, rtol: float = 1e-11,
     alpha = torch.ones_like(rho_old)
     omega = torch.ones_like(rho_old)
     it = 0
+    guard = _Stall3D()
     for it in range(1, maxiter + 1):
         if _t_item((_t_norm(r) / scale).max()) <= rtol:
+            break
+        if guard.check(_t_item((_t_norm(r) / scale).max())):
             break
         rho = _t_dot(rhat, r)
         beta = _t_safe_div(rho, rho_old) * _t_safe_div(alpha, omega)
@@ -1284,7 +1349,8 @@ def bicgstab3d(matvec, b: torch.Tensor, x0=None, diag=None, rtol: float = 1e-11,
     residual = _t_item((_t_norm(r) / scale).max())
     report = TorchKrylovReport(iterations=it, solves=1, worst_iterations=it,
                                worst_residual=residual,
-                               converged=residual <= max(rtol, 10.0 * rtol))
+                               converged=residual <= max(rtol, 10.0 * rtol),
+                               stalled=guard.since >= STALL_WINDOW)
     return x, report
 
 
@@ -1887,6 +1953,26 @@ class SAAEvaluationBatch3D:
         }
 
 
+def finite_or_raise3d(values, what: str, hint: str = "") -> None:
+    """A nan objective must stop the run, not quietly poison the search.
+
+    Without this, `f=nan` propagates as `best=nan` for every iteration and a
+    paid GPU session is spent comparing nans -- the 2D backend learned this the
+    expensive way.  The message names the knobs that actually change the answer.
+    """
+    values = np.asarray(values, dtype=float).ravel()
+    bad = np.nonzero(~np.isfinite(values))[0]
+    if bad.size == 0:
+        return
+    msg = (f"3D {what} is not finite for candidate(s) {bad.tolist()[:8]}"
+           + (f" [{hint}]" if hint else ""))
+    raise RuntimeError(
+        msg + ". Check the Krylov report (residual / iterations / stalled): "
+        "raise --krylov-maxiter, loosen --krylov-rtol, use --dtype float64, "
+        "or fall back to --backend numpy."
+    )
+
+
 class TorchArchive3D:
     """Batched random-field archive resident on the device."""
 
@@ -1933,6 +2019,12 @@ class TorchArchive3D:
             dtype=self.dtype, device=self.device,
         )
         self.mass_weight = float(aquifer.R * aquifer.phi * grid.cell_volume)
+        # Transport-solve health: a stalled BiCGSTAB silently feeds wrong J/G/H
+        # into the search unless somebody looks, so it is aggregated here and
+        # surfaced once, loudly, the first time it goes wrong.
+        self.krylov = TorchKrylovReport()
+        self._warned_krylov = False
+        self.last_report: Optional[TorchKrylovReport] = None
 
     @property
     def M(self) -> int:
@@ -1954,7 +2046,28 @@ class TorchArchive3D:
             raise ValueError(f"q has {Q.shape[1]} entries, expected {self.n_wells}")
         return Q
 
+    def krylov_hint(self) -> str:
+        rep = self.krylov.as_dict()
+        return (f"transport {rep['solves']} solves, "
+                f"{rep['iterations_per_solve']} it/solve, "
+                f"worst residual {rep['worst_residual']:.2e}, "
+                f"converged={rep['converged']}, stalled={rep['stalled']}")
+
     def transport(self, Q: torch.Tensor, store_fields: bool = False) -> TransportBatch3D:
+        fwd = self.fwd
+        res = self._transport(Q, store_fields)
+        self.last_report = res.report
+        self.krylov.add(res.report)
+        if not res.report.converged and not self._warned_krylov:
+            self._warned_krylov = True
+            log(f"[torch] warning: {self.label} transport Krylov did not converge "
+                f"(worst residual {res.report.worst_residual:.2e}, "
+                f"{res.report.worst_iterations} iterations, "
+                f"stalled={res.report.stalled}) -- objectives from this point on "
+                f"are not trustworthy")
+        return res
+
+    def _transport(self, Q: torch.Tensor, store_fields: bool = False) -> TransportBatch3D:
         fwd = self.fwd
         return transport_batch3d(
             self.grid, self.aquifer, self.flow, self.resp, Q, fwd.dt, fwd.nsteps,
@@ -2030,7 +2143,9 @@ class SAAProblemTorch3D:
              + self.rho_g * torch.clamp(cg, min=0.0) ** 2
              + self.rho_h * torch.clamp(ch, min=0.0) ** 2)
         self.n_eval += int(Q.shape[0])
-        return f.detach().cpu().numpy(), ev
+        f_np = f.detach().cpu().numpy()
+        finite_or_raise3d(f_np, "objective", self.archive.krylov_hint())
+        return f_np, ev
 
     def objective(self, q) -> float:
         f, _ = self.batch_objective(np.atleast_2d(q))
@@ -2072,6 +2187,10 @@ def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-
         else:
             step *= 0.5
         nit += 1
+        # Same reasoning as the numpy loop: a 60-90 s sweep with no output makes
+        # a healthy 20-minute start look hung.
+        log(f"  [opt] it={nit} evals={evals} step={step:.3g} best={best:.6g} "
+            f"sum_q={q.sum():.2f} active={int((q > 1e-9).sum())}")
     return q, best, nit, hist
 
 
@@ -2311,7 +2430,9 @@ def run(cfg: dict, outdir: Path, budget_s: float, plots: bool, zip_results: bool
     metrics = {
         "config": cfg,
         "grid": {"nx": grid.nx, "ny": grid.ny, "nz": grid.nz, "n": grid.n},
-        "resources": detect_resources(),
+        "resources": {**detect_resources(), "backend": "numpy",
+                      "device": "cpu", "dtype": "float64",
+                      "solver": "scipy.splu"},
         "kl": {"n_kl": kl.n_kl, "retained_variance": kl.retained},
         "reproducible": reproducible,
         "saa_convergence": conv,
@@ -2534,7 +2655,16 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
         "config": cfg,
         "grid": {"nx": grid.nx, "ny": grid.ny, "nz": grid.nz, "n": grid.n},
         "resources": {**detect_resources(), "backend": "torch",
-                       "device": str(dev), "dtype": dtype},
+                       "device": str(dev), "dtype": dtype,
+                       "device_name": (torch.cuda.get_device_name(dev)
+                                       if dev.type == "cuda" else "cpu"),
+                       "torch": torch.__version__,
+                       "rtol": (rtol if rtol is not None
+                                else torch_default_rtol(torch_dtype_of(dtype))),
+                       "maxiter": int(maxiter),
+                       # 100 steps x 100 scenarios of BiCGSTAB: if these stalled
+                       # the objective is not trustworthy, so record them.
+                       "transport_krylov": train.krylov.as_dict()},
         "kl": {"n_kl": kl.n_kl, "retained_variance": kl.retained},
         "reproducible": reproducible,
         "saa_convergence": conv,
@@ -2571,7 +2701,15 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
 
     if plots:
         from types import SimpleNamespace
-        ev_te_view = SimpleNamespace(J=ev_te.J[0].detach().cpu().numpy(), M=ev_te.M)
+        # _make_plots wants the per-scenario vector and its summary scalars; the
+        # batched object carries (S, M) tensors, so give it a numpy view rather
+        # than teaching the plot code about tensors.
+        J_view = ev_te.J[0].detach().cpu().numpy()
+        ev_te_view = SimpleNamespace(
+            J=J_view, M=ev_te.M, mean_J=float(np.mean(J_view)),
+            reliability=float(ev_te.reliability[0].detach().cpu().item()),
+            mean_tau=float(np.mean(ev_te.tau[0].detach().cpu().numpy())),
+        )
         _make_plots(outdir, grid, Cmean, C2d, mask, well_specs, q_star,
                     hist, ev_te_view, fwd, cost, z_top, z_bot)
 
@@ -2860,6 +2998,14 @@ def main() -> None:
     ap.add_argument("--nz", type=int, default=None)
     ap.add_argument("--n-starts", type=int, default=None,
                     help="override the preset's number of pattern-search starts")
+    ap.add_argument("--m-train", type=int, default=None,
+                    help="override the preset's training scenario count")
+    ap.add_argument("--m-test", type=int, default=None,
+                    help="override the preset's test scenario count")
+    ap.add_argument("--max-evals", type=int, default=None,
+                    help="override the preset's evaluation budget per start")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="override the preset's optimizer/well-layout seed")
     ap.add_argument("--out", default=None, help="output directory")
     ap.add_argument("--no-plots", dest="plots", action="store_false",
                     help="skip matplotlib figures")
@@ -2879,6 +3025,14 @@ def main() -> None:
         overrides["nz"] = args.nz
     if args.n_starts is not None:
         overrides["n_starts"] = args.n_starts
+    if args.m_train is not None:
+        overrides["m_train"] = args.m_train
+    if args.m_test is not None:
+        overrides["m_test"] = args.m_test
+    if args.max_evals is not None:
+        overrides["max_evals"] = args.max_evals
+    if args.seed is not None:
+        overrides["seed"] = args.seed
     cfg = build_config(args.preset, overrides)
 
     n_cells = cfg["nx"] * cfg["ny"] * cfg["nz"]

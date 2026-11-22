@@ -345,3 +345,54 @@ Reading     Same failure mode as 2D: alpha*M_train = 1.2, so the tail is estimat
 Movie       movies/ with 32 frames; stack_stats on fields.npz final frame:
             untreated peak 44.8 / mean 2.94 / 35.7% of cells above 1 mg/L;
             under q* peak 6.0 / mean 0.19 / 6.3%.
+
+3D SIZE_MID ON A COLAB T4 (torch backend, 2026-11-22)
+-----------------------------------------------------
+Driver      python3 SCRIPTS/colab3d.py launch --preset size_mid --gpu T4 \
+                --dtype float64 --m-train 100 --m-test 48 --max-evals 200 \
+                --n-starts 1 --budget 60
+            (colab3d.py: bundle -> new VM -> upload -> extract -> kick detached
+             -> poll by `colab download` -> collect -> stop.  COLAB_AUTH=oauth2,
+             otherwise --auth adc raises DefaultCredentialsError.)
+Geometry    identical to the NumPy size_mid run: 40x20x10 = 8000 cells,
+            n_kl=2062, nsteps=100, 6 partially penetrating wells.
+Cost        archives (100 train + 48 test) 4.7 s (NumPy: 27.6 s).
+            calibration 7.12 s per 100-scenario evaluation = 0.071 s/scenario
+            vs NumPy's 0.775 s/scenario => ~11x.  Search: 161 evaluations in
+            1003.5 s, converged at nit=23 (step tolerance, not the budget).
+            Whole run 1056.7 s.  CPU torch is already faster than NumPy here
+            (7.75 s vs 18.5 s per 8-scenario eval): the win is the batched
+            Krylov solve replacing 100 sparse factorisations, not the card.
+Krylov      flow CG 217 iterations to 8.61e-12 (converged, not stalled);
+            transport 100 solves x 100 steps, converged, stalled=false.
+Result      q* = [0, 0, 0, 37.27, 0, 0] (37.27 m3/d, ONE active well)
+            train J 501060 (rel 0.980, CVaR +0.017), test J 501261 (rel 0.938)
+            gates 5/6 (test_reliability 0.9375 < 0.94 fails in-run)
+Plume       movies/fields.npz, 32 frames: untreated final peak 44.75 / mean
+            2.935 / 35.7% of cells above 1 mg/L; under q* 3.71 / 0.138 / 3.9%.
+            (NumPy M=24 policy: 5.95 / 0.193 / 6.3%.)
+
+CERTIFICATE (fresh fields, seeds 900000+, SCRIPTS/check_tail3d.py)
+    GPU  M_train=100:  M=128 5/128=0.961 [0.912,0.983] INCONCLUSIVE
+                       M=400 13/400=0.9675 [0.945,0.981] PASS, J 501050,
+                             meanG -0.648, CVaR +0.179, mean tau 118.6 d
+    NumPy M_train=24:  M=128 9/128=0.930 [0.872,0.963] INCONCLUSIVE
+                       M=400 37/400=0.9075 [0.875,0.932] FAIL, J 519433,
+                             meanG -0.529, CVaR +0.551, mean tau 337.4 d
+    => the M=100 policy is the first CERTIFIED 3D policy at this geometry; the
+       M=24 policy is REJECTED (upper bound 0.932 < 0.94 gate).  128 draws
+       cannot separate them; 400 can.  An in-run test row (0.9375 at M=48)
+       neither certifies nor condemns.
+
+LAUNCH FOOTGUNS HIT THIS SESSION
+  * `colab upload` to a non-existent remote directory fails with 500; create it
+    first (`os.makedirs` via a cell).
+  * `colab exec` takes a FILE (`-f cell.py`), not inline code.
+  * A first launch (run runs/colab3d/20261122-100338) was RECLAIMED at ~43 min,
+    mid-start-2 of 2: start 1 had finished (f=5.014e5, nit=23, 161 evals) but
+    nothing was written to disk because metrics.json/movie come after both
+    starts.  Size a 3D GPU run to finish inside ~30-40 min, or accept losing it.
+  * The second launch's exec channel died ('Connection was lost') while the VM
+    stayed healthy -- poll with `colab download` of run.log, not `colab exec`.
+  * `_make_plots` crashed on the torch path after a successful search (fixed):
+    a complete run had metrics+policy+movie but no figures and no zip.

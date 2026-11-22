@@ -18,6 +18,7 @@ out-of-sample on the test archive.
 | full | 24·12·6 = 1728 | 819 | 24 / 48 | 6 | **q\*=[12.89, 12.7, 11.91, 12.5, 0, 0]**, reliability 0.979 |
 | paper | 32·16·8 = 4096 | 1419 | 64 / 128 | 9 | **q\*=[12.5, 12.5, 12.5, 12.5, 0×5]**, reliability 0.969 |
 | size_mid | 40·20·10 = 8000 | 2062 | 24 / 48 | 6 | **q\*=[3.1, 0, 1.6, 12.5, 12.5, 12.5]**, reliability 0.875 — *fails* the gate; see below |
+| size_mid (GPU, torch) | 40·20·10 = 8000 | 2062 | 100 / 48 | 6 | **q\*=[0, 0, 0, 37.3, 0, 0]**, in-run 0.938 but **certified 0.9675 [0.945, 0.981] on 400 fresh fields — PASS** |
 
 ## Paper preset (headline)
 
@@ -154,6 +155,73 @@ The policy reduces the plume by roughly an order of magnitude but does not
 confine it, which is exactly the picture the 0.93 reliability implies: on the
 violating scenarios the residual plume still reaches the compliance point. The
 same panel pair in a picture: `movies/plume3d_contact.png`.
+
+## The same problem on a GPU: 11x faster, a different policy, and the same tail problem
+
+`SCRIPTS/colab3d.py launch --preset size_mid --gpu T4 --dtype float64 --m-train 100
+--max-evals 200 --n-starts 1 --budget 60` (run `runs/colab3d/20261122-1349`).
+Same geometry, same KL, same seeds as the numpy `size_mid` run above — the only
+differences are the backend and a training set the geometry can afford.
+
+| | numpy `size_mid` | torch on a T4 |
+|---|---|---|
+| train / test scenarios | 24 / 48 | **100** / 48 |
+| cost per 24-scenario evaluation | 25.3 s | — |
+| cost per 100-scenario evaluation | ~78 s (measured 0.775 s/scenario) | **6.2 s** (`per_eval_s` 7.12 at calibration) |
+| archive build (148 scenarios) | 27.6 s | **4.7 s** |
+| search | 2 starts x 107 evals, budget-truncated | 1 start, **converged at nit=23** (161 evals) |
+| wall clock | 4,486 s | **1,057 s** (search 1,003 s) |
+| q\* | [3.125, 0, 1.5625, 12.5, 12.5, 12.5] (42.19 m³/d, 5 active) | **[0, 0, 0, 37.27, 0, 0]** (37.27 m³/d, 1 active) |
+| train J | 519,263 (rel 0.958) | 501,060 (rel 0.980) |
+| test J | 519,493 (rel 0.875) | 501,261 (rel **0.938**) |
+| CVaR-5%(G) test | +0.533 | +0.139 |
+| mass balance | 0.0 | 0.0 |
+| gates | 5/6 (`test_reliability` fails) | 5/6 (`test_reliability` fails, 0.9375 vs 0.94) |
+
+Three findings, in decreasing order of importance:
+
+1. **The GPU is worth ~11x here, and the win is batching, not arithmetic — which
+   is what makes M_train=100 affordable at all.** One
+   full-archive evaluation of 100 scenarios costs 6.2 s against the 78 s the NumPy
+   backend needs for the same work. The T4's fp64 throughput is weak, so this is
+   not floating-point throughput: it is one batched Krylov solve replacing 100
+   sparse factorisations. The 3D `splu` is the expensive part (cost ~n^1.9 in
+   cell count), which is exactly the regime where a matrix-free batched solver
+   wins — and it already wins on **CPU** torch (7.75 s vs 18.5 s per 8-scenario
+   evaluation), which is the honest way to say it: the backend matters more than
+   the card.
+2. **M_train = 100 buys the certificate that M_train = 24 cannot.** This is the
+   headline. Both policies were re-evaluated on the same 400 fresh fields
+   (seeds 900000+, `SCRIPTS/check_tail3d.py --m-scen 400`):
+
+   | policy | violations | reliability | 95% Wilson | verdict | fresh J |
+   |---|---|---|---|---|---|
+   | GPU, M_train=100 | 13/400 | **0.9675** | [0.945, 0.981] | **PASS** | 501,050 |
+   | NumPy, M_train=24 | 37/400 | 0.9075 | [0.875, 0.932] | **FAIL** | 519,433 |
+
+   The GPU policy is the first *certified* 3D policy at this geometry: its
+   interval's lower bound clears the 0.94 gate. The NumPy policy is *rejected* —
+   the upper bound is 0.932 — which is the honest reading of a search that
+   estimated the tail from `alpha*M_train = 1.2` scenarios. It is also 3.5%
+   cheaper (501,050 vs 519,433) and much cleaner on the plume (final peak 3.71 vs
+   5.95 mg/L, 3.9% vs 6.3% of cells above the limit).
+
+   Sample size is what decides this, and 128 was not enough: on a 128-field draw
+   the same two policies give 5/128 = 0.961 [0.912, 0.983] and 9/128 = 0.930
+   [0.872, 0.963] — both `INCONCLUSIVE`, though the ordering is already right.
+   Note too that the GPU run's *own* test row (0.9375) fails the gate while its
+   fresh draw (0.9675) passes: at M=48 the interval is 0.83-0.98, so an in-run
+   row can neither certify nor condemn a policy. Only the 400-draw audit does.
+3. **The optimum is not unique, and single-well policies are competitive.** The
+   GPU search converged on one well at 37.27 m³/d while the NumPy search spread
+   42.19 m³/d over five wells; both sit on the constraint (CVaR ≈ +0.02 train)
+   and both are ~0.96-0.98 reliable. A policy-multiplicity statement needs the
+   same 400-draw audit for each candidate, not a comparison of their in-run rows.
+
+Krylov health on the GPU (recorded in `metrics.json` because a stalled transport
+solve silently poisons J): flow CG 217 iterations to 8.6e-12, converged, not
+stalled; transport 100 solves x 100 steps at ~0.07 s per scenario, `converged:
+true`, `stalled: false`. The movie rendered 32 frames at 0.6 s per capture.
 
 ## Plume movie
 

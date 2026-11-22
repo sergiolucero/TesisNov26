@@ -158,3 +158,21 @@ reproducible from the artifact rather than read off the image.) The 32-frame
 contact sheet paired with the 0.93 certified reliability reads correctly: the
 policy removes most of the plume but leaves a residual that still reaches the
 compliance point on the violating scenarios.
+
+## 9. Second measured example: the GPU policy (one well, 37.27 m³/d)
+
+Same geometry, same scenario, but the certified policy from the torch/T4 run
+(`out3d_colab/plume3d_size_mid_gpu/movies/`), 32 frames:
+
+| | untreated | under q\* |
+| :--- | ---: | ---: |
+| peak concentration, final frame | 44.8 mg/L | **3.7 mg/L** |
+| mean concentration, final frame | 2.94 mg/L | **0.14 mg/L** |
+| cells above the 1 mg/L limit | 35.7 % | **3.9 %** |
+
+This is the picture that matches the certificate (13/400 violations, PASS): one
+well at 37.27 m³/d holds the plume in place instead of spreading the same total
+pumping over five wells, and the compliance marker at x = 185 m stays clear. The
+five-well policy of §8 (peak 6.0 mg/L, 6.3 % above the limit) is visibly the
+weaker design — which is why the policy question has to be settled on 400 fresh
+fields and not on the pictures, however suggestive they are.

@@ -72,3 +72,5 @@ python3 SCRIPTS/check_tail.py --metrics <run>/artifacts.zip \
 `make_figures.py` never mutates a run; it only reads `metrics.json`,
 `history.md` and the certificate JSONs. If a certificate file is missing the
 corresponding panel is skipped with a note rather than faked.
+
+Related artifacts (not article figures): the completed GPU run's movie is at `out3d_colab/plume3d_size_mid_gpu/movies/` (32 frames, the certified single-well policy) and its certificate at `out3d_colab/plume3d_size_mid_gpu/cert/fresh_400.json`.

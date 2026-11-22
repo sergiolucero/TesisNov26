@@ -23,6 +23,8 @@ python3 SCRIPTS/make_figures.py --only plume    # one figure
 | `fig7_compute.png` | measured cost | **(a)** seconds per 18-candidate sweep, grouped by geometry so every comparison is like-for-like: at 80×40 float32 the T4 does 1.5 s against NumPy's 69 s (47×), but at 160×96 float64 the T4 is 680 s against NumPy's 662 s — *no gain* — and only the A100 (106 s) wins, by 6.4×. Float32 and float64 sit on opposite sides of the launch-overhead/throughput boundary, which is why "buy a GPU" is not one decision. **(b)** T4 float32 cost per candidate·scenario vs batch size: the 17× comes from batching, not from the card. All numbers measured, `DOCS/GPU.md`. |
 | `fig8_tail_spread.png` | which statistic transports | Same policy, three disjoint 400-scenario draws. **(a)** CVaR-5%(G) with $\pm$1 s.e.: 0.62, 0.25, 0.33 — the bars overlap, because the average is over ~20 of the *most variable* draws, so `sd(tail)/sqrt(20)` is 0.2–0.5. **(b)** Reliability with its 95% Wilson interval over all 400 draws: 0.978, 0.975, 0.978, every interval clear of the 0.94 gate. The tail a run reports is a property of its sample; the proportion is a property of the policy. |
 
+| `fig9_plume3d_frame.png` | one movie frame, 3D | A single frame of the `full3D_colab_run.py` plume movie (`out3d_colab/run_full/movies/plume3d.mp4`), t = 2154 d, mid-orbit: **untreated** beside **under $q^\star$**, same scenario, same linear colour scale. Vertical axis is height (the wells are drawn as their screened interval), the corner triad shows the camera angle, and the strip below is the compliance-point concentration through time with the 1 mg/L limit in red. Measured on that scenario: peak 97.6 → 10.6 mg/L, mean 3.03 → 0.39, cells above the limit 34.8 % → 10.2 %. |
+| `fig9b_plume3d_contact.png` | the movie in one image | Eight evenly spaced frames of the same movie; the plume grows, crosses the compliance point untreated, and is reduced to a faint residual under $q^\star$. |
 ## Provenance per figure
 
 | figure | source |
@@ -52,6 +54,12 @@ reference each:
 
 `ARTICLE/article.pdf` builds with `make` in `ARTICLE/` (latexmk) and `make check`
 verifies there are no undefined references or citations.
+
+## The 3D plume movie
+
+Runs of `full3D_colab_run.py` also write a movie (mp4 + gif + contact sheet) of the
+untreated plume beside the plume under `q*`; see `DOCS/3D_movie.md` for the
+specification and `SCRIPTS/plume_movie3d.py` for the renderer.
 
 ## Regenerating the underlying data
 

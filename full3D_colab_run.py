@@ -674,12 +674,23 @@ class TransportResult3D:
     record_cells: Optional[np.ndarray]
     C_final: np.ndarray
     mass: dict
+    # snapshots for the plume movie; empty unless ``capture_n`` was requested.
+    C_frames: list = field(default_factory=list)
+    frame_times: Optional[np.ndarray] = None
 
 
 def transport_run_3d(grid, aquifer, flow, resp, q, dt, nsteps,
                      source_idx=None, source_rate=0.0, source_steps=None,
                      c_init=None, record_cells=None,
-                     disp_ref=None) -> TransportResult3D:
+                     disp_ref=None, capture_n=0) -> TransportResult3D:
+    """Implicit-Euler transport for one scenario.
+
+    ``capture_n > 0`` keeps that many snapshots of the concentration field (evenly
+    spaced over the time loop, including the final state) on the result as
+    ``C_frames`` / ``frame_times``.  This exists so a movie can be rendered from
+    *the same* iterates the objective used, instead of re-running the transport
+    and hoping the two agree.
+    """
     q = np.asarray(q, dtype=float).ravel()
     nw = q.size
     if resp.hw.shape[0] != nw:
@@ -718,6 +729,16 @@ def transport_run_3d(grid, aquifer, flow, resp, q, dt, nsteps,
     if source_idx is not None and source_rate != 0.0:
         src[int(source_idx)] = float(source_rate)
 
+    # snapshot schedule: evenly spaced steps, always including the last one
+    cap_steps: set = set()
+    if capture_n and capture_n > 0:
+        k_n = min(int(capture_n), nsteps)
+        cap_steps = {int(round(v)) - 1 for v in
+                     np.linspace(1, nsteps, k_n)}   # 0-based index of the step
+        cap_steps = {min(max(k, 0), nsteps - 1) for k in cap_steps}
+    frames: list = []
+    frame_times: list = []
+
     mass_total = np.zeros(nsteps + 1)
     mass_source = np.zeros(nsteps + 1)
     mass_well = np.zeros(nsteps + 1)
@@ -731,6 +752,9 @@ def transport_run_3d(grid, aquifer, flow, resp, q, dt, nsteps,
         C_well[k] = resp.weights @ C
         if record_cells is not None:
             C_rec[k] = C[record_cells]
+        if k in cap_steps:
+            frames.append(C.reshape(nz, ny, nx).copy())
+            frame_times.append((k + 1) * dt)
 
         Cc = C.reshape(nz, ny, nx)
         mass_total[k + 1] = float(np.sum(phi * aquifer.R * C) * V)
@@ -756,6 +780,8 @@ def transport_run_3d(grid, aquifer, flow, resp, q, dt, nsteps,
         record_cells=record_cells,
         C_final=C.copy(),
         mass=mass,
+        C_frames=frames,
+        frame_times=np.asarray(frame_times, dtype=float) if frames else None,
     )
 
 
@@ -2294,6 +2320,12 @@ def run(cfg: dict, outdir: Path, budget_s: float, plots: bool, zip_results: bool
         "gates": gates,
         "wall_clock_s": time.time() - t0,
     }
+    # ---- plume movie (unconditional, self-guarded) ----------------------
+    # Deliberately before metrics.json is written: the artifact paths belong in
+    # the metrics, and a movie must not be something a later failure can skip.
+    metrics["movie"] = _movie_if_enabled(cfg, outdir, grid, test, well_specs,
+                                         q_star, fwd, cost)
+
     (outdir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     (outdir / "policy.json").write_text(json.dumps({
         "q": q_star.tolist(), "wells": well_specs.tolist(),
@@ -2512,6 +2544,9 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
         "flow_krylov": train.resp.report.as_dict(),
         "wall_clock_s": time.time() - t0,
     }
+    metrics["movie"] = _movie_if_enabled(cfg, outdir, grid, test, well_specs,
+                                         q_star, fwd, cost)
+
     (outdir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     (outdir / "policy.json").write_text(json.dumps({
         "q": q_star.tolist(), "wells": well_specs.tolist(),
@@ -2540,6 +2575,151 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     if zip_results:
         _zip_results(outdir)
     return metrics
+
+
+def _movie_if_enabled(cfg: dict, outdir: Path, grid, archive, well_specs,
+                      q_star, fwd, cost) -> dict:
+    """Run the movie stage unless the config switched it off.
+
+    On by default and reported either way: a disabled movie is logged as
+    ``{"enabled": False}`` rather than silently absent, so nobody has to guess
+    whether it ran.
+    """
+    if not bool(cfg.get("movie", True)):
+        log("movie: disabled by cfg['movie']=false (no 3D movie will exist)")
+        return {"enabled": False, "reason": "cfg.movie = false"}
+    n = int(cfg.get("movie_frames", 24))
+    stride = int(cfg.get("movie_stride", 1))
+    info = make_plume_movie(outdir / "movies", grid, archive, well_specs,
+                            q_star, fwd,
+                            cost=cost, n_frames=max(4, n), stride_xy=max(1, stride),
+                            stride_z=int(cfg.get("movie_stride_z", 1)))
+    info["enabled"] = True
+    return info
+
+
+def _numpy_problem(archive, index: int = 0) -> "ScenarioProblem3D":
+    """Return a NumPy :class:`ScenarioProblem3D` for one scenario.
+
+    The movie is rendered by the NumPy reference solver even when the search ran
+    on the torch backend (a movie is one scenario, once -- there is nothing to
+    batch and the reference is the one with a mass ledger).  A torch archive does
+    not hold NumPy problems, so build the single one on demand: one
+    factorisation, roughly a millisecond at these grid sizes.
+    """
+    problems = getattr(archive, "problems", None)
+    if problems:
+        return problems[index]
+    scenarios = list(getattr(archive, "scenarios"))
+    aq0 = archive.aquifer
+    fwd = archive.fwd
+    aq = Aquifer3D(
+        K=scenarios[index].K, kv_ratio=aq0.kv_ratio, phi=aq0.phi, R=aq0.R,
+        alpha_l=aq0.alpha_l, alpha_th=aq0.alpha_th, alpha_tv=aq0.alpha_tv,
+        decay=aq0.decay,
+    )
+    h_left = fwd.grad * archive.grid.lx * scenarios[index].gradient_scale
+    flow = FlowModel3D(archive.grid, aq, h_left=h_left, h_right=0.0)
+    resp = flow_responses_3d(flow, archive.well_specs, fwd.eps_well)
+    flow.release_factorization()
+    rate = fwd.source_q * fwd.source_c * scenarios[index].source_scale
+    return ScenarioProblem3D(scenarios[index], flow, resp,
+                             archive.source_idx, rate)
+
+
+def make_plume_movie(movie_dir: Path, grid, archive, well_specs, q_star, fwd,
+                     cost=None, n_frames: int = 24, scenario_index: int = 0,
+                     stride_xy: int = 1, stride_z: int = 1,
+                     eps: float = 1e-6) -> dict:
+    """Render ``outdir/movies/``: untreated plume beside the plume under ``q*``.
+
+    This is called unconditionally by :func:`run` -- not from ``_make_plots``,
+    not behind ``--plots``, not after the figures.  A run that spent an hour on a
+    GPU should not be able to finish without a picture of what the policy did,
+    so the movie owns its own guard: any failure is recorded in ``metrics`` and
+    in ``movie3d_error.txt`` but cannot abort the run, and the raw field stacks
+    are still saved.
+
+    Both panels use the *same* scenario (``scenario_index`` of the archive) and a
+    single colour scale, so the difference between them is the pumping and
+    nothing else.
+    """
+    movies = Path(movie_dir)          # the movie output directory, not the run's
+    movies.mkdir(parents=True, exist_ok=True)
+    info: dict = {"dir": str(movies)}
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "SCRIPTS"))
+        import plume_movie3d as pmv
+    except Exception as exc:
+        log(f"movie: renderer unavailable ({exc})")
+        (movies / "movie3d_error.txt").write_text(
+            f"renderer import failed: {type(exc).__name__}: {exc}\n",
+            encoding="utf-8")
+        return {"dir": str(movies), "error": f"import: {exc}"}
+
+    try:
+        prob = _numpy_problem(archive, int(scenario_index))
+        q_star = np.asarray(q_star, dtype=float).ravel()
+        common = dict(
+            source_idx=prob.source_idx, source_rate=prob.source_rate,
+            source_steps=fwd.source_steps, record_cells=archive.compliance_cells,
+        )
+        stacks = {}
+        for tag, q in (("none", np.zeros_like(q_star)), ("opt", q_star)):
+            if tag == "opt" and not np.any(q > eps):
+                # A degenerate all-zero optimum IS the untreated case; do not pay
+                # for the same solve twice, but say so -- two identical panels
+                # otherwise look like a rendering bug.
+                stacks[tag] = stacks["none"]
+                info["degenerate"] = True
+                log("movie: q* is all zeros, so both panels show the untreated "
+                    "plume (the run found no pumping is worth paying for)")
+                continue
+            t0 = time.time()
+            res = transport_run_3d(
+                grid, prob.flow.aquifer, prob.flow, prob.resp, q,
+                fwd.dt, fwd.nsteps, capture_n=n_frames, **common)
+            meta = dict(
+                nx=grid.nx, ny=grid.ny, nz=grid.nz, lx=grid.lx, ly=grid.ly,
+                lz=grid.lz, creg=float(getattr(cost, "creg", 1.0)),
+                total_pumping=float(np.sum(q)),
+                wells=[[float(w[0]), float(w[1]), float(qq),
+                        float(w[2]), float(w[3])]
+                       for w, qq in zip(archive.well_specs, q)],
+                source=[float(v) for v in fwd.source_xyz],
+                compliance=[float(v) for v in fwd.compliance_xyz[0]],
+                scenario_label=(f"scenario {scenario_index} of "
+                                f"{getattr(archive, 'M', 1)}"),
+                trace=np.asarray(res.C_record[:, 0], dtype=float)
+                if res.C_record is not None and res.C_record.size else None,
+            )
+            stacks[tag] = pmv.capture_arrays(
+                res.frame_times if res.frame_times is not None
+                else np.linspace(0, fwd.T, len(res.C_frames)),
+                res.C_frames, meta=meta, stride_xy=stride_xy,
+                stride_z=stride_z)
+            log(f"movie: {tag} field captured ({len(res.C_frames)} frames, "
+                f"{time.time() - t0:.1f}s)")
+        art = pmv.make_movie(stacks["none"], stacks["opt"], movies,
+                             title="plume under the optimized policy")
+        for k, v in art.items():
+            if k in ("mp4", "gif", "contact", "fields") and v:
+                try:
+                    info[k] = str(Path(v).relative_to(movies.parent))
+                except ValueError:
+                    info[k] = str(v)
+        if art.get("error"):
+            info["error"] = art["error"]
+        log(f"movie: {info}")
+    except Exception as exc:
+        info["error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            (movies / "movie3d_error.txt").write_text(
+                f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        except Exception:
+            pass
+        log(f"movie failed ({info['error']}) -- run continues")
+    return info
 
 
 def _make_plots(outdir, grid, Cmean, C2d, mask, well_specs, q_star, hist,
@@ -2635,6 +2815,8 @@ def build_config(preset: str, overrides: dict) -> dict:
         "rho_g": 1e6, "rho_h": 1e6,
         "max_evals": p["max_evals"], "n_starts": p["n_starts"],
         "max_iter": 60,
+        # plume movie: ON by default, never a per-run decision to forget
+        "movie": True, "movie_frames": 24, "movie_stride": 1, "movie_stride_z": 1,
         "seed": 0, "seed_train": 1000, "seed_test": 500000,
     }
     cfg.update(overrides)

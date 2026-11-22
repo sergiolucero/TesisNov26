@@ -72,3 +72,13 @@ adds one caveat that the run's own gate does not express: the test reliability
 clears the 0.94 gate; the interval does not. By the reporting rule established in
 `DOCS/Results.md` §2.2 the 3D policy is therefore *not* certified, and doing so
 needs ~400 test scenarios (~2 h at 18.6 s/eval on one core).
+
+## Plume movie
+
+Every `full3D_colab_run.py` run now writes `<run>/movies/` with
+`plume3d.mp4`, `plume3d.gif`, `plume3d_contact.png` and the raw `fields.npz`
+(untreated beside `q*`, same scenario, shared colour scale). The stage is
+unconditional and self-guarded, rendered before `metrics.json` is written, and its
+paths are recorded under `metrics["movie"]`. Specification: `DOCS/3D_movie.md`.
+Measured cost on the `full` preset: ~0.1 s per captured policy, ~4 s to render 24
+frames, ~1 s to encode -- under 2 % of the run.

@@ -78,11 +78,16 @@ DEFAULT_CHAPTERS = ["introduction", "related_work", "formulation", "optimization
 
 # The thesis is one document with one title; the chapters are written as
 # standalone articles and carry their own, which are dropped like \maketitle.
-THESIS_TITLE = ("Verification-first simulation and chance-constrained\\"
-                " optimization for pump-and-treat remediation")
+THESIS_TITLE = ("A Stochastic Groundwater Remediation Problem solved 25 "
+                "years later with AI")
 THESIS_AUTHOR = "Sergio Lucero"
 THESIS_SUBTITLE = ("Applied to two- and three-dimensional aquifer "
                    "remediation design")
+# A dedication page between the title and the abstract. Plain text, or the path
+# of a file holding it (--dedication accepts either, like --abstract).
+THESIS_DEDICATION = ("To Roger Wets, Alejandro Jofr\\'e and Terry Rockafellar, "
+                     "who taught us that a stochastic program is a statement "
+                     "about a decision, not about a number.")
 
 # A preamble carries more than \newcommand: theorem environments, column
 # types and operator names are declared the same way and are just as fatal to
@@ -377,6 +382,9 @@ def main() -> int:
                     help="where to write tesis.tex/body (default: TEX/build). "
                          "Tests point this at a temp dir so they cannot delete a "
                          "built PDF")
+    ap.add_argument("--dedication", default=THESIS_DEDICATION,
+                    help="dedication text, or the path of a file holding it "
+                         "(\'\' to omit the page)")
     ap.add_argument("--abstract", default=str(TEX / "abstract.tex"),
                     help="fragment emitted as the document abstract "
                          "(default: %(default)s; '' to omit)")
@@ -387,6 +395,18 @@ def main() -> int:
         BUILD = Path(args.build_dir)
         if not BUILD.is_absolute():
             BUILD = ROOT / BUILD
+
+    dedication = ""
+    if args.dedication:
+        dpath = Path(args.dedication)
+        if not dpath.is_absolute():
+            candidate = ROOT / dpath
+            if candidate.exists():
+                dpath = candidate
+        if dpath.exists() and dpath.is_file():
+            dedication = strip_comments(dpath.read_text(encoding="utf-8")).strip()
+        else:
+            dedication = args.dedication.strip()
 
     abstract = ""
     if args.abstract:
@@ -563,6 +583,12 @@ def main() -> int:
         "\\begin{document}",
         "\\maketitle",
     ]
+    if dedication:
+        preamble += ["", "\\thispagestyle{empty}", "\\vspace*{0.22\\textheight}",
+                     "\\begin{flushright}",
+                     "\\begin{minipage}{0.74\\textwidth}\\raggedleft\\itshape",
+                     dedication,
+                     "\\end{minipage}", "\\end{flushright}", "\\clearpage"]
     if abstract:
         preamble += ["", abstract]
     preamble += ["\\setcounter{tocdepth}{2}", "\\tableofcontents"]

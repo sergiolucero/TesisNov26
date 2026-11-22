@@ -167,6 +167,64 @@ class TestChapterLevelAssembly(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertIn("\\title{T}", (Path(tmp) / "tesis.tex").read_text())
 
+    def test_the_dedication_sits_between_title_and_abstract(self):
+        tmp = tempfile.mkdtemp(prefix="build_tex_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--chapters", "conclusions", "--build-dir", str(tmp),
+             "--dedication", "To a Teacher"],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        master = (Path(tmp) / "tesis.tex").read_text()
+        self.assertIn("To a Teacher", master)
+        self.assertLess(master.index("\\maketitle"), master.index("To a Teacher"))
+        self.assertLess(master.index("To a Teacher"),
+                        master.index("\\begin{abstract}"))
+        # the page is unnumbered and does not leak into the first chapter
+        self.assertIn("\\thispagestyle{empty}", master)
+        self.assertIn("\\clearpage", master)
+
+    def test_the_dedication_can_be_omitted(self):
+        tmp = tempfile.mkdtemp(prefix="build_tex_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--chapters", "conclusions", "--build-dir", str(tmp),
+             "--dedication", ""],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        master = (Path(tmp) / "tesis.tex").read_text()
+        self.assertNotIn("\\raggedleft", master)
+        # not the default text either ("Rockafellar" alone would match the
+        # bibliography, so key on the dedication's own words)
+        self.assertNotIn("who taught us", master)
+
+    def test_a_dedication_file_is_read_instead_of_the_literal(self):
+        tmp = tempfile.mkdtemp(prefix="build_tex_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        frag = Path(tmp) / "ded.tex"
+        frag.write_text("For the ones who\nasked the right question.\n")
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--chapters", "conclusions", "--build-dir", str(tmp),
+             "--dedication", str(frag)],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        master = (Path(tmp) / "tesis.tex").read_text()
+        self.assertIn("asked the right question", master)
+        # a path argument must not be echoed as text
+        self.assertNotIn("ded.tex", master)
+
+    def test_the_title_is_the_one_the_module_declares(self):
+        # the default title lives in one place; a run that forgets --title must
+        # not silently fall back to something stale
+        import build_tex
+        self.assertEqual(build_tex.THESIS_TITLE,
+                         "A Stochastic Groundwater Remediation Problem solved "
+                         "25 years later with AI")
+        self.assertIn("Rockafellar", build_tex.THESIS_DEDICATION)
+
 class TestAssembledDocument(unittest.TestCase):
     def test_check_only_passes(self):
         proc = subprocess.run(

@@ -326,8 +326,12 @@ uncertainty only.
   wrong, contributions), `related_work` (subsurface flow, learned surrogates,
   optimization under uncertainty, SAA, verification practice, tail statistics)
   and `conclusions` (results, the methodological result, five limitations, five
-  pieces of future work) --- plus an abstract and a title page. 55 pages, 0
-  undefined references. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
+  pieces of future work) --- plus a title page, a dedication and an abstract.
+  66 pages, 0 undefined references. On the `doc-latex` branch the master is
+  titled *A Stochastic Groundwater Remediation Problem solved 25 years later
+  with AI* (subtitle unchanged) and carries a dedication page to Roger Wets,
+  Alejandro Jofré and Terry Rockafellar; both are `--title` / `--dedication`
+  arguments of `build_tex.py`, so they are one edit each, not a fork. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
 sections: model and partial-penetration wells; the seven solver gates (decisive
 one: 3D-vs-2D extrusion agreement at 1.9e-13); the paper preset (`q* = 4 x
 12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d) with the two

@@ -329,7 +329,7 @@ those).
 
 | what the source does | what the master does |
 | :--- | :--- |
-| `\documentclass`, `\title`, `\author`, `\maketitle`, `\tableofcontents` | dropped; the master emits `\documentclass{report}`, one `\title` with its subtitle (`--title` / `--subtitle`, defaults `THESIS_TITLE` / `THESIS_SUBTITLE`), one `\author` (`--author`, default `Sergio Lucero`), and `TEX/abstract.tex` between the title page and the contents (`--abstract`, `''` to omit) |
+| `\documentclass`, `\title`, `\author`, `\maketitle`, `\tableofcontents` | dropped; the master emits `\documentclass{report}`, one `\title` with its subtitle (`--title` / `--subtitle`, defaults `THESIS_TITLE` / `THESIS_SUBTITLE`), one `\author` (`--author`, default `Sergio Lucero`), a dedication page between the title and the abstract (`--dedication`, default `THESIS_DEDICATION`, inline text or a file path, `''` to omit), and `TEX/abstract.tex` before the contents (`--abstract`, `''` to omit) |
 | every selected file | becomes a real `\chapter{<registry title>}` — not a bare `\section` pile |
 | opens with `\section{<same as chapter title>}` | that opener is folded into the chapter heading and the headings after it are promoted one level (`\subsection`→`\section`), otherwise the chapter numbers its sections `1.0.1` under a section that does not exist. Run-in `\paragraph` headings are left alone |
 | `\begin{abstract}…\end{abstract}` | dropped — a thesis has one abstract, in the front matter; left in, each chapter printed its own mid-document |
@@ -341,7 +341,7 @@ those).
 The toolchain here is a user-level [TinyTeX](https://yihui.org/tinytex/) in
 `~/.TinyTeX` (`curl -fsSL https://yihui.org/tinytex/install-bin-unix.sh | sh`,
 then `tlmgr install` whatever a build reports as missing); the script finds it
-without `PATH` help. Verified output: **65 pages, 7 chapters, 0 undefined
+without `PATH` help. Verified output: **66 pages, 7 chapters, 0 undefined
 references, 0 undefined citations, 0 overfull boxes**. The compiled result is
 tracked as `TEX/tesis.pdf` (a published snapshot; `TEX/build/` itself stays
 gitignored), and each chapter is also tracked as its own PDF next to its source.

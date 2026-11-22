@@ -332,9 +332,13 @@ uncertainty only.
   with AI* (subtitle unchanged) and carries a dedication page naming Roger Wets,
   Alejandro Jofré and Terry Rockafellar; both are `--title` / `--dedication`
   arguments of `build_tex.py`, so they are one edit each, not a fork. On that
-  branch Chapter 1 also opens with the provenance (the problem as a doctoral
-  thesis at UC Davis under Wets, what the computation of 2000 could and could not
-  support) and states the thesis's problem as a single stochastic program,
+  branch Chapter 1 also opens with the provenance: the problem as a 2001 doctoral
+  thesis in Applied Mathematics at UC Davis, advised by Roger Wets and examined
+  with Graham Fogg (hydrogeology) and Janko Gravner (probability); what that
+  thesis actually produced, namely a deterministic flow-and-transport forward
+  model and no stochastic optimization at all; and what the field of the period
+  could and could not support. Chapter 1 then states the thesis's problem as a
+  single stochastic program,
   `(P) min E[J] + rho_g [CVaR(G)]^2_+ + rho_h [CVaR(-H)]^2_+` subject to the
   heterogeneous Darcy and transport equations, the chance constraint and the
   well bounds, with a table fixing decisions, uncertainty, state, source,

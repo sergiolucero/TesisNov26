@@ -24,40 +24,52 @@
 \section{Introduction}
 \subsection{Twenty-five years ago, at Davis}
 
-Twenty-five years ago, as a doctoral student in Applied Mathematics at the
-University of California, Davis, I was handed this problem by my advisor, Roger
-Wets: a contaminant plume is moving through an aquifer; a set of wells can pump
-it out and treat it; where do you put the wells, and at what rates do you run
-them, when the conductivity field that decides where the plume actually goes is
-known only as a random field? The question arrived already in the language of
-stochastic programming, because that is the language the group spoke. A decision
-has to be taken before the uncertainty is resolved, the physical state responds
-to it, the regulator asks for a probability rather than a guarantee, and the cost
-of being wrong is measured in decades of pumping. Decomposition by scenarios
-\citep{rockafellar1991}, the L-shaped lineage of cutting-plane methods
-\citep{vanslyke1969,benders1962}, and the sample average approximation
-\citep{kleywegt2002} were the available machinery; the risk measure that this
-thesis ends up using was being written down at the same time
+In 2001, as a doctoral student in Applied Mathematics at the University of
+California, Davis, I was handed this problem by my advisor, Roger Wets: a
+contaminant plume is moving through an aquifer; a set of wells can pump it out and
+treat it; where do you put the wells, and at what rates do you run them, when the
+conductivity field that decides where the plume actually goes is known only as a
+random field? The committee that examined the result was as interdisciplinary as
+the problem itself --- Roger Wets in stochastic programming, Graham Fogg in
+hydrogeology, Janko Gravner in probability --- and the question arrived already in
+the language of stochastic programming, because that is the language my advisor
+spoke. A decision has to be taken before the uncertainty is resolved, the physical
+state responds to it, the regulator asks for a probability rather than a
+guarantee, and the cost of being wrong is measured in decades of pumping.
+Decomposition by scenarios \citep{rockafellar1991}, the L-shaped lineage of
+cutting-plane methods \citep{vanslyke1969,benders1962}, and the sample average
+approximation \citep{kleywegt2002} were the available machinery; the risk measure
+that this thesis ends up using was being written down in the same years
 \citep{rockafellar2000}.
 
 The problem had exactly the structure those methods were built for, and it had
 one property they could not tolerate: the evaluation of the objective required
 solving partial differential equations on a realization of the conductivity
 field. Not one solve --- a scenario set of them, for every candidate decision,
-inside every iteration of every subproblem. What the computation of that period
-could actually support was, in practice, a coarse two-dimensional grid, a handful
-of realizations, a linearized response matrix built from unit-rate solves
-\citep{gorelick1983,wagner1995,mayer2002,ahlfeld2000}, and a risk measure that
-had to be a variance rather than a tail, or a chance constraint replaced by a
-Gaussian assumption. The design that came out of that was defensible. The
-\emph{evidence} for it was thin, and in a way that was nearly invisible: it was
-validated on the same realizations that had been used to build it, so it looked
-better than it was, and there was no affordable way to find out how much better.
+inside every iteration of every subproblem. At 2001 prices that was simply not
+affordable: a compass sweep over nine well rates, at the scenario counts a tail
+statistic needs, was days of computation per iteration, and the search that was
+supposed to consume the answers did not exist yet either.
 
-The thesis I wrote then answered the question it could ask. This document returns
-to the same program and asks the question the intervening twenty-five years made
-askable. What changed is not the formulation --- it is written again below, in
-essentially the same form --- but the price of an answer, and the standard of
+So what I built, and what the 2001 thesis contains, is the forward model: a
+deterministic flow-and-transport simulation in which a candidate pump-and-treat
+design is evaluated rather than searched for. That is the piece this document
+still stands on --- every later chapter evaluates (P) through exactly such a
+model --- but it is not (P). The optimization, the scenario ensemble, the risk
+measure and any notion of a certificate were named in that thesis and none of them
+were computed. The field as a whole did better in one direction and worse in
+another: assembling a response matrix from unit-rate solves
+\citep{gorelick1983,wagner1995,mayer2002,ahlfeld2000} makes optimization
+affordable by replacing the simulator with a linear surrogate, and the risk
+measure is then flattened to a variance or the chance constraint to a Gaussian
+assumption, so the design is optimized against the surrogate and validated
+against the realizations that built it. Those designs were defensible. The
+\emph{evidence} for them was thin, and thin in the way that is hardest to notice.
+
+What this document therefore starts from is a problem stated correctly in 2001, a
+forward model built in answer to it, and the program itself left open. It returns
+to that program --- written again below, in essentially the same form --- and what
+changed is not the formulation but the price of an answer, and the standard of
 proof applied to it.
 
 \subsection{The decision, and why it is a stochastic program}
@@ -196,7 +208,7 @@ solution exists. That is what the one-dimensional sandbox of
 Chapter~\ref{chap:formulation} is for: the advection--dispersion equation has the
 Ogata--Banks solution \citep{ogata1961solution} in uniform flow, so an
 architecture can be scored against truth instead of against a previous run of
-itself. This was not available twenty-five years ago either, and neither was the
+itself. This was not available in 2001 either, and neither was the
 evidence that it needs to be done carefully: networks that fit the training
 distribution perfectly can fail to be operators at all
 \citep{krishnapriyan2021failure,wang2021gradient}.

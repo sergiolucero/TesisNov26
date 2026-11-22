@@ -58,6 +58,7 @@ packages, configs and generated outputs.
 | `tests/` | Unit and gradient-check tests (`python tests/run_tests.py`) |
 | `DOCS/` | **All project documentation** — see [`DOCS/USAGE.md`](DOCS/USAGE.md) for the scripts |
 | `DOCS/NewPlan.md` | Fleet topology and bootstrap (Tailscale, Herdr) |
+| `DOCS/LANES.md` | **Read before working here**: two-lane protocol for a simulations session and a documentation session sharing one checkout |
 | `DOCS/plan.md`, `DOCS/2D_plan.md`, `DOCS/3D_plan.md` | Staged verification plans and gates |
 | `DOCS/optimization_plan.md` | Stochastic optimization execution plan |
 | `DOCS/Conclusions.md` | **Consolidated findings, with what is trustworthy and what is not** |

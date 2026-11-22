@@ -19,8 +19,6 @@
 \maketitle
 
 \section{Background and related work}
-\label{chap:related}
-
 This chapter places the thesis in four literatures it borrows from and tries to
 satisfy at once: subsurface flow and transport simulation, learned surrogates for
 partial differential equations, optimization under uncertainty for remediation
@@ -51,7 +49,7 @@ thesis it retains $1\,529$ modes, which is the number any surrogate has to face.
 
 Finite-volume discretizations with upwind advection \citep{leveque2002finite} are
 the workhorse for this class of problem, and they are what the reference
-implementation of \S\ref{chap:formulation} and the batched GPU backend both
+implementation of Chapter~\ref{chap:formulation} and the batched GPU backend both
 implement, so that the difference between them is arithmetic order and data type,
 not physics.
 
@@ -114,7 +112,7 @@ and the resulting estimator of the reliability has its own sampling error.
 
 That second step is often skipped, and the reason is arithmetic rather than
 laziness: it costs as much again as the optimization. The consequence, measured
-in \S\ref{chap:results}, is that a policy optimized on sixteen scenarios can
+in Chapter~\ref{chap:results_2d}, is that a policy optimized on sixteen scenarios can
 report a perfect reliability and fail on four hundred unseen ones, and that a
 tail statistic computed on the optimization sample is not even approximately the
 tail of the distribution.
@@ -129,7 +127,7 @@ classical derivative-free method with convergence theory under mild smoothness
 \citep{conn2009,nocedal2006}. Its cost structure is unusually friendly to
 batching: a whole sweep of compass directions can be evaluated as one batch of
 initial-value problems, which turns a sequence of small linear solves into one
-large one and is where the GPU speedups of \S\ref{chap:results} come from.
+large one and is where the GPU speedups of Chapter~\ref{chap:results_2d} come from.
 
 \subsection{Verification, validation, and reproducible computational results}
 
@@ -166,7 +164,7 @@ $\alpha = 0.05$ and $M = 400$ that is twenty draws, so its standard error is
 $\operatorname{sd}(\text{tail})/\sqrt{20}$ --- of order a third of a unit for the
 compliance metric used here. No amount of careful implementation removes that
 uncertainty; the only responses are to report it or to change the sample size,
-and \S\ref{chap:results} quantifies the trade-off.
+and Chapter~\ref{chap:results_2d} quantifies the trade-off.
 
 \subsection{Positioning of this work}
 

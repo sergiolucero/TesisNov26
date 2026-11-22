@@ -327,11 +327,20 @@ uncertainty only.
   optimization under uncertainty, SAA, verification practice, tail statistics)
   and `conclusions` (results, the methodological result, five limitations, five
   pieces of future work) --- plus an abstract and a title page. 55 pages, 0
-  undefined references. What it still is *not*: a complete monograph. There is no
-  chapter for the 3D work (that lives in `DOCS/3D_results.md`), `results_2d.tex`
-  covers only the 2D campaign, and the two half-written chapters
-  (`SolvingAlgorithms`, `plans_2d_3d`) remain outside the assembly because they
-  restate material that `optimization.tex` already contains.
+  undefined references. `results_3d.tex` is now Chapter 6 ("Three dimensions"):
+model and partial-penetration wells, the seven solver gates (the decisive one
+being 3D-vs-2D extrusion agreement at 1.9e-13), the paper preset
+(`q* = 4 x 12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d), the
+two trivial baselines (doing nothing; uniform half capacity, which is 3% cheaper
+in J and fails 55% of the time), reproducibility on three machines, and an
+explicit "what this does not establish" section. That section's sharpest point
+is self-inflicted: at M_test = 128 the point estimate 0.969 clears the 0.94 gate
+but the Wilson interval [0.922, 0.988] does not, so by this thesis's own rule the
+3D policy is *not* certified -- it needs ~400 test scenarios (~2 h of CPU) to
+become the statement the 2D policy earned. What it still is *not*: a complete
+monograph. The two half-written chapters (`SolvingAlgorithms`, `plans_2d_3d`)
+remain outside the assembly because they restate material that
+`optimization.tex` already contains.
 - ~~Apply per-seed medians to the FNO sweep table~~ — **done** (2026-11-21):
   five seeds at 120 ep, 250 ep and modes 4/12/24 (§5). The 250-epoch headline
   fell from 1.46% to a median 1.99% (IQR 1.68–2.14e-2); the paired gains

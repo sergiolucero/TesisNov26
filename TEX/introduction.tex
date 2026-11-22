@@ -20,8 +20,6 @@
 \maketitle
 
 \section{Introduction}
-\label{chap:introduction}
-
 \subsection{The remediation decision}
 
 Pumping groundwater out of an aquifer, treating it at the surface and returning
@@ -79,11 +77,11 @@ and no amount of training would have fixed it. A single trivial-predictor
 baseline would have caught this on the first run.
 
 \paragraph{A tail statistic describes the sample that produced it.} The certified
-two-dimensional policy of \S\ref{chap:results} reports
+two-dimensional policy of Chapter~\ref{chap:results_2d} reports
 $\mathrm{CVaR}_{5\%}(G) = +0.005$ on the hundred scenarios it was optimized on.
 Re-solving the same policy on $400$ scenarios drawn from a seed no run had ever
 touched gives $+0.616$. Both numbers are correct; they answer different questions,
-and only the second says anything about an aquifer. Section~\ref{chap:results}
+and only the second says anything about an aquifer. Section~\ref{chap:results_2d}
 takes this seriously enough to measure it: across three disjoint draws the tail
 takes the values $+0.616$, $+0.254$ and $+0.334$, and those three differ by less
 than their own standard errors, because a $5\%$ tail of $400$ draws is an average
@@ -98,7 +96,7 @@ carrying its own verification rather than deferring it to the end.
 
 \begin{enumerate}
   \item \textbf{A one-dimensional sandbox with a closed-form answer}
-        (\S\ref{chap:formulation}). The advection--dispersion equation has the
+        (Chapter~\ref{chap:formulation}). The advection--dispersion equation has the
         Ogata--Banks solution \citep{ogata1961solution} for a step source in a
         uniform flow, which makes it the right place to test a surrogate
         architecture: the reference is exact, cheap, and covers the parameter
@@ -107,7 +105,7 @@ carrying its own verification rather than deferring it to the end.
         there and scored against the analytical solution, with the seed spread
         reported rather than the best seed.
   \item \textbf{A two-dimensional finite-volume model and a stochastic program}
-        (\S\ref{chap:optimization}). Darcy flow with partially penetrating wells
+        (Chapter~\ref{chap:optimization}). Darcy flow with partially penetrating wells
         and advection--dispersion transport are discretized on a
         $160\times96$ grid ($15\,360$ cells) with a Karhunen--Lo\`eve truncation of
         the log-normal conductivity at $1\,529$ modes. The chance constraint is
@@ -116,7 +114,7 @@ carrying its own verification rather than deferring it to the end.
         non-convex program is solved by a derivative-free pattern search in which
         an entire compass sweep of candidate rate vectors is evaluated in one
         batched linear solve.
-  \item \textbf{An out-of-sample certificate} (\S\ref{chap:results}). A policy is
+  \item \textbf{An out-of-sample certificate} (Chapter~\ref{chap:results_2d}). A policy is
         not reported until it has been re-solved on scenarios no run has seen, on
         an independent implementation, with reliability quoted as a Wilson
         interval \citep{wilson1927probable} and the tail quoted with its own
@@ -172,16 +170,16 @@ papered over.
 
 \subsection{How to read this thesis}
 
-\S\ref{chap:related} places the work in the literature on subsurface simulation,
+Chapter~\ref{chap:related_work} places the work in the literature on subsurface simulation,
 learned surrogates, optimization under uncertainty and verification practice.
-\S\ref{chap:formulation} fixes the governing equations, the dimensionless groups
+Chapter~\ref{chap:formulation} fixes the governing equations, the dimensionless groups
 and the two surrogate architectures, and reports their verification against the
-analytical solution. \S\ref{chap:optimization} builds the stochastic program:
+analytical solution. Chapter~\ref{chap:optimization} builds the stochastic program:
 cost model, risk measure, sample average approximation, and the derivative-free
-search with its batched evaluation. \S\ref{chap:results} reports the
+search with its batched evaluation. Chapter~\ref{chap:results_2d} reports the
 two-dimensional results, the certification protocol, and the calibration
 experiment that delimits what a tail statistic can support.
-\S\ref{chap:conclusions} collects the conclusions, the limitations of the present
+Chapter~\ref{chap:conclusions} collects the conclusions, the limitations of the present
 evidence, and the work that would be needed to remove them.
 
 \begin{thebibliography}{99}

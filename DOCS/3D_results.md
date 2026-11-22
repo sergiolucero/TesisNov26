@@ -64,3 +64,11 @@ exactly: `q* = [12.5, 12.5, 12.5, 12.5, 0×5]`, test `J = 547,665.31`, reliabili
 `0.96875`, mass-balance error `9.7e-15`, all six gates true. That is a third
 machine and a different BLAS after the 3D and opt branches were merged, so the
 agreement is not just the same binary.
+
+**Written up as thesis Chapter 6 (2026-11-21).** `TEX/results_3d.tex` turns this
+into prose (model, solver gates, presets, baselines, reproducibility, limits) and
+adds one caveat that the run's own gate does not express: the test reliability
+0.969 is 124/128, whose Wilson interval is [0.922, 0.988]. The point estimate
+clears the 0.94 gate; the interval does not. By the reporting rule established in
+`DOCS/Results.md` §2.2 the 3D policy is therefore *not* certified, and doing so
+needs ~400 test scenarios (~2 h at 18.6 s/eval on one core).

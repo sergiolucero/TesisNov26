@@ -139,7 +139,13 @@ class TestChapterLevelAssembly(unittest.TestCase):
         self.assertIn("\\documentclass[11pt]{report}", master)
         self.assertIn("\\chapter{Introduction}", master)
         self.assertIn("\\chapter{Conclusions}", master)
+        # the chapter anchor belongs to the \chapter, not to the first \section
+        self.assertIn("\\chapter{Introduction}\\label{chap:introduction}", master)
+        self.assertIn("\\chapter{Conclusions}\\label{chap:conclusions}", master)
+        # figures are addressed relative to TEX/ (as the chapters write them)
+        self.assertIn("\\graphicspath", master)
         self.assertIn("A Test Title", master)
+        self.assertNotIn("assembled from TEX", master)
         self.assertIn("A. Author", master)
         # exactly one abstract, in the front matter, before the first chapter
         self.assertEqual(master.count("\\begin{abstract}"), 1)
@@ -150,12 +156,32 @@ class TestChapterLevelAssembly(unittest.TestCase):
             self.assertNotIn("\\begin{abstract}", body)
             self.assertNotIn("\\appendix", body)
 
+    def test_the_subtitle_can_be_omitted(self):
+        tmp = tempfile.mkdtemp(prefix="build_tex_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--chapters", "conclusions", "--build-dir", str(tmp),
+             "--title", "T", "--subtitle", ""],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertIn("\\title{T}", (Path(tmp) / "tesis.tex").read_text())
 
 class TestAssembledDocument(unittest.TestCase):
     def test_check_only_passes(self):
         proc = subprocess.run(
             [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
              "--check-only"],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertIn("chapters", proc.stdout)
+
+    def test_the_3d_chapter_validates_alone(self):
+        # Its figure target and its cross-references are the parts most likely to
+        # rot: the figure is addressed relative to TEX/, not to the master.
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "SCRIPTS" / "build_tex.py"),
+             "--check-only", "--chapters", "results_3d"],
             capture_output=True, text=True, timeout=300)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertIn("chapters", proc.stdout)

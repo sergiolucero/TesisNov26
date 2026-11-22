@@ -278,3 +278,30 @@ float64 -- the recurrence was the blocker, and fixing it is cheap. tests/
 test_mixed_krylov.py covers the switch (no-op for float64, dtype preserved,
 lower residual than a plain fp32 recurrence on an ill-conditioned system).
 
+RESTART / SCREENING EXPERIMENT, 160x96 (2026-11-21)
+---------------------------------------------------
+runs/colab_multi/20261121-215921 (2 replicas, T4, float32 + float64 Krylov recurrence,
+M_train=M_test=M_holdout=40, n_starts=2, max_evals=400, holdout_every=8, seeds 7 and 8)
+  r0 (seed 7): 1.69 h, 802 evals, q*=[2.59,0,9.72,0,0,0,0,0,0] (12.32 m3/d, 2 wells)
+  r1 (seed 8): 1.67 h, 802 evals, IDENTICAL q*
+  train J 409862.4 / test J 409870.8, test reliability 0.900, holdout 0.900 / 0.925
+  gates: reliability False, holdout False, J gap True, mass balance True
+  numerics: 0 non-finite objectives, 0 stalled solves in 802 evals -> float32 at M=40 is safe
+  cost: ~154 s per 19-candidate compass sweep, flow Krylov 547 iters to 9.86e-6 (one solve)
+Outcome: both random restarts converged WORSE than the deterministic start (421639 and
+415576 against 409863), so at M=40 the landscape has ONE dominant attractor -- and it is
+the fragile policy. The failure is statistical, not numerical: halving M_train buys 4.4% of J
+and costs the certificate.
+Independent certificate (SCRIPTS/check_tail.py, NumPy, 400 scenarios, seed base 900000):
+  J 409645.1 | mean_G -0.669 | CVaR-5%(G) +2.345 +/- 0.65 | 34/400 violations
+  reliability 0.915, Wilson [0.884, 0.939] -> FAIL the 0.94 gate
+  ladder (violations): 0/16, 1/20, 2/40, 3/60, 5/100, 6/150, 13/200, 28/300, 34/400
+  artifacts: out/cert/M40policy_900k_M400.{log,json}
+The mid-run holdout guard fired on both replicas at iteration 16 (rel 0.900, CVaR +1.63) and
+again at 24, at ~7 s per check (1.2% of a sweep) -- it converts a post-mortem into an abort.
+
+LAUNCH GOTCHA (2026-11-21): COLAB_AUTH is unset on this box, so multi_colab defaults to
+--auth adc and provisioning dies with DefaultCredentialsError (vm=not-created, nothing
+billed). The keyring oauth2 credentials still work: pass --auth oauth2 or export
+COLAB_AUTH=oauth2. Also put --dry-run BEFORE the `--` separator, or it is forwarded to
+collab_run.py and the driver launches for real.

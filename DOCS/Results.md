@@ -150,6 +150,7 @@ selected on only 16 scenarios to one that pumps all nine wells.
 | policy | in-run train rel | J (fresh) | mean G | CVaR-5 %(G) ± s.e. | reliability [95 % CI] | gate |
 | :--- | ---: | ---: | ---: | :--- | :--- | :--- |
 | `20261118-041443` (M=16, 4 wells) | 1.000 | 423,041 | −0.697 | +1.865 ± 0.41 | 365/400 = 0.912 [0.881, 0.936] | **FAIL** |
+| `20261121-215921` (M=40 screening, 2 wells) | 0.975 | 409,645 | −0.669 | +2.345 ± 0.65 | 366/400 = 0.915 [0.884, 0.939] | **FAIL** |
 | `20261120-111849` (accepted, 2 wells) | 0.990 | 428,509 | −0.872 | +0.616 ± 0.47 | 391/400 = 0.978 [0.958, 0.988] | PASS |
 | `20261118-114831` (float64, 3 wells) | 0.990 | 433,924 | −0.903 | +0.251 ± 0.32 | 392/400 = 0.980 [0.961, 0.990] | PASS |
 | `20261118-052228` (6 wells) | 1.000 | 577,917 | −1.000 | −1.000 ± 0.00 | 400/400 = 1.000 [0.990, 1.000] | PASS |
@@ -168,7 +169,12 @@ Three readings:
    (`mean G = −1.000`, standard deviation 0): once the plume never reaches
    `x = 185 m`, `G` cannot reward them further, so their `CVaR = −1.000` is a
    cap, not a measurement of safety margin.
-3. **Reliability separates policies; the tail does not.** 0.980 against 0.978 is
+3. **A cheaper policy is not a better one.** The M = 40 screening run is the
+   cheapest policy in the table (409,645, 4.4 % below the accepted policy) and it
+   fails on 34 of 400 unseen scenarios: 0.915 with an interval that is entirely
+   below the gate. Cheaper-by-search and safer are opposite directions here, and
+   only the fresh draw says which one you bought.
+4. **Reliability separates policies; the tail does not.** 0.980 against 0.978 is
    not a difference at M = 400 (intervals overlap almost completely), and neither
    is 0.616 against 0.251 -- see below.
 
@@ -206,6 +212,61 @@ Hence the reporting rule this thesis adopts:
 `check_tail.py` prints the tail block (`n_tail`, tail mean/s.d./s.e., range) and
 writes it to `--json`, so this uncertainty travels with the number instead of
 being reconstructed later from memory.
+
+#### Restarts do not rescue an under-sampled search
+
+Two more searches were run from random starts to ask whether the certified optima
+are one basin or several, and whether a smaller training set finds them faster.
+Both replicas used `configs/opt/hydrology_gpu.yaml` at `160x96` with
+`M_train = M_test = M_holdout = 40`, `n_starts = 2`, `max_evals = 400`,
+float32 with the float64 Krylov recurrence, and differed only in `optim.seed`
+(7 and 8) — so both optimise the *same* 40-scenario objective from different
+starting points (`runs/colab_multi/20261121-215921`).
+
+| | replica r0 (seed 7) | replica r1 (seed 8) |
+| :--- | ---: | ---: |
+| start 1 (deterministic `0.5 q_max`) | 409,863 at nit 28 | 409,863 at nit 28 |
+| start 2 (random) | 421,639 | 415,576 |
+| selected `q*` | `[2.59, 0, 9.72, 0…0]` | `[2.59, 0, 9.72, 0…0]` |
+| pumping / active wells | 12.32 m³/d / 2 | 12.32 m³/d / 2 |
+| train reliability (M=40) | 0.975 | 0.975 |
+| test reliability (M=40) | 0.900 | 0.900 |
+| holdout reliability | 0.900 | 0.925 |
+| gates | reliability **False**, holdout **False** | reliability **False**, holdout **False** |
+| wall clock / evaluations | 1.69 h / 802 | 1.67 h / 802 |
+
+Three things follow, and none of them is the hoped-for one.
+
+1. **The restarts found nothing new.** Both random starts, from different seeds,
+   converged *worse* than the deterministic start, so both replicas returned the
+   same `q*`. This landscape has a dominant attractor at M = 40, not a family of
+   near-equivalent optima; the earlier float64/float32 pair (two well-subsets at
+   nearly equal cost) was a pair of *accepted* policies, not evidence of many
+   basins.
+2. **The attractor is the fragile one.** Halving the training set lowers the J
+   the search can see by 4.4 % and moves the certificate from 0.978 to 0.915. The
+   search is not stuck; it is optimising the wrong objective, and more restarts
+   optimise it more consistently.
+3. **The mid-run guard caught it while it was still running.** The holdout check
+   fired at iteration 16 on both replicas (`rel = 0.900`, `CVaR = +1.63`) and
+   again at iteration 24 (`rel = 0.900` / `0.925`). The check costs ~7 s
+   (1.2 % of the sweep) and turns a post-mortem into an abort decision.
+
+The ladder for the screening policy grows *worse* with sample size — 0/16, 1/20,
+2/40, 3/60, 5/100, 6/150, 13/200, 28/300, 34/400 — which is the opposite direction
+from the two accepted policies, whose violation count stays flat while the tail
+mean drifts. Under-sampling can hide violations or exaggerate them; the sign is
+not predictable, so the sample size cannot be chosen by watching CVaR.
+
+The failure was statistical, not numerical: 802 evaluations of float32 with the
+float64 Krylov recurrence produced not one non-finite objective and no stalled
+solve, so the dtype did its job and the sample size did not.
+
+The practical rule this settles: **a screening run may use a smaller sample
+(M = 40 here), but its output is a candidate, not a policy.** The candidate is accepted
+only after `check_tail.py` on a fresh 400-scenario draw, and the run's own
+`final_test_reliability` gate is best read as a smoke detector for exactly this
+failure.
 
 ### 2.3 Effect of the policy on the plume
 

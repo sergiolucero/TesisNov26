@@ -162,6 +162,34 @@ class TestCapture(unittest.TestCase):
             pm.capture_arrays([0.0], [np.zeros((4, 4))])
 
 
+class TestStackStats(unittest.TestCase):
+    """The caption numbers must come from code, not from reading the image."""
+
+    def test_counts_above_the_limit(self):
+        C = np.zeros((2, 2, 2, 2), np.float32)
+        C[0] = 0.5                     # nothing above 1 mg/L
+        C[1, 0, 0, 0] = 4.0            # one cell of eight above
+        st = pm.FieldStack(times=np.array([0.0, 1.0]), C=C, meta={"creg": 1.0})
+        d = pm.stack_stats(st)
+        self.assertAlmostEqual(d["peak"], 4.0, places=6)
+        self.assertAlmostEqual(d["final_peak"], 4.0, places=6)
+        self.assertAlmostEqual(d["final_mean"], 4.0 / 8, places=6)
+        self.assertAlmostEqual(d["final_frac_above_creg"], 1.0 / 8, places=6)
+        self.assertEqual(d["n_frames"], 2)
+        self.assertEqual(len(d["peak_over_time"]), 2)
+
+    def test_creg_override(self):
+        C = np.full((1, 2, 2, 2), 2.0, np.float32)
+        st = pm.FieldStack(times=np.array([0.0]), C=C, meta={})
+        self.assertAlmostEqual(pm.stack_stats(st, creg=1.0)["final_frac_above_creg"], 1.0)
+        self.assertAlmostEqual(pm.stack_stats(st, creg=5.0)["final_frac_above_creg"], 0.0)
+
+    def test_empty_stack(self):
+        st = pm.FieldStack(times=np.array([]), C=np.zeros((0, 0, 0, 0), np.float32),
+                           meta={})
+        self.assertEqual(pm.stack_stats(st), {})
+
+
 class TestAlwaysProducesArtifacts(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile_dir())

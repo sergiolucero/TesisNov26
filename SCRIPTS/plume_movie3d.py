@@ -706,6 +706,32 @@ def _trace(stack: FieldStack, T: int) -> np.ndarray:
     return np.max(stack.C[:T].reshape(T, -1), axis=1)
 
 
+def stack_stats(stack: FieldStack, creg: float | None = None) -> dict:
+    """Quantitative companion to the picture: peak / mean / exceedance in time.
+
+    A maximum-intensity projection answers "where", not "how much"; these numbers
+    answer "how much", so a caption never has to over-read the image.
+    """
+    C = np.asarray(stack.C, dtype=np.float64)
+    if C.size == 0:
+        return {}
+    threshold = float(stack.meta.get("creg", 1.0) if creg is None else creg)
+    per_frame_peak = C.reshape(C.shape[0], -1).max(axis=1)
+    frac_above = (C > threshold).reshape(C.shape[0], -1).mean(axis=1)
+    return {
+        "peak": float(C.max()),
+        "mean": float(C.mean()),
+        "p99": float(np.percentile(C, 99.0)),
+        "final_peak": float(per_frame_peak[-1]),
+        "final_mean": float(C[-1].mean()),
+        "final_frac_above_creg": float(frac_above[-1]),
+        "peak_over_time": per_frame_peak.tolist(),
+        "frac_above_creg_over_time": frac_above.tolist(),
+        "creg": threshold,
+        "n_frames": int(C.shape[0]),
+    }
+
+
 def load_stack(npz_path: Path) -> tuple[FieldStack, FieldStack]:
     """Rebuild the two stacks saved by :func:`make_movie`; no re-solve needed."""
     with np.load(npz_path, allow_pickle=False) as z:

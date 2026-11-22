@@ -305,3 +305,43 @@ LAUNCH GOTCHA (2026-11-21): COLAB_AUTH is unset on this box, so multi_colab defa
 billed). The keyring oauth2 credentials still work: pass --auth oauth2 or export
 COLAB_AUTH=oauth2. Also put --dry-run BEFORE the `--` separator, or it is forwarded to
 collab_run.py and the driver launches for real.
+
+3D SIZE_MID RUN (2026-11-22, out3d_colab/plume3d_size_mid)
+---------------------------------------------------------
+Command:
+  python3 -u full3D_colab_run.py --preset size_mid \
+      --out out3d_colab/plume3d_size_mid --budget 90 --zip
+
+Geometry    40x20x10 = 8000 cells (dx=dy=5.0 m, dz=2.0 m), n_kl=2062 (95.0%),
+            24 train / 48 test scenarios, nsteps=100, 6 partially penetrating wells
+Cost        calibration 25.333 s per full-archive evaluation (24 scenarios),
+            => 0.775 s per scenario (numpy splu).  Run wall clock 4486 s (74.8 min).
+            Scaling vs paper preset (32x16x8, 0.195 s/scenario): 3.4x cost for 2x
+            cells, i.e. ~n^1.9 -- sparse 3D LU fill-in.
+Search      90-min budget clamped max_evals 200 -> 107 per start.  13 candidates
+            per sweep (6 wells), so ~10 sweeps/start and the compass step never
+            halved: start 1 f=5.482e5 (nit=12, 107 evals), start 2 f=5.206e5
+            (nit=10, 107 evals), 214 evaluations total.
+Result      q* = [3.125, 0, 1.5625, 12.5, 12.5, 12.5] (42.19 m3/d, 5 of 6 active)
+            train J 519263 (rel 0.958, CVaR-5%(G) +0.036)
+            test  J 519493 (rel 0.875, CVaR-5%(G) +0.533, mean tau 456 d)
+            gap 0.044%, max mass-balance error 0.0
+            baselines: no pump 303639 (rel 0.000), uniform half-capacity 475393
+            (rel 0.167)
+Gates       5/6 pass.  FAILS test_reliability>=1-alpha-1% (0.875 < 0.94).
+Certificate python3 SCRIPTS/check_tail3d.py --run out3d_colab/plume3d_size_mid \
+                --m-scen 128 --ladder --json .../cert/fresh_128.json
+            fresh draw seeds 900000+: J 519408, mean G -0.552, CVaR +0.444,
+            9/128 violations, reliability 0.9297, Wilson [0.872, 0.963],
+            verdict INCONCLUSIVE (point estimate below the 0.94 gate).
+            Ladder 1/16, 1/24, 3/40, 4/64, 7/100, 9/128 -- flat, so the ~7%
+            violation rate is real and not a draw artifact.
+Reading     Same failure mode as 2D: alpha*M_train = 1.2, so the tail is estimated
+            from about one scenario and the search cannot price the violation it
+            buys.  A converged 3D search needs M_train~100 (78 s/eval) => ~6.5 h
+            per start here, 2 starts ~13 h: do it on the GPU backend or overnight.
+            NOT a resolution study: 'full' and 'size_mid' use different KL bases
+            (819 vs 2062 modes), hence different realisations of K.
+Movie       movies/ with 32 frames; stack_stats on fields.npz final frame:
+            untreated peak 44.8 / mean 2.94 / 35.7% of cells above 1 mg/L;
+            under q* peak 6.0 / mean 0.19 / 6.3%.

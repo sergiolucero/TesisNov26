@@ -142,3 +142,19 @@ cosmetic change (panel width, fps, scale) costs nothing.
   them, chosen for legibility, and labelled `scenario 0 of N` on the frame.
 * The colour bar saturates above the 99.5th percentile. The plume core in the
   untreated panel is often above the top colour; the bar says so.
+
+## 8. Measured example: `plume3d_size_mid` (8,000 cells, 32 frames)
+
+`full3D_colab_run.py --preset size_mid --budget 90` produced, in 4,486 s:
+
+| | untreated | under q\* (42.19 m³/d, 5 of 6 wells) |
+| :--- | ---: | ---: |
+| peak concentration, final frame | 44.8 mg/L | 6.0 mg/L |
+| mean concentration, final frame | 2.94 mg/L | 0.19 mg/L |
+| cells above the 1 mg/L limit | 35.7 % | 6.3 % |
+
+(`SCRIPTS/plume_movie3d.stack_stats` on `movies/fields.npz`, so the numbers are
+reproducible from the artifact rather than read off the image.) The 32-frame
+contact sheet paired with the 0.93 certified reliability reads correctly: the
+policy removes most of the plume but leaves a residual that still reaches the
+compliance point on the violating scenarios.

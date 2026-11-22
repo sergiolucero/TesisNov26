@@ -1092,6 +1092,12 @@ def pattern_search(problem: SAAProblem3D, q0, step0=None, tol=1e-3,
         nit += 1
         if not improved:
             step *= 0.5
+        # Log every sweep.  At 8,000 cells one sweep is ~5 minutes, so without
+        # this line a 45-minute start looks like a hung process -- the same
+        # reason the 2D optimizer logs each iteration.
+        log(f"  [opt] it={nit} evals={evals} step={step:.3g} best={best:.6g} "
+            f"sum_q={q.sum():.2f} active={int((q > 1e-9).sum())} "
+            f"({time.time() - t0:.1f}s)")
     return q, best, nit, hist
 
 
@@ -2102,6 +2108,15 @@ PRESETS = {
                   max_evals=400, n_starts=3, n_wells=9),
     "paperGPU": dict(nx=64, ny=32, nz=16, nsteps=100, m_train=64, m_test=128,
                      max_evals=400, n_starts=3, n_wells=9),
+    # 8,000 cells: 4.6x the "full" preset and 2x "paper" in cell count, at
+    # dx = dy = 5 m, dz = 2 m.  Chosen because ell_x = ell_y = 20 m is then
+    # resolved by 4 cells (it is 2.4 cells at "full"), and a 30 %-of-thickness
+    # screen spans 3 layers (1.8 at "full"), so the vertical structure of a
+    # partially penetrating well is actually represented.  Cost measured on
+    # this machine: 0.78 s per scenario at nsteps=100, i.e. ~19 s per
+    # 24-scenario evaluation, so the search is budget-clamped, deliberately.
+    "size_mid": dict(nx=40, ny=20, nz=10, nsteps=100, m_train=24, m_test=48,
+                     max_evals=200, n_starts=2, n_wells=6, movie_frames=32),
 }
 
 
@@ -2816,7 +2831,8 @@ def build_config(preset: str, overrides: dict) -> dict:
         "max_evals": p["max_evals"], "n_starts": p["n_starts"],
         "max_iter": 60,
         # plume movie: ON by default, never a per-run decision to forget
-        "movie": True, "movie_frames": 24, "movie_stride": 1, "movie_stride_z": 1,
+        "movie": True, "movie_frames": p.get("movie_frames", 24),
+        "movie_stride": 1, "movie_stride_z": 1,
         "seed": 0, "seed_train": 1000, "seed_test": 500000,
     }
     cfg.update(overrides)

@@ -72,9 +72,15 @@ ALL_CHAPTERS = [
     ("current_equations_algorithms", "Equations and algorithms under test"),
     ("plans_2d_3d", "Plans"),
     ("conclusions", "Conclusions"),
+    ("appendix_recourse", "Implementation of the two-stage recourse formulation"),
 ]
 DEFAULT_CHAPTERS = ["introduction", "related_work", "formulation", "optimization",
-                    "results_2d", "results_3d", "conclusions"]
+                    "results_2d", "results_3d", "conclusions", "appendix_recourse"]
+
+# Chapters that are numbered as appendices ("Appendix A"), emitted after an
+# \appendix switch.  Everything in DEFAULT_CHAPTERS that follows the first
+# appendix chapter is one.
+APPENDIX_CHAPTERS = {"appendix_recourse"}
 
 # The thesis is one document with one title; the chapters are written as
 # standalone articles and carry their own, which are dropped like \maketitle.
@@ -596,7 +602,11 @@ def main() -> int:
     # The chapter anchor belongs to the \chapter line, not to whatever \section
     # happens to come first: a \label after a \section numbers 3.1 and
     # "Chapter~\ref{chap:formulation}" then reads "Chapter 3.1".
+    in_appendix = False
     for stem, _body in bodies:
+        if stem in APPENDIX_CHAPTERS and not in_appendix:
+            preamble += ["\\appendix"]
+            in_appendix = True
         preamble += [f"\\chapter{{{titles[stem]}}}\\label{{chap:{stem}}}",
                      f"\\input{{body/{stem}}}"]
     if bib:

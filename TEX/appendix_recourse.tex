@@ -1,0 +1,698 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[round,numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\xx}{\mathbf{x}}
+\newcommand{\qq}{\mathbf{q}}
+\newcommand{\CVaR}{\operatorname{CVaR}}
+\newcommand{\calQ}{\mathcal{Q}}
+
+\title{Appendix A\\
+\large The two-stage recourse formulation:\\
+from the model to the first numerical solutions}
+\author{Sergio Lucero}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Scope}
+
+The thesis solves a \emph{here-and-now} design problem: one rate vector
+$\qq\in\calQ$ is chosen before any information about the conductivity field
+arrives, and it is that single vector that is certified in
+Chapter~\ref{chap:results_2d}. This appendix documents a different model, in
+which the operator observes the aquifer part-way through the remediation and may
+reset the pumping rates afterwards, and it reports everything that was needed to
+compute it: the two-phase discretization, the merged mass ledger, the chained
+discrete adjoint, the progressive hedging loop with nonanticipativity on the
+first stage only, the verification ladder that fixes each of those pieces, and
+the first numerical solutions on a benchmark instance.
+
+The distinction between \emph{model change} and \emph{algorithm change} is the
+reason this appendix exists. Progressive hedging is already derived in
+Chapter~\ref{chap:optimization}: consensus program, augmented Lagrangian,
+multiplier update, adaptive penalty, and the caveats about nonconvexity. What
+that chapter cannot do is exhibit a decomposition, because on a here-and-now
+program the scenario copies of the decision are all the same nine numbers and the
+consensus step is an average. Here the program has $n_w$ shared first-stage rates
+and $n_w$ recourse rates \emph{per scenario}, so nonanticipativity is a real
+constraint on a strict subset of the variables, and the decomposition has
+something to decompose. Section~\ref{sec:appx-model} writes the model,
+Sections~\ref{sec:appx-disc}--\ref{sec:appx-ph} the implementation, and
+Section~\ref{sec:appx-numbers} the numbers, including a case in which the
+two-stage model does \emph{not} pay and the diagnostics that say why.
+
+\paragraph{One convention.} Every number in this appendix comes from
+\texttt{configs/opt/benchmark\_160x80.yaml}, a $160\times80$ refinement of the
+benchmark (Section~\ref{sec:appx-bench}), not from the $160\times96$ instance
+with $\sigma=0.65$, $\ell=15\,\mathrm{m}$ and a $120\,\mathrm{m}$-wide domain
+that carries Chapter~\ref{chap:results_2d} and whose certified cost is
+$433\,945$. The instance differs in the conductivity statistics and in the
+domain, so the costs below are \emph{not} comparable to
+Chapter~\ref{chap:results_2d}; they are comparable to each other, which is what a
+two-stage comparison needs.
+
+% ---------------------------------------------------------------------------
+\section{The model}
+\label{sec:appx-model}
+
+The horizon $[0,T]$ is cut at an observation time $t_{\mathrm{obs}}\in(0,T)$.
+Rates are held constant within each phase: $\qq^{1}$ on $[0,t_{\mathrm{obs}})$
+and $\qq^{2}$ on $[t_{\mathrm{obs}},T]$, with $\qq^{1}\in\mathbb{R}^{n_w}$ chosen
+before anything is observed and $\qq^{2}\in\mathbb{R}^{n_w}$ chosen after. The
+information available at $t_{\mathrm{obs}}$ is the measured concentration and
+head field, in practice a handful of probes; in the discretization below the
+second-stage decision is indexed by the scenario, which is the
+\emph{anticipative} relaxation discussed in Section~\ref{sec:appx-caveats} and
+gives an upper bound on what adaptivity is worth.
+
+With $\xi$ the random log-conductivity, the program is
+\begin{equation}
+\begin{aligned}
+(\mathrm{P}_2)\qquad
+\min_{\qq^{1}\in\calQ}\quad
+& \E_{\xi}\bigl[J(\qq^{1},\qq^{2}(\xi),\xi)\bigr]
+  +\rho_g\Bigl[\CVaR_{\alpha}\bigl(G(\qq^{1},\qq^{2}(\cdot),\cdot)\bigr)\Bigr]_+^{2}
+  +\rho_h\Bigl[\CVaR_{\alpha_h}\bigl(-H(\qq^{1},\qq^{2}(\cdot),\cdot)\bigr)\Bigr]_+^{2}
+\\
+& \qq^{2}(\xi)\in\calQ \quad\text{for every }\xi,
+\qquad
+G(\qq^{1},\qq^{2}(\xi),\xi)=\max_{t\ge t_0}c(\xx_c,t)-\bar c,
+\end{aligned}
+\label{eq:appx-p2}
+\end{equation}
+with the same cost $J$, the same compliance functional $G$, the same drawdown
+margin $H$ and the same penalties $\rho_g,\rho_h$ as the here-and-now program
+(P) of Chapter~\ref{chap:introduction}. Only two things change: the decision is a
+pair $(\qq^{1},\qq^{2}(\xi))$ instead of a single vector, and the cost of pumping
+in the second phase is incurred at the second-phase rates.
+
+Two consequences are worth stating before any code.
+
+\paragraph{(P$_2$) contains (P).} Setting $\qq^{2}(\xi)=\qq^{1}$ for every $\xi$
+returns a feasible point of $(\mathrm{P}_2)$ with exactly the value of the
+here-and-now program. Hence $F_2^\star\le F_1^\star$ and any run that reports
+the reverse has a convergence or implementation error, not a modelling insight.
+Section~\ref{sec:appx-numbers} uses this monotonicity as a diagnostic and reports
+one instance where it is not yet attained.
+
+\paragraph{The value of the extra freedom is measurable.} With $\mathrm{RP}$ the
+optimal value of $(\mathrm{P}_2)$, $\mathrm{EEV}$ the value of the
+expected-value (mean-field) design re-evaluated on the true ensemble, and
+$\mathrm{WS}$ the wait-and-see value of a program solved separately for each
+scenario \citep{birge2011},
+\begin{equation}
+\operatorname{VSS}=\mathrm{EEV}-\mathrm{RP},
+\qquad
+\operatorname{EVPI}=\mathrm{RP}-\mathrm{WS}.
+\label{eq:appx-vss}
+\end{equation}
+Neither number is available for the here-and-now model, and both are what a
+reviewer of a stochastic-programming paper asks for first. The caveat that comes
+with them here --- that a mean-field design can be \emph{infeasible} on the
+ensemble, in which case $\mathrm{EEV}$ is a lower bound and VSS is not
+interpretable --- is enforced in the runner rather than left to the reader
+(Section~\ref{sec:appx-numbers}).
+
+% ---------------------------------------------------------------------------
+\section{Two phases, one horizon}
+\label{sec:appx-disc}
+
+\subsection{Why the simulator had to be split, not rewritten}
+
+The transport solver advances a single rate vector over a fixed horizon: the
+advection operator is assembled once from the steady flow field induced by
+$\qq$, and the time loop reuses it at every step. A rate change at
+$t_{\mathrm{obs}}$ therefore invalidates the operator, not just the initial
+condition. The implementation takes the cheapest correct route: run the solver
+twice. The first call integrates $[0,t_{\mathrm{obs}})$ at $\qq^{1}$; the second
+integrates $[t_{\mathrm{obs}},T]$ at $\qq^{2}$ with the first call's final
+concentration as its initial condition, which the solver already accepts (a
+\texttt{c\_init} argument, added for the sandbox experiments of
+Chapter~\ref{chap:formulation} and never used by the thesis until now).
+
+The split is described by a small tuple: the number of steps in each phase
+($n_a=\mathrm{round}(t_{\mathrm{obs}}/\Delta t)$, $n_b=n-n_a$), the phase
+durations, and how many source steps fall in each phase. The last entry is a
+correctness trap: the source is active for a fixed number of steps at the start
+of the horizon, and a naive split restarts it in the second phase, injecting mass
+that the single-phase run never injects. The rule implemented is that
+unconsumed source steps carry over,
+$n^{\mathrm{src}}_b=\max(0,n^{\mathrm{src}}-n_a)$, so a split at step $50$ of a
+$100$-step run whose source is active for $10$ steps gives
+$n^{\mathrm{src}}_a=10$, $n^{\mathrm{src}}_b=0$. On the benchmark this is the
+case that matters: the source runs for $365$ days and the observation is at
+$1825$ days.
+
+\subsection{Merging the two results}
+
+Both calls return a full result object; the two-stage cost needs them as one.
+Four merge rules, in order of how easy they are to get wrong.
+
+\paragraph{Fields and records.} \texttt{C\_well} and \texttt{C\_record} are
+per-step records with one row per step, so they concatenate directly. The
+concentration \emph{fields} do not: the second call's first field is the first
+call's last field, and concatenating both would duplicate the split state. The
+merged array is $\texttt{C\_fields}_a$ followed by $\texttt{C\_fields}_b[1:]$,
+and the merged time axis repeats the same treatment.
+
+\paragraph{The mass ledger has three kinds of entries.} This is the rule that
+cost a full debugging session, so it is stated flatly: \texttt{total} is the
+absolute stored mass at each step, a \emph{state}; \texttt{source},
+\texttt{well}, \texttt{outflow} and \texttt{decay} are \emph{cumulative}
+integrals from the start of the run. Because the second phase restarts from the
+first phase's final state, \texttt{total} concatenates with \emph{no} offset and
+the four integrals take the first phase's last value as an offset. Offsetting
+\texttt{total} as well double-counts the carried mass and produces a mass-balance
+error around $0.79$ on a run that is physically exact to machine precision ---
+which is exactly how it was noticed.
+
+\paragraph{Final state and the well ledger.} \texttt{C\_final} is the second
+phase's final field, and the scalar \texttt{integrated\_well\_mass} is summed
+across the phases and then reset to the merged well integral, so that it stays
+consistent with the ledger it summarises.
+
+\paragraph{Verification.} The merged result must reproduce the single-phase
+result when $\qq^{2}=\qq^{1}$, exactly, not approximately. It does: the maximum
+absolute difference in $C_{\mathrm{final}}$, in $C_{\mathrm{record}}$, in the
+well concentration history and in the merged time axis are all $0.0$ (bitwise
+identical, since the two calls execute the same floating-point operations), and
+the merged mass balance error is $-8.7\times10^{-16}$. Table~\ref{tab:appx-ver}
+collects this and the rest of the ladder.
+
+\subsection{The objective, reassembled}
+
+The cost functional is time-additive only in appearance. Pumping energy is a
+power times a duration, treatment is a flow-weighted integral of the extracted
+concentration, and the residual-mass and clean-up-time terms read the final state.
+With two rate blocks the first two terms split:
+\begin{align}
+J_{\text{pump}} &= c_e\bigl(\textstyle\sum_i q^1_i\,T_a+\sum_i q^2_i\,T_b\bigr),
+&
+J_{\text{treat}} &= c_w\,\Delta t\Bigl(\sum_{n<n_a} \qq^{1}\!\cdot\! C^{\text{well}}_n
++\sum_{n\ge n_a} \qq^{2}\!\cdot\! C^{\text{well}}_n\Bigr),
+\label{eq:appx-cost}
+\end{align}
+whereas $J_{\text{res}}$ and $J_{\text{time}}$ are evaluated on the merged final
+field and the merged violation trace exactly as in the single-phase objective, so
+they need no new code but must not be evaluated on either phase alone.
+
+The drawdown margin needs one genuinely new line: the heads are computed from
+$\qq^{1}$ and $\qq^{2}$ separately (flow is linear in the rates, so this is two
+cheap flow solves), and the margin that binds is the elementwise minimum of the
+two head fields at the observation cells. Taking the minimum is what makes the
+penalty on $H$ a statement about the whole horizon rather than about its second
+half.
+
+% ---------------------------------------------------------------------------
+\section{The adjoint across the split}
+\label{sec:appx-adj}
+
+The thesis built a discrete adjoint and then did not use it
+(Chapter~\ref{chap:results_3d}); the two-stage model is the first place where it
+is genuinely needed, because progressive hedging solves $M$ small nonlinear
+programs per iteration --- $18$ variables each, but expensive function
+evaluations --- and a derivative-free inner solve would multiply the cost of the
+whole campaign by an order of magnitude.
+
+Two facts make the chaining exact rather than approximate.
+
+\emph{The step is linear in the concentration.} The transport step has the form
+$C_{n+1}=\bigl(A_{\text{adv}}(\mathbf v(\qq))+A_{\text{disp}}+\mathrm{diag}(\sigma_t+\lambda+\textstyle\sum_i q_i w_i)\bigr)^{-1}C_n$
+with $\mathbf v$ linear in $\qq$ and $w_i$ the unit-rate well footprints, so the
+discrete adjoint of the phase-$B$ objective with respect to its own initial
+condition is a single linear solve, and the multiplier that phase $B$ produces at
+its first step is exactly the terminal condition phase $A$ needs. Passing it in
+is all the coupling required; the temporal factor $\sigma_t$ is applied inside
+the recursion in both phases and therefore needs no special handling at the
+interface.
+
+\emph{Everything else is phase-local.} The compliance cell index, the well
+footprints and the response weights depend on the geometry and the scenario, not
+on the phase, so the two sweeps share the same preprocessing and differ only in
+the upwind velocities (from $\qq^{1}$ and $\qq^{2}$) and in the terminal cost.
+The derivative with respect to $\qq^{2}$ accumulates in phase $B$; the derivative
+with respect to $\qq^{1}$ accumulates in phase $A$ \emph{plus} the phase-$B$
+contribution, which arrives through the terminal multiplier and needs no separate
+term.
+
+\paragraph{The indexing trap.} The merged violation trace is indexed globally, but
+the phase-$B$ adjoint array is indexed locally: a violation at global step $n\ge
+n_a$ must be injected at row $n-n_a$ of phase $B$'s tile. The first implementation
+used the global index and raised an index error only when a violation happened to
+land in the second phase --- a bug invisible on the runs where the maximum
+violation occurred early. Both the branch and the fix are covered by a finite-
+difference test at two different split points.
+
+\paragraph{Verification.} Central differences on a joint direction, with a
+relative step of $10^{-4}$, agree with the adjoint to
+$2.6\times10^{-9}$ in $J$ and $1.4\times10^{-10}$ in $G$ at a split at step $20$,
+and to $2.6\times10^{-9}$ and $1.1\times10^{-11}$ at a split at step $13$
+(Table~\ref{tab:appx-ver}). The cost of the gradient is one extra transport solve
+per phase and is independent of $n_w$: adding wells costs nothing in the adjoint.
+
+% ---------------------------------------------------------------------------
+\section{Progressive hedging on the two-stage model}
+\label{sec:appx-ph}
+
+\subsection{What nonanticipativity means here}
+
+The consensus variable is the first-stage vector $\qq^{1}$ only. The
+implementation carries a mask that is one on the first $n_w$ coordinates and zero
+on the recourse block, and applies it in exactly two places: the multiplier
+update $\lambda_m\leftarrow\lambda_m+r(\qq^{m}-\bar\xx)$ prices disagreement on
+the shared block alone, and the reported consensus residual is computed on that
+block alone. Per-scenario recourse rates are free to differ; that freedom is the
+model.
+
+\subsection{The loop}
+
+\begin{algorithm}[t]
+\caption{Progressive hedging for $(\mathrm{P}_2)$ with a CVaR chance constraint}
+\label{alg:appx-ph}
+\begin{algorithmic}[1]
+\State $\qq^{m}\gets\text{initial }(\qq^{1}_0,\qq^{1}_0)$ for all $m$;
+       $\lambda_m\gets0$; $r\gets r_{\text{auto}}$
+\For{$\text{outer}=1,\dots,\text{max\_outer}$}
+  \State evaluate the hedged policy on all $M$ scenarios: $J_m,G_m,H_m$
+  \State $(\kappa,w)\gets\CVaR_{\alpha}\bigl(G_{1:M}\bigr)$;\quad
+         $h\gets2\rho_g\max(\kappa+s,0)$ \Comment{$s\ge0$ is the DRO slack (0 here)}
+  \For{$m=1,\dots,M$}
+     \State $\qq^{m}\gets\arg\min_{\qq\in\calQ}\;
+        J_m(\qq)+h\,w_m G_m(\qq)+\lambda_m^{\!\top}\qq+\tfrac r2\lVert\qq-\bar\xx^{\text{prev}}\rVert^2$
+        \Comment{projected gradient, $\le$ \texttt{inner} steps, backtracking}
+  \EndFor
+  \State $\bar\xx\gets\frac1M\sum_m\qq^{m}$;\quad
+         $\lambda_m\gets\lambda_m+r(\qq^{m}-\bar\xx)\odot\mathsf{mask}$;\quad
+         project $\bar\xx$ onto $\calQ$
+  \State record $\lVert\bar\xx^{\text{prev}}-\bar\xx\rVert$, $\lVert\qq^{m}-\bar\xx\rVert$;
+         stop if both are below tolerance
+  \State $r\gets\min(r_{\max},r_{\text{growth}}\,r)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+Three details of the implementation are not in the textbook description of
+\citet{rockafellar1991} and are worth recording.
+
+\paragraph{The CVaR term is linearised, not dualised.} The exact augmented
+Lagrangian would carry the risk coupling through a shared auxiliary variable or a
+dual on the CVaR constraint. Here the weights $w_m$ and the hinge multiplier $h$
+are computed once per outer iteration at the consensus point and frozen while the
+$M$ subproblems are solved, which makes each subproblem a differentiable
+surrogate of the exact one and makes the outer iteration a Gauss--Seidel sweep
+over the linearisation. The consequence is stated as a limitation, not hidden:
+the fixed point the loop converges to satisfies the coupled optimality
+conditions only up to the linearisation error, and the error is largest when the
+tail is thin (Section~\ref{sec:appx-caveats}). A Pyomo model that carries the
+$M+1$ coupled conditions exactly is included in the implementation
+(\texttt{build\_pyomo\_model}) but has not been solved at benchmark scale.
+
+\paragraph{The proximal penalty scales itself.} $r$ is chosen once from a probe
+gradient at the initial consensus point,
+$r=\mathrm{clip}\bigl(\rho_g\max_i|\partial G/\partial q_i|/\bar q,10^{-6},r_{\max}\bigr)$,
+and then grown geometrically. On the benchmark this gives $r\approx8.0\times10^4$
+from $\max_i|\partial G/\partial q_i|=4.0$, against $r\approx1.0\times10^5$ for the
+here-and-now run. Both numbers matter for reproducing the results: the value of
+$r$ decides how fast the copies are pulled together and therefore how many outer
+iterations are needed for the recourse block to exploit its freedom.
+
+\paragraph{The subproblem is solved by projected gradient with backtracking.} Each
+subproblem minimises over an $18$-dimensional box intersected with a capacity
+simplex, with an exact gradient from Section~\ref{sec:appx-adj}. The step starts
+at a fixed fraction of the admissible range scaled by the gradient's infinity
+norm, is halved on rejection and grown by $1.5$ on acceptance, and stops when the
+scaled step falls below $10^{-10}$ of the range or the point is pinned by the
+boundary. Six inner steps per subproblem are enough at benchmark scale because
+the warm start from the previous iterate is close.
+
+\subsection{Two reporting traps}
+
+\paragraph{The consensus vector is not a policy.} $\bar\xx$ is the average of the
+$M$ scenario copies, so its recourse block is the \emph{ensemble mean} of the
+second-stage rates. Evaluating $\bar\xx$ as if it were a decision re-collapses
+the model to a single vector applied in both phases --- the two-stage run then
+looks \emph{worse} than the one-stage run while being, in fact, a different and
+easier problem. The diagnostic that caught this was a table where the two-stage
+value exceeded the one-stage value on the same scenarios, which
+Section~\ref{sec:appx-model} says is impossible. The reported policy is
+therefore the hedged vector $(\bar\qq^{1},\qq^{2}_m)$ for scenario $m$, and the
+implementation exposes it as one function so that no caller can get it wrong.
+
+\paragraph{Certification needs the recourse re-solved.} The scenario copies
+carried by the algorithm are optimal for the \emph{training} scenarios at the
+moment the loop stopped, not for a fresh one. Certifying a two-stage policy on
+the test ensemble therefore re-solves the recourse block for each test scenario
+with the first stage held fixed, which is the deployable operation (observe, then
+re-optimise what is left) and is what the numbers in
+Section~\ref{sec:appx-numbers} report. The distinction is not cosmetic: on the
+benchmark the two-stage policy scores reliability $0.825$ on the training
+ensemble with the algorithm's own copies and $0.950$ on the test ensemble with
+re-solved recourse.
+
+% ---------------------------------------------------------------------------
+\section{Verification}
+\label{sec:appx-ver}
+
+Each piece above has a test that fails loudly if it is wrong, on a deliberately
+small fixture: a $16\times8$ grid, $40$ steps, two or three scenarios, two wells,
+so that a wrong answer is a wrong answer and not a floating-point argument. The
+ladder is ordered so that each rung depends only on the ones above it.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+Rung & What it fixes & How, and the result \\
+\midrule
+1 & phase split & split at $0$ or $n$ steps must be rejected, and source steps
+  must carry over to the second phase: the check raises, and
+  $n^{\text{src}}_b=0$ at split $20$, $n^{\text{src}}-3$ at split $3$ \\
+2 & merge and parity & run two phases with $\qq^{2}=\qq^{1}$ and compare with the
+  single-phase run: $C_{\text{final}}$, $C_{\text{record}}$, the time axis, $J$,
+  $G$ and $\tau$ agree to $\Delta=0.0$ \\
+3 & mass ledger & the balance identity is re-checked on the merged ledger:
+  $\lvert\cdot\rvert=-8.7\times10^{-16}$ \\
+4 & chained adjoint & central differences on a joint direction with
+  $\delta=10^{-4}$ at two split points: rel.\ $J=2.6\times10^{-9}$, rel.\
+  $G=1.4\times10^{-10}$ \\
+5 & gradients reach both phases & perturb $\qq^{1}$ and $\qq^{2}$ separately:
+  both partial derivatives are nonzero and they differ \\
+6 & degenerate limit & with $M=1$, compare against a well-converged direct solve:
+  PH is no worse, and $F=\E[J]+\rho_g[\CVaR]_+^{2}$ holds \\
+7 & recourse is worth something & fix $\qq^{1}$ and re-optimise the recourse per
+  scenario: $\CVaR$ falls $39.6\to2.0$ for $+7.0\%$ in $\E[J]$ \\
+\bottomrule
+\end{tabularx}
+\caption{Verification ladder for the two-stage implementation, on the small
+fixture of the test suite. Rungs 1--6 are regression tests in the repository;
+rung 7 is a diagnostic reported here.}
+\label{tab:appx-ver}
+\end{table}
+
+Rung 7 is the one that shows the mechanism working before any optimization is
+attempted: with $\qq^{1}=[5,0]$ fixed on the fixture, re-optimising the recourse
+block in each scenario improves $\CVaR_{5\%}(G)$ from $39.57$ to $2.02$ while
+increasing expected cost by $7.0\%$. That is the trade the two-stage model exists
+to make, and the optimization's job is to find where the trade is worth taking.
+
+% ---------------------------------------------------------------------------
+\section{First numerical solutions}
+\label{sec:appx-numbers}
+
+\subsection{The instance}
+\label{sec:appx-bench}
+
+$200\times100$\,m on $160\times80$ cells ($12\,800$ unknowns), log-normal
+conductivity with $\sigma=0.5$ and isotropic correlation length
+$\ell=20$\,m truncated at $95\%$ of the variance, nine candidate wells on a
+hexagonal lattice with $0\le q_i\le50$\,m$^3$/d and
+$\sum_i q_i\le200$\,m$^3$/d, a source of $10$\,m$^3$/d at $100$\,mg/L for
+$365$\,d, a single compliance point at $(185,50)$ with $\bar c=1.0$\,mg/L and a
+late-time window starting at $80\%$ of the horizon, one drawdown observation at
+$(100,50)$ with $h_{\min}=-10$\,m, $\Delta t=36.5$\,d and $n=100$ steps
+($T=3650$\,d), $M_{\text{train}}=40$, $M_{\text{test}}=80$,
+$\alpha=0.05$, $\rho_g=10^6$. The observation time for the two-stage run is
+mid-horizon, $t_{\mathrm{obs}}=50$ steps $=1825$\,d.
+
+\subsection{Value of recourse}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}l l l X@{}}
+\toprule
+ & here-and-now (P) & two-stage (P$_2$) & \\
+\midrule
+outer iterations & 13 (converged) & 16 (not converged) & tol.\ $2\times10^{-2}$ / $10^{-3}$ \\
+scenario evaluations & 7\,257 & 9\,603 & one per scenario per subproblem step \\
+wall time & 8\,164\,s (2.27\,h) & 11\,693\,s (3.25\,h) & one core, no parallelism \\
+\midrule
+train $\E[J]$ & 422\,165 & 391\,099 & $M=40$ \\
+train $\CVaR_{5\%}(G)$ & $+0.230$ & $+2.034$ & train tail is pessimistic (see text) \\
+train reliability & 0.950 & 0.825 & hedged policy, algorithm's own copies \\
+\midrule
+test $\E[J]$ & 422\,068 & 393\,432 & $M=80$, unseen seeds \\
+test reliability & 77/80 $=0.963$ & 76/80 $=0.950$ & Wilson $[0.895,0.987]$ / $[0.878,0.980]$ \\
+test $\CVaR_{5\%}(G)$ & $+0.278$ & $+0.064$ & not resolvable at $M=80$ \\
+\bottomrule
+\end{tabularx}
+\caption{The same instance solved twice. The two-stage policy costs $6.8\%$ less
+in expectation on unseen scenarios at one fewer compliant scenario, and requires
+$43\%$ more computation. Both satisfy the $0.94$ reliability gate of
+Chapter~\ref{chap:results_2d}.}
+\label{tab:appx-bench}
+\end{table}
+
+Table~\ref{tab:appx-bench} is the result this appendix exists to report. On the
+$80$ scenarios neither run has seen, the two-stage policy costs
+$393\,432$ against $422\,068$ for the here-and-now policy --- $6.8\%$ of expected
+cost, or $28\,600$ in the units of $J$ --- while giving up one compliant scenario
+out of eighty. Both pass the gate; the Wilson intervals overlap, so the honest
+statement is that the cost difference is resolved and the reliability difference
+is not.
+
+\paragraph{What the second stage actually does.} The first-stage rates are
+\[
+\qq^{1}=[1.62,\ 0.54,\ 0.05,\ 5.72,\ 0.00,\ 0.13,\ 0.00,\ 0.00,\ 0.44],
+\qquad \textstyle\sum_i q^1_i=8.5\ \mathrm{m^3/d},
+\]
+and the scenario-mean recourse rates are
+\[
+\overline{\qq^{2}}=[1.87,\ 0.60,\ 0.71,\ 0.38,\ 1.89,\ 0.27,\ 0.13,\ 0.01,\ 0.02],
+\qquad \textstyle\sum_i \bar q^2_i=5.9\ \mathrm{m^3/d}.
+\]
+The interpretation is not the one a first reading suggests. The two-stage design
+pumps \emph{half} as much in the first phase as the here-and-now design
+($8.5$ against $15.6$\,m$^3$/d), and it moves the duty between wells after the
+observation: well 4 carries $5.72$\,m$^3$/d in phase $A$ and between $0.32$ and
+$1.13$ in phase $B$, while well 5 carries nothing in phase $A$ and between
+$1.71$ and $3.93$ in phase $B$. The recourse is a relocation of pumping towards
+the wells that the observed plume actually requires, which is the qualitative
+behaviour the 2001 formulation was reaching for and could not compute.
+
+\paragraph{The train tail overstates, again.} The training-ensemble CVaR of the
+two-stage policy is $+2.03$, an order of magnitude above the here-and-now run's
+$+0.23$, and enough to dominate the reported penalised objective
+($4.5\times10^6$, of which $4.1\times10^6$ is the penalty). On the test ensemble
+the same policy has $\CVaR_{5\%}(G)=+0.064$. This is the phenomenon of
+Chapter~\ref{chap:results_2d} reappearing in a new place: a $5\%$ tail of $40$
+training scenarios is an average over two realizations, and it is not a property
+of the policy. It also means the \emph{reported penalised objective} of a
+two-stage run is not comparable across runs the way $\E[J]$ and reliability are,
+because it contains a term that is a property of the sample.
+
+\paragraph{Where the two-stage run has not converged.} The one-stage run met its
+tolerances at outer iteration $13$ (consensus residual $1.7\times10^{-2}$ against
+$2\times10^{-2}$, step $6.6\times10^{-4}$ against $10^{-3}$). The two-stage run
+stopped at its budget of $16$ with a consensus residual of
+$5.9\times10^{-2}$, three times its tolerance, and was still improving: the
+reported value is therefore an upper bound on $F_2^\star$, and the $6.8\%$ gap is
+a lower bound on the value of recourse.
+
+\subsection{Where it does not pay, and why}
+
+The small fixture tells the opposite story, and the contrast is the most useful
+diagnostic in this appendix. On the fixture ($40$ steps, three scenarios,
+$\alpha=0.34$ so $\alpha M\approx1$, every scenario violating by
+$G\approx20$--$60$ in violation units), the two-stage loop is not reliably
+better than the here-and-now loop and is unstable across budgets:
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}l l l l X@{}}
+\toprule
+budget & one-stage $F$ & two-stage $F$ & ratio & two-stage status \\
+\midrule
+$4\times3$ & 111\,288 & 212\,021 & 1.905 & not converged \\
+$12\times8$ & 107\,574 & 110\,212 & 1.025 & not converged \\
+$20\times8$ & 107\,569 & 119\,836 & 1.114 & not converged (13 vs 20 outers) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Two mechanisms explain it, and both are properties of the fixture rather than of
+the model. With $\alpha M\approx1$ the frozen CVaR weights place essentially the
+entire risk burden on a single scenario, so the other subproblems minimise cost
+alone and their violations drift; and because every scenario violates deeply,
+the exact penalty is large enough that the linearisation error of
+Section~\ref{sec:appx-ph} is not small. The unit-test configuration (two
+scenarios, tighter capacities, $12\times8$) does show the expected ordering ---
+$F_2=108\,015$ against $F_1=115\,301$, a $6.3\%$ improvement, with the
+first-stage rates $[0.10,7.60]$ against the one-stage $[10.0,2.60]$ --- which is
+why the monotonicity of Section~\ref{sec:appx-model} is a test and not a claim
+about magnitude. The benchmark, with $\alpha M=2$ and a tail that is thin but not
+degenerate, is where the mechanism pays.
+
+\subsection{Value of information}
+
+On the fixture the runner also computes the standard trio of
+\eqref{eq:appx-vss}. The expected-value design is
+$\qq_{\text{ev}}=[0,1.5]$ with $\E[J]=100\,677$ and reliability $0$; the
+recourse-problem value is $\E[J]=105\,681$; the wait-and-see value is
+$104\,708$. So $\mathrm{EVPI}=+973$ and $\mathrm{VSS}=-5004$, i.e.\ negative ---
+which is the documented case in which the mean-field design is infeasible on the
+ensemble and $\mathrm{EEV}$ is a lower bound on the cost of any feasible policy.
+The runner reports the status alongside the number for exactly this reason, and
+at benchmark scale the VSS/EVPI block has not been run yet; it is the next
+computation, not a result.
+
+% ---------------------------------------------------------------------------
+\section{Costs}
+\label{sec:appx-cost}
+
+Three numbers govern any budget built on this code.
+
+\paragraph{One scenario evaluation.} On the benchmark instance, a forward plus
+adjoint solve at one scenario and one candidate costs $2.0$\,s for the
+single-phase objective and $2.2$\,s for the two-phase objective (two transport
+calls, chained adjoint) on one core in NumPy. The second phase is cheap because
+the flow solves are linear in the rates and are reused.
+
+\paragraph{One outer iteration.} $(1+\texttt{inner})M$ scenario evaluations when
+no backtracking occurs, with the observed counts on this instance between $450$
+and $750$ --- the excess over $280$ is backtracking and the consensus
+re-evaluation. At $2.2$\,s this is $16$--$28$ minutes per outer iteration, which
+is why $16$ outer iterations cost $3.25$\,h.
+
+\paragraph{Threads, not processes.} Multi-threaded BLAS is actively harmful here:
+the same evaluation takes $5.28$\,s at eight OMP threads and $2.02$\,s at one, a
+$2.6\times$ penalty from oversubscription in the vectorised inner loops. All
+runners therefore pin the thread count to one and the scaling route is a process
+per scenario set, which is not implemented: the sparse factorizations in the
+archive are not picklable, so a worker must rebuild its own scenarios and pay one
+flow solve per scenario before it starts.
+
+% ---------------------------------------------------------------------------
+\section{Limitations}
+\label{sec:appx-caveats}
+
+\begin{enumerate}
+\item \textbf{The recourse is anticipative.} Indexing $\qq^{2}$ by the scenario
+  lets the second stage see the realized field, whereas an operator sees only the
+  state at $t_{\mathrm{obs}}$. The measured value of recourse is therefore an
+  upper bound, and the implementable object is a decision rule
+  $\qq^{2}=\pi(\text{observation})$ --- an affine rule in the observed
+  concentrations is the obvious next step, and it is also the setting in which
+  the value of the two-stage model would have to be re-measured before it is
+  claimed.
+\item \textbf{The CVaR coupling is linearised.} Section~\ref{sec:appx-ph}: the
+  fixed point is exact for the consensus term and inexact for the risk term, with
+  the error largest when $\alpha M\lesssim2$. The exact coupled program is
+  written (\texttt{build\_pyomo\_model}: shared first stage, nonanticipativity
+  rows, CVaR epigraph with common $\eta$, external function for the PDE) but has
+  not been solved with a general-purpose NLP solver, so the two implementations
+  have not been compared.
+\item \textbf{One instance, one seed, one observation time.} Table~\ref{tab:appx-bench}
+  is $M_{\text{test}}=80$ from a single seed base; the Wilson intervals are wide
+  and the cost difference is not paired across seeds. The observation time
+  ($1825$\,d) is a choice, not an optimization: a sweep over
+  $t_{\mathrm{obs}}\in\{0.25,0.5,0.75\}\,T$ is the natural third axis.
+\item \textbf{The two-stage run did not converge} within $16$ outer iterations,
+  so the $6.8\%$ is a lower bound on the benefit and the cost comparison
+  ($2.27$ against $3.25$\,h) is the comparison at unequal convergence.
+\item \textbf{Two dimensions only.} The phase-split machinery is written against
+  the two-dimensional solver; the three-dimensional solver would need the same
+  merge rules over different tensors, and its cost per evaluation
+  (Chapter~\ref{chap:results_3d}) is the reason it was not attempted here.
+\end{enumerate}
+
+% ---------------------------------------------------------------------------
+\section{Reproduction}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+File & Role \\
+\midrule
+\texttt{stoch/recourse.py} & phase split, merged ledger, two-phase objective,
+  \texttt{TwoStageOracle}, finite-difference gradient check \\
+\texttt{stoch/adjoint.py} & \texttt{two\_phase\_gradients}: chained sweep with a
+  terminal multiplier \\
+\texttt{stoch/pha.py} & progressive hedging, hedged-policy reporting, wait-and-see,
+  VSS/EVPI, recourse re-solve, Pyomo audit model \\
+\texttt{SCRIPTS/run\_pha.py} & command-line driver (\texttt{--mode one|two},
+  \texttt{--vss}, \texttt{--t-obs-frac}) \\
+\texttt{tests/test\_two\_phase.py} & rungs 1--5 of Table~\ref{tab:appx-ver} \\
+\texttt{tests/test\_pha.py} & rung 6, VSS non-negativity, degenerate limit \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+{\small
+\begin{verbatim}
+# here-and-now (parity) run: 2.27 h on one core
+python3 SCRIPTS/run_pha.py --config configs/opt/benchmark_160x80.yaml \
+  --mode one --max-outer 20 --inner 6 --out out/research/pha-one
+
+# two-stage run, observation at mid-horizon: 3.25 h on one core
+python3 SCRIPTS/run_pha.py --config configs/opt/benchmark_160x80.yaml \
+  --mode two --max-outer 16 --inner 6 --t-obs-frac 0.5 \
+  --test-recourse 8 --out out/research/pha-two
+
+# verification ladder only (seconds)
+python3 tests/run_tests.py
+\end{verbatim}
+}
+
+Each run writes \texttt{metrics.json}, \texttt{history.jsonl} (one record per
+outer iteration: consensus residual, step norm, $\E[J]$, $\CVaR$, reliability,
+evaluation count, iterate) and \texttt{run\_config.json} (git SHA, seeds, device,
+wall time) into the output directory, so every number in
+Table~\ref{tab:appx-bench} can be re-derived from the artifacts rather than from
+this text.
+
+\begin{thebibliography}{9}
+
+\bibitem[Birge and Louveaux(2011)]{birge2011}
+J.~R. Birge and F.~Louveaux.
+\textit{Introduction to Stochastic Programming}.
+Springer, New York, 2nd edition, 2011.
+
+\bibitem[Kleywegt et~al.(2002)]{kleywegt2002}
+A.~J. Kleywegt, A.~Shapiro, and T.~Homem-de-Mello.
+The sample average approximation method for stochastic discrete optimization.
+\textit{SIAM Journal on Optimization}, 12(2):479--502, 2002.
+
+\bibitem[Rockafellar and Uryasev(2000)]{rockafellar2000}
+R.~T. Rockafellar and S.~Uryasev.
+Optimization of conditional value-at-risk.
+\textit{Journal of Risk}, 2(3):21--41, 2000.
+
+\bibitem[Rockafellar and Wets(1991)]{rockafellar1991}
+R.~T. Rockafellar and R.~J.-B. Wets.
+Scenarios and policy aggregation in optimization under uncertainty.
+\textit{Mathematics of Operations Research}, 16(1):119--147, 1991.
+
+\bibitem[Shapiro et~al.(2009)]{shapiro2009}
+A.~Shapiro, D.~Dentcheva, and A.~Ruszczy\'nski.
+\textit{Lectures on Stochastic Programming: Modeling and Theory}.
+SIAM, Philadelphia, 2009.
+
+\bibitem[Watson and Woodruff(2011)]{watson2011}
+J.-P. Watson and D.~L. Woodruff.
+Progressive hedging innovations for a class of stochastic mixed-integer
+resource allocation problems.
+\textit{Computational Management Science}, 8(4):355--370, 2011.
+
+\end{thebibliography}
+
+\end{document}

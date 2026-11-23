@@ -282,7 +282,26 @@ pumping cost 821,250).
 
 ---
 
-### 2.4 Three dimensions: the first certified policy at 8,000 cells
+### 2.4 Three dimensions: two certified policies, after a bug worth trusting the method for
+
+> **Correction (2026-11-23).** Everything in this section below the next two
+> paragraphs describes runs in which the *well kernels were written into
+> transposed cells*: `Grid3D.centres()` returned `(nx, ny, nz)` while fields are
+> `(nz, ny, nx)`, so `gaussian_well_weights_3d` placed every well somewhere other
+> than where it was asked to go. Nothing in a run could reveal it, because the
+> reported coordinates are the requested ones. It was found by verifying
+> `physics/fv3d.py` against analytics, not by looking at results.
+> The corrected numbers are **cheaper** because the wells now sit under the
+> plume: `size_mid` J 446,286 with 3 wells at 22.46 m3/d (certified 0.9700
+> [0.948, 0.983]) instead of J 501,060 with one well at 37.27; `paper` J 449,972
+> with 2 wells at 23.44 m3/d (certified 0.9725 [0.951, 0.985]) instead of 50
+> m3/d over 4 wells at J 547,606. Full before/after table in
+> `DOCS/3D_results.md`. The M_train dose-response below does **not** survive the
+> fix (at the corrected geometry M=40 and M=100 find the same policy to 0.1% and
+> certify identically); the 2D version of it does, and is unaffected. The
+> text below is kept because the *reasoning* it records — audit on fresh fields,
+> and the in-run test row is not a certificate — is what surfaced the problem's
+> consequence rather than its cause.
 
 The 3D runner has two geometries worth quoting. The **paper preset**
 (`32x16x8` = 4,096 cells, `n_KL` 1419, 64/128 scenarios, 9 wells) gives
@@ -327,10 +346,23 @@ search saw:
 - **The optima are different designs**: 42.19 m3/d over five wells versus
   37.27 m3/d from a single well, and the single well gives the tighter plume
   (final peak 3.7 vs 6.0 mg/L; 3.9% vs 6.3% of cells above 1 mg/L).
-- **Restarts re-sample the basin rather than escaping it.** A random start
-  (optim.seed=7, q0 summing to 150 m3/d) descended 866,875 -> 547,554 and ran
-  out of budget at three wells and 50 m3/d, while the deterministic start
-  reached the single well at 34.23 m3/d and won.
+- **A higher-pumping start does not beat the empty one.** The second start in
+  the M_train=40 probe (uniform 0.5*q_max, 150 m3/d) descended 866,875 ->
+  547,554 and ran out of budget at three wells and 50 m3/d, while the q0=zeros
+  start reached the single well at 34.23 m3/d and won. Both are deterministic:
+  full3D_colab_run's 3D start family is [zeros, uniform, random only if
+  n_starts > 2]. Multiplicity across *searches* is still real -- the paper
+  preset's three-start run picks 4 wells at 12.5 m3/d each, certified 0.969.
+
+Verification that does not depend on our own code lives in
+`tests/test_fv3d_reference.py`: a pulse's second moments grow at
+`alpha_l v + v dx/2` longitudinally and `alpha_t v` transversely, and the
+flux-inlet front matches the analytic swept front
+`0.5 C0 erfc((x - vt)/2 sqrt(Dt))` to 1.1e-2 at dx = 1 m and 4.0e-3 at
+dx = 0.5 m — inside the G3.1 gate and first order in dx. The classical
+Ogata–Banks formula is the *Dirichlet* inlet solution; against a mass-flux inlet
+it is off by a shift of `D/v` that never shrinks with dx, which is what the
+earlier "0.41 shape error" was.
 
 What made M_train=100 affordable is the cost lever, not the hardware name: the
 batched torch backend evaluates 100 scenarios in **6.2 s** where NumPy needs

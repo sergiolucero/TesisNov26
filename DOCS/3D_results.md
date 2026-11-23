@@ -43,11 +43,12 @@ sit under the plume rather than scattered across it:
 | geometry | search | q\* (m³/d) | total | train J | in-run test rel. | 400 fresh fields [95% Wilson] |
 |---|---|---|---|---|---|---|
 | size_mid, 8000 cells | ~~M=100, transposed~~ | ~~1 well, 37.3~~ | ~~37.27~~ | ~~501,060~~ | ~~0.938~~ | ~~0.9675 [0.945, 0.981]~~ |
-| size_mid, 8000 cells | M=100, fixed | [0.2, 12.5, 0, 0, 9.77, 0] | 22.46 | **446,286** | 0.979 | **0.9700 [0.9483, 0.9828] PASS** |
+| size_mid, 8000 cells | M=24, fixed | [0, 0, 12.5, 0, 0, 8.59] | **21.09** | 441,298 | 0.958 | 0.9375 [0.9094, 0.9573] **INCONCLUSIVE** |
 | size_mid, 8000 cells | M=40, fixed | [0.05, 12.5, 0, 0, 10.06, 0] | 22.61 | 446,742 | 0.979 | **0.9700 [0.9483, 0.9828] PASS** |
+| size_mid, 8000 cells | M=100, fixed | [0.2, 12.5, 0, 0, 9.77, 0] | 22.46 | **446,286** | 0.979 | **0.9700 [0.9483, 0.9828] PASS** |
 | paper, 4096 cells | ~~M=64, transposed~~ | ~~4 wells at 12.5~~ | ~~50.0~~ | ~~547,606~~ | ~~0.969~~ | — (not certified) |
 | paper, 4096 cells | M=64, fixed, T4 | [0, 10.64, 0, 0, 0, 12.79, 0, 0, 0] | 23.44 | **449,972** | 0.953 | **0.9725 [0.9514, 0.9846] PASS** |
-| paper, 4096 cells | M=64, fixed, NumPy, 3 starts | [17.05, 0…, 8.42] | 25.47 | 457,397 | 0.984 | not run (in-run gate passes) |
+| paper, 4096 cells | M=64, fixed, NumPy, 3 starts | [17.05, 0…, 8.42] | 25.47 | 457,397 | **0.984** | 0.9475 [0.9211, 0.9654] **INCONCLUSIVE** |
 
 Three consequences worth stating plainly.
 
@@ -56,19 +57,26 @@ Three consequences worth stating plainly.
    policy is 18 % cheaper (449,972 vs 547,606) with a different shape: two wells
    carrying ~11-13 m³/d instead of four at 12.5. Every earlier 3D number in this
    file is superseded, including the ones quoted in the article's first draft.
-2. **The "sample size buys certification" story does not survive in 3D.** Under
-   the corrected geometry M=40 and M=100 find the same policy to 0.1 % and both
-   certify at 0.970. The earlier M=24/M=40 failures were failures *of the
-   transposed geometry*, where cheap policies genuinely under-pumped. The
-   dose-response stands in **2D** (0.912 vs 0.978/0.980 on 400 draws), where the
-   geometry was never in question; in 3D the honest statement is narrower:
-   M_train ≥ 40 sufficed at these geometries, and nothing here shows a
-   certification threshold.
-3. **Policy multiplicity is still real, and now cleaner.** At the paper geometry,
-   two searches with the same seeds and different hardware found *different*
-   designs — wells {2,6} at 10.64+12.79 (449,972, certified) versus wells {1,9} at
-   17.05+8.42 (457,397, in-run 0.984). So the optimum region contains several
-   near-equivalent well subsets; a single search is not evidence of uniqueness.
+2. **The sample-size story survives, but with a different boundary, and one of my
+   own claims does not.** Under the corrected geometry the M=40 search finds the
+   M=100 policy to 0.1 % and both certify at 0.970 — so the earlier reading,
+   "M_train=40 under-pumps and fails the audit", was an artefact of the
+   transposed wells and is withdrawn. What remains is a weaker but real boundary,
+   and it is *below* where the 2D rule put it: `alpha*M_train = 1.2` (M=24) is
+   inconclusive at 0.9375 with a point estimate under the gate, while
+   `alpha*M_train = 2.0` (M=40) passes. The cheapest policy is again the least
+   reliable (441,298 at 21.09 m3/d versus 446,286) — cheaper by 1.1 %, audited
+   0.037 lower — so cost and reliability are still anti-correlated, just with a
+   much smaller spread than the transposed geometry suggested.
+   The 2D dose-response (0.912 vs 0.978/0.980 on 400 draws) is untouched.
+3. **Policy multiplicity is still real, and the in-run row is decisively not a
+   certificate.** At the paper geometry two searches with the same seeds and
+   different hardware found *different* designs: wells {2,6} at 10.64+12.79
+   (449,972, audited **0.9725**) and wells {1,9} at 17.05+8.42 (457,397). The
+   second is the one with the *best* in-run reliability of any 3D run here
+   (0.984) and it audits at **0.9475 — inconclusive**, point estimate below the
+   gate. That is the cleanest demonstration in this file that a search's own test
+   row cannot settle anything, in either direction.
 
 What survives unchanged: mass balance (~1e-15), KL truncation and reproducibility,
 NumPy/torch parity, the batching and cost conclusions, the movie, and the

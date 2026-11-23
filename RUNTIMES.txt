@@ -497,8 +497,17 @@ seed base 900000, SCRIPTS/check_tail3d.py):
     train J 446,741.5 | test J 446,668.9 (rel 0.979)
     certificate: J 446,753, 12/400, 0.9700 [0.9483, 0.9828] PASS (671 s)
     => at the fixed geometry M=40 finds the M=100 policy to 0.1% and certifies
-       identically; the earlier M=24/M=40 certificate failures were a property of
-       the transposed wells, not of the sample size. The 2D dose-response stands.
+       identically. The earlier "M=40 under-pumps and fails" reading was a
+       property of the transposed wells and is withdrawn.
+
+  size_mid 8000 cells, M=24, NumPy CPU, 130 evals (2 starts), 4009 s:
+    q* = [0, 0, 12.5, 0, 0, 8.59]  21.09 m3/d, 2 active
+    train J 441,297.8 | test J 440,943.4 (rel 0.958), cvarr_G +0.0367
+    certificate: J 441,138, 25/400, 0.9375 [0.9094, 0.9573] INCONCLUSIVE (526 s)
+    => alpha*M_train = 1.2 is inconclusive while 2.0 (M=40) passes, so the 3D
+       boundary is between 1.2 and 2.0 expected tail samples -- below the ">=5"
+       rule derived in 2D. The cheapest policy is again the least reliable
+       (441,298 vs 446,286, audited 0.037 lower).
 
   paper 4096 cells, M=64/128, T4 float64, 300 evals (2 starts), 612 s:
     q* = [0, 10.64, 0, 0, 0, 12.79, 0, 0, 0]  23.44 m3/d, 2 active
@@ -509,8 +518,11 @@ seed base 900000, SCRIPTS/check_tail3d.py):
   paper 4096 cells, M=64/128, NumPy CPU, 195 evals (3 starts), 4212 s:
     q* = [17.05, 0, 0, 0, 0, 0, 0, 0, 8.42]  25.47 m3/d, 2 active
     train J 457,396.8 | test J 457,437.7 (rel 0.984), all gates pass
+    certificate: J 457,375, 21/400, 0.9475 [0.9211, 0.9654] INCONCLUSIVE (168 s)
     => same geometry, same seeds, different hardware and start count, a DIFFERENT
-       design. Multiplicity is real; a single search is not evidence of uniqueness.
+       design -- here with the BEST in-run reliability of any 3D run (0.984) and
+       an inconclusive audit. Multiplicity is real, a single search is not
+       evidence of uniqueness, and the in-run row settles nothing either way.
 
 T4 cost at 4096 cells / M=64: 2.06 s per full-archive evaluation (vs 18.6 s on
 NumPy CPU), i.e. 0.032 s/scenario. At 8000 cells / M=100 it is 7.2 s/eval.

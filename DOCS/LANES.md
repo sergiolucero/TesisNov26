@@ -132,6 +132,13 @@ stays in the log files and does not cross.
 
 ## Branches
 
+> **Superseded for the branch layout.** Sergio chose a two-branch split on
+> 2026-11-22: `code-sims` for code and the evidence files, `doc-latex` for the
+> prose, with `main` fast-forwarded to `code-sims` and a one-way merge
+> `doc-latex <- code-sims`. See `BRANCHING.md`. Everything below about *how* to
+> commit inside a branch — path-scoped adds, no lane-wide git operations — still
+> stands, and it is what made the split survivable.
+
 Stay on **one branch**, with path-scoped commits. Two live branches would cost more
 in conflicts over the shared append-only files (`DOCS/Actions.md`, `RUNTIMES.txt`,
 `runs/*.jsonl`) than the isolation buys.

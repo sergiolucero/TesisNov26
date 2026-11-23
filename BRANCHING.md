@@ -9,6 +9,10 @@ Two lines of work share this repository and have different ideas of "verified".
 
 `main` fast-forwards to `code-sims`: it means "the latest integrated code".
 
+*(This supersedes the branch paragraph of `DOCS/LANES.md`, which argued for one
+branch; everything else in that file — path ownership, provenance rules, no
+lane-wide git operations — still stands and is what keeps this survivable.)*
+
 **Merge direction is one-way: `doc-latex` merges `code-sims`, never the reverse.**
 Code never needs the prose; the prose always needs the numbers. A one-way merge
 cannot go into conflict in both directions at once.

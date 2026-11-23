@@ -344,7 +344,16 @@ uncertainty only.
   well bounds, with a table fixing decisions, uncertainty, state, source,
   compliance, permit and risk. Discretization, the surrogates and the algorithm
   stay in Chapters 3-4, by design: the introduction states the program, it does
-  not derive it. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
+  not derive it. Chapter 3 now also carries the learned-surrogate evidence the
+  title promises: a new section 3.10 reports the five-seed FNO results (250-epoch
+  median 1.99e-2, IQR 1.68-2.14e-2; 11.1x better than the 0.221 mean-field
+  predictor, 15.1x only at seed 0), the mode-truncation sweep (4.06/3.02/2.47e-2
+  at k_max 4/12/24, paired m24>m4 on 5/5, median ratio 0.66), and the
+  constant-operator defect (rel L2 0.973, *worse* than the zero predictor's 1.0,
+  output spatial std 2e-10, fixed by appending normalized (xi,tau) coordinate
+  channels, with a trivial-predictor warning now in solve_1d_fno.py). Before
+  this section the introduction and conclusions quoted those numbers and no
+  chapter produced them. `results_3d.tex` is now Chapter 6 ("Three dimensions"), seven
 sections: model and partial-penetration wells; the seven solver gates (decisive
 one: 3D-vs-2D extrusion agreement at 1.9e-13); the paper preset (`q* = 4 x
 12.5 m3/d`, test J 547,665, reliability 0.969, cleanup 110.6 d) with the two

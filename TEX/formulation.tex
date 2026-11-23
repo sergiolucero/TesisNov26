@@ -380,6 +380,105 @@ $0$ but won only $2$ of $5$ paired seeds (median ratio $1.31$ in the wrong
 direction), so it is not adopted. All subsequent claims in this project are
 reported as a median over $N\geq5$ seeds with the spread alongside.
 
+\section{FNO results: five seeds, and the modes that matter}
+\label{sec:fno-results}
+
+Section~\ref{sec:fno} deferred the spectral-hyperparameter checks --- number of
+retained modes, resolution transfer, epoch budget --- to Phase~4. They have now
+been run, over five seeds each, and the first thing they produced was a defect
+worth recording.
+
+\paragraph{The operator that could only return a constant.}
+The first FNO run reported $E_{\mathrm{rel}}=0.973$. Because
+\eqref{eq:metric} is normalized by $\norm{u_{\mathrm{ref}}}_{2}$, the predictor
+$u\equiv 0$ scores exactly $1$: the network was \emph{worse than predicting
+nothing}, and only a factor of three better than the mean-field reference
+($0.221$) that a one-parameter fit achieves. The cause was structural, not
+optimizational. The input was two spatially constant channels $(\mathrm{Pe})$
+or $(v,D)$; the lifting layer is pointwise, and a spectral convolution
+multiplies Fourier coefficients, so a constant input populates only the DC mode
+and every layer maps a constant to a constant. The measured spatial standard
+deviation of the output was $2\times10^{-10}$, and a profile-only error of
+$1.000$ confirmed it: the architecture had no way to represent $\xi$ or $\tau$
+at all. Appending normalized $(\xi,\tau)$ coordinate channels as inputs fixed
+it, and \texttt{solve\_1d\_fno.py} now warns when a run fails to beat both the
+all-zeros and the mean-field predictor, so the failure cannot pass silently
+again. The general lesson is the one \eqref{eq:metric} invites: a surrogate
+scored on a relative $L^{2}$ error must be reported next to the trivial
+predictors, because a normalized error can look small while the operator is
+returning nothing.
+
+\paragraph{Seed $0$ is not the method.}
+With the coordinate channels in place the operator learns. Table
+\ref{tab:fno-seeds} reports the 250-epoch and 120-epoch configurations over
+seeds $0$--$4$ with identical hyperparameters otherwise.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+configuration & median & IQR & min & max \\
+\midrule
+$250$ epochs & $1.99\times10^{-2}$ & $4.60\times10^{-3}$ & $1.46\times10^{-2}$ & $4.59\times10^{-2}$ \\
+$120$ epochs & $3.02\times10^{-2}$ & $3.17\times10^{-3}$ & $2.35\times10^{-2}$ & $5.98\times10^{-2}$ \\
+mean field, $1$ parameter & $2.21\times10^{-1}$ & --- & --- & --- \\
+zero predictor & $1.00$ & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\caption{FNO test error over five seeds (coordinate channels on, $12$ retained
+modes, $128\times128\times32$ scenarios), with the two trivial predictors for
+scale; $\max/\min$ spread is $3.1\times$ and $2.6\times$ for the two budgets.
+The figure first quoted for this operator, $1.46\times10^{-2}$, is seed $0$: the
+most favourable of the five draws. The honest statement is the median,
+$1.99\times10^{-2}$ at $250$ epochs. Reproduce with
+\texttt{runs/sweeps/fno\_coords\_250ep} and
+\texttt{runs/sweeps/fno\_coords\_120ep}.}
+\label{tab:fno-seeds}
+\end{table}
+
+Compared seed by seed, $250$ epochs wins on all five (error ratios
+$0.62$, $0.66$, $0.60$, $0.68$, $0.77$; median $0.66$), so the extra budget is
+a real improvement and not a lucky ordering. Against the mean-field reference
+the median is $11.1$ times better; at seed $0$ it is $15.1$ times better, which
+is where the ``$15\times$'' figure that circulated came from, and it should be
+quoted as $11\times$ for the same reason the median is quoted at all.
+
+\paragraph{Retained modes.}
+Table~\ref{tab:fno-modes} sweeps $k_{\max}\in\{4,12,24\}$ at the 120-epoch
+budget, so that the comparison is affordable over five seeds.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+$k_{\max}$ & median & IQR & min & max \\
+\midrule
+$4$  & $4.06\times10^{-2}$ & $4.48\times10^{-3}$ & $2.79\times10^{-2}$ & $7.18\times10^{-2}$ \\
+$12$ & $3.02\times10^{-2}$ & $3.17\times10^{-3}$ & $2.35\times10^{-2}$ & $5.98\times10^{-2}$ \\
+$24$ & $2.47\times10^{-2}$ & $1.72\times10^{-3}$ & $2.19\times10^{-2}$ & $5.00\times10^{-2}$ \\
+\bottomrule
+\end{tabular}
+\caption{Truncation sweep at $120$ epochs over five seeds. Medians decrease
+monotonically with $k_{\max}$ and the spread narrows; paired by seed, $k_{\max}=24$
+beats $k_{\max}=4$ on all five (median ratio $0.66$). Reproduce with
+\texttt{runs/sweeps/fno\_modes\_120ep}.}
+\label{tab:fno-modes}
+\end{table}
+
+The default $k_{\max}=12$ is therefore not at the knee: the operator is still
+improving at $24$ modes, and the residual error there
+($2.47\times10^{-2}$) is dominated by the epoch budget, not by truncation. As
+with the epoch comparison, every single-seed value in this sweep was optimistic
+relative to its median, which is the argument for running these sweeps at all.
+
+\paragraph{What is still a single draw.}
+Three rows remain preliminary by the standard above, and are quoted as such:
+the resolution-transfer checks ($64^{2}$: $4.14\times10^{-2}$,
+$32^{2}$: $6.92\times10^{-2}$) and the profile-only error
+($7.1\times10^{-2}$) were each measured on one seed, and the
+$300$-epoch plateau has one draw. None of them supports a claim stronger than
+``consistent with'', and none is used in Chapter~\ref{chap:conclusions}.
+
 \section{Baseline parameters}
 \label{sec:params}
 

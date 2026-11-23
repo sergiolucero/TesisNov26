@@ -94,5 +94,65 @@ class TestFV3DTorchParity(unittest.TestCase):
             np.testing.assert_allclose(Jt[i], Jn, rtol=1e-8, atol=1e-6)
 
 
+class TestGridAxesAndWellPlacement(unittest.TestCase):
+    """A well must be where it was asked to be, on a grid that cannot hide an
+    axis swap.
+
+    Fields are ``(nz, ny, nx)``.  ``Grid3D.centres()`` once returned the
+    coordinates as ``(nx, ny, nz)`` because ``meshgrid(x, y, z, indexing="ij")``
+    does that, and ``gaussian_well_weights_3d`` ravels those arrays -- so every
+    well kernel was written into transposed cells.  The flow solve was then
+    self-consistent but *not* the documented geometry: wells that were supposed
+    to sit on the plume (and be screened over 30 % of the thickness) sat
+    somewhere else entirely.  Nothing in the run output could reveal it, because
+    the reported coordinates are the requested ones.
+    """
+
+    def test_centres_are_in_field_order(self):
+        nx, ny, nz = 8, 4, 2
+        g = colab.Grid3D(nx, ny, nz, 8.0, 4.0, 2.0)
+        X, Y, Z = g.centres()
+        self.assertEqual(X.shape, (nz, ny, nx))
+        self.assertEqual(X.shape, (g.nz, g.ny, g.nx))
+        # x varies along the last axis, y along the middle, z along the first
+        self.assertGreater(np.ptp(X[0, 0, :]), 0.0)
+        self.assertLess(np.ptp(X[0, :, 0]), 1e-12)
+        self.assertGreater(np.ptp(Y[0, :, 0]), 0.0)
+        self.assertLess(np.ptp(Y[:, 0, 0]), 1e-12)
+        self.assertGreater(np.ptp(Z[:, 0, 0]), 0.0)
+        self.assertLess(np.ptp(Z[0, 0, :]), 1e-12)
+        np.testing.assert_allclose(X[0, 0, :], (np.arange(nx) + 0.5) * g.dx)
+        np.testing.assert_allclose(Y[0, :, 0], (np.arange(ny) + 0.5) * g.dy)
+        np.testing.assert_allclose(Z[:, 0, 0], (np.arange(nz) + 0.5) * g.dz)
+
+    def test_well_kernel_lands_on_the_requested_cell(self):
+        g = colab.Grid3D(8, 4, 2, 8.0, 4.0, 2.0)      # dx = dy = dz = 1
+        w = colab.gaussian_well_weights_3d(g, 6.5, 2.5, 1.9, 0.1, eps_cells=1.0)
+        cx, cy, cz = g.cell_centre(int(np.argmax(w)))
+        self.assertAlmostEqual(cx, 6.5, places=6)
+        self.assertAlmostEqual(cy, 2.5, places=6)
+        self.assertLessEqual(abs(cz - 1.0), 0.5 + 1e-9)
+
+    def test_well_kernel_respects_the_screen_interval(self):
+        g = colab.Grid3D(6, 4, 6, 6.0, 4.0, 6.0)      # 6 layers, dz = 1
+        w = colab.gaussian_well_weights_3d(g, 3.5, 2.5, 2.4, 1.6,
+                                          eps_cells=1.0).reshape(g.nz, g.ny, g.nx)
+        column = w[:, 2, 3]
+        self.assertGreater(column.sum(), 0.0)
+        # layers centred at 1.5 and 2.5 sit inside [1.6, 2.4]?  No: 1.5 < 1.6 and
+        # 2.5 > 2.4, so the screen must select neither and the code must fall
+        # back to the single mid-screen cell rather than leaking outside it.
+        outside = np.concatenate([w[:1], w[3:]])
+        self.assertLess(float(np.abs(outside).sum()), 1e-12)
+
+    def test_weights_are_normalised_and_finite(self):
+        g = colab.Grid3D(8, 4, 2, 8.0, 4.0, 2.0)
+        w = colab.gaussian_well_weights_3d(g, 6.5, 2.5, 1.9, 0.1, eps_cells=1.5)
+        self.assertEqual(w.shape, (g.n,))
+        self.assertTrue(np.all(np.isfinite(w)))
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=12)
+        self.assertGreaterEqual(float(w.min()), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -445,11 +445,14 @@ Krylov 3400 solves at 15.0 iterations/solve, worst residual 9.99e-12, converged,
 stalled=false. Full bundle collected: figures/ (3 PNGs -- the `_make_plots` fix
 verified on real GPU output), movies/ (mp4, gif, contact, fields.npz), zip.
 
-Restart behaviour in the same probe: start 1 (deterministic 0.5*q_max) converged
-to the single well at 34.23 m3/d (f=490,433, nit=17, 119 evals); start 2 (random
-q0 summing to 150 m3/d, optim.seed=7) went 866,875 -> 821,250 -> 775,625 ->
-730,000 -> 684,375 -> 638,750 -> 547,554 and ran out of budget at 3 wells and
-50 m3/d. Same as 2D: one dominant attractor, restarts approach it from above.
+Restart behaviour in the same probe: start 1 (q0 = zeros) converged to the single
+well at 34.23 m3/d (f=490,433, nit=17, 119 evals); start 2 (uniform 0.5*q_max, q0
+summing to 150 m3/d) went 866,875 -> 821,250 -> 775,625 -> 730,000 -> 684,375 ->
+638,750 -> 547,554 and ran out of budget at 3 wells and 50 m3/d. Both starts are
+DETERMINISTIC -- full3D_colab_run's start family is [zeros, uniform 0.5*q_max,
+random only if n_starts > 2] -- so the pair says the uniform start loses, not that
+random starts cannot. Random-start evidence in 3D comes from the paper preset
+(3 starts, 4 wells at 12.5 m3/d, certified 0.969 at M_test=128).
 
 CERTIFICATE (400 fresh fields, seeds 900000+):
     M=40 policy: q*=[0,0,0,34.23,0,0], J 490,076, meanG -0.494, CVaR +0.552,
@@ -463,3 +466,76 @@ PROTOCOL FIX THAT MADE THIS POSSIBLE
     when the VM was reclaimed at ~43 min. Fourth reclaim in four launches. The
     run that worked was sized to 10.5 min of GPU work and collected the moment
     the zip line appeared; the certificate ran on the CPU (13 min).
+
+THE 3D WELLS WERE IN THE WRONG CELLS (found 2026-11-23)
+-------------------------------------------------------
+Found by verifying physics/fv3d.py against analytics, not by looking at results.
+Grid3D.centres() returned np.meshgrid(x, y, z, indexing="ij"), i.e. (nx, ny, nz),
+while fields are (nz, ny, nx) -- Grid3D.index is k*nx*ny + j*nx + i and
+FlowModel3D._build_matrix reshapes that way. gaussian_well_weights_3d builds the
+kernel from centres() and ends with (w/w.sum()).ravel(), so the weight for cell
+(i,j,k) landed at flat i*ny*nz + j*nz + k instead of (k*ny+j)*nx + i. On a cubic
+test grid a well requested at (3.5, 2.5, 2.0) landed at (0.5, 2.5, 3.5).
+
+Nothing in a run could show it: metrics.json reports the REQUESTED coordinates,
+and the z-screen mask was applied to a coordinate array that was itself
+transposed. Fix: centres() returns (zz, yy, xx) = meshgrid(z, y, x, "ij") and
+returns xx, yy, zz. Regression tests: test_well_kernel_lands_on_the_requested_cell,
+test_centres_are_in_field_order (tests/test_fv3d_torch_colab.py).
+
+CORRECTED NUMBERS (all at M_test=48 or 128, then audited on 400 fresh fields,
+seed base 900000, SCRIPTS/check_tail3d.py):
+
+  size_mid 8000 cells, M=100, T4 float64, 100 evals, 697 s:
+    q* = [0.2, 12.5, 0, 0, 9.77, 0]  22.46 m3/d, 3 active
+    train J 446,285.7 (rel 0.990) | test J 446,128.6 (rel 0.979)
+    certificate: J 446,214, 12/400 violations, 0.9700 [0.9483, 0.9828] PASS (833 s)
+    was (transposed): q* = 1 well 37.27, J 501,060, certified 0.9675 -> 11% costlier
+
+  size_mid 8000 cells, M=40, T4 float64, 120 evals, 340 s:
+    q* = [0.05, 12.5, 0, 0, 10.06, 0]  22.61 m3/d
+    train J 446,741.5 | test J 446,668.9 (rel 0.979)
+    certificate: J 446,753, 12/400, 0.9700 [0.9483, 0.9828] PASS (671 s)
+    => at the fixed geometry M=40 finds the M=100 policy to 0.1% and certifies
+       identically; the earlier M=24/M=40 certificate failures were a property of
+       the transposed wells, not of the sample size. The 2D dose-response stands.
+
+  paper 4096 cells, M=64/128, T4 float64, 300 evals (2 starts), 612 s:
+    q* = [0, 10.64, 0, 0, 0, 12.79, 0, 0, 0]  23.44 m3/d, 2 active
+    train J 449,971.6 | test J 450,027.2 (rel 0.953)
+    certificate: J 449,874, 11/400, 0.9725 [0.9514, 0.9846] PASS (244 s)
+    was (transposed): 4 wells at 12.5 (50 m3/d), J 547,606 -> 18% costlier
+
+  paper 4096 cells, M=64/128, NumPy CPU, 195 evals (3 starts), 4212 s:
+    q* = [17.05, 0, 0, 0, 0, 0, 0, 0, 8.42]  25.47 m3/d, 2 active
+    train J 457,396.8 | test J 457,437.7 (rel 0.984), all gates pass
+    => same geometry, same seeds, different hardware and start count, a DIFFERENT
+       design. Multiplicity is real; a single search is not evidence of uniqueness.
+
+T4 cost at 4096 cells / M=64: 2.06 s per full-archive evaluation (vs 18.6 s on
+NumPy CPU), i.e. 0.032 s/scenario. At 8000 cells / M=100 it is 7.2 s/eval.
+
+VERIFICATION UPGRADE (tests/test_fv3d_reference.py, 18 tests, 1.8 s)
+  * pulse moments: D_long = alpha_l v + v dx/2 to 10%, D_transverse = alpha_t v on
+    both axes (read before the no-flow walls bound the variance), centroid at the
+    pore velocity K grad / phi -- a direct measurement of the dispersion tensor.
+  * flux-inlet front vs the analytic swept front 0.5 C0 erfc((x-vt)/2 sqrt(Dt)):
+    rel-L2 1.1e-2 at dx=1 m, 4.0e-3 at dx=0.5 m (3.4e-3 with v dx/2 added to D),
+    first order in dx, inside the G3.1 gate of 1.5e-2. The classical Ogata-Banks
+    formula is the Dirichlet solution and does NOT fit a mass-flux inlet: it
+    differs by a shift of D/v (5-10 cells) that does not shrink with dx. The
+    earlier "0.41 shape error" was the wrong reference.
+  * geometry guards: Grid3D.centres() axis order (production and physics/fv3d),
+    transport_run3d accepting a SET of source cells (plane inlets), mask/screen
+    behaviour.
+
+LAUNCH DISCIPLINE (two paid mistakes this session, both the same shape)
+  1. `cd A && ... &` puts the cd in the backgrounded subshell, so a launcher
+     placed AFTER the `&` inherits the PARENT cwd. Two GPU runs were therefore
+     built from the doc-latex tree and executed the pre-fix code (their J values
+     reproduced the transposed-geometry results exactly -- which is how the
+     mistake was caught, and is a useful determinism check).
+  2. `colab download` needs the LOCAL directory to exist; when it does not, the
+     failure is a one-line Errno 2 while the VM keeps billing.
+  Rule: after every launch, unzip the bundle and grep for the fix before trusting
+  the run; and always verify 'colab sessions' is empty afterwards.

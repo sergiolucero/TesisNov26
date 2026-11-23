@@ -10,15 +10,106 @@ head), penalty weights ρ_g = ρ_h = 1e6, and pattern search with multiple
 starts. The reported `q*` is selected on the training archive and scored
 out-of-sample on the test archive.
 
+## Correction (2026-11-23): every 3D run before this date pumped the wrong cells
+
+**Read this before quoting any 3D number in this file.** The well kernels were
+written into transposed cells, so every search below solved a different geometry
+than the one documented. The numbers are internally consistent — they are valid
+results for *some* well layout — but they are not results for the layout in the
+table. Fixed; superseded numbers are marked in the table.
+
+What was wrong. Fields are stored ``(nz, ny, nx)``: ``Grid3D.index`` is
+``k*nx*ny + j*nx + i`` and ``FlowModel3D._build_matrix`` reshapes the index array
+the same way. ``Grid3D.centres()`` returned ``np.meshgrid(x, y, z,
+indexing="ij")``, which is ``(nx, ny, nz)``. ``gaussian_well_weights_3d`` builds
+its kernel from those arrays and ends with ``(w / w.sum()).ravel()``, so the value
+intended for cell ``(i, j, k)`` landed at flat position
+``i*ny*nz + j*nz + k`` instead of ``(k*ny + j)*nx + i``. On a cubic test grid a
+well asked for at ``(3.5, 2.5, 2.0)`` landed at ``(0.5, 2.5, 3.5)`` — x and z
+swapped. Nothing in a run could reveal it, because the coordinates reported in
+``metrics.json`` and ``policy.json`` are the *requested* ones, and the z-screen
+mask was applied to a coordinate array that was itself transposed.
+
+How it surfaced. Not from the runs: from verifying ``physics/fv3d.py`` against
+analytics (§ *Verification* below). Chasing an Ogata--Banks mismatch ended in the
+axis conventions, and the fix to ``centres()`` was checked with a
+one-line probe that asks where the well kernel actually peaks. Two regression
+tests now hold it: ``test_well_kernel_lands_on_the_requested_cell`` and
+``test_centres_are_in_field_order``.
+
+What changed. The corrected runs find *cheaper* policies because the wells now
+sit under the plume rather than scattered across it:
+
+| geometry | search | q\* (m³/d) | total | train J | in-run test rel. | 400 fresh fields [95% Wilson] |
+|---|---|---|---|---|---|---|
+| size_mid, 8000 cells | ~~M=100, transposed~~ | ~~1 well, 37.3~~ | ~~37.27~~ | ~~501,060~~ | ~~0.938~~ | ~~0.9675 [0.945, 0.981]~~ |
+| size_mid, 8000 cells | M=100, fixed | [0.2, 12.5, 0, 0, 9.77, 0] | 22.46 | **446,286** | 0.979 | **0.9700 [0.9483, 0.9828] PASS** |
+| size_mid, 8000 cells | M=40, fixed | [0.05, 12.5, 0, 0, 10.06, 0] | 22.61 | 446,742 | 0.979 | **0.9700 [0.9483, 0.9828] PASS** |
+| paper, 4096 cells | ~~M=64, transposed~~ | ~~4 wells at 12.5~~ | ~~50.0~~ | ~~547,606~~ | ~~0.969~~ | — (not certified) |
+| paper, 4096 cells | M=64, fixed, T4 | [0, 10.64, 0, 0, 0, 12.79, 0, 0, 0] | 23.44 | **449,972** | 0.953 | **0.9725 [0.9514, 0.9846] PASS** |
+| paper, 4096 cells | M=64, fixed, NumPy, 3 starts | [17.05, 0…, 8.42] | 25.47 | 457,397 | 0.984 | not run (in-run gate passes) |
+
+Three consequences worth stating plainly.
+
+1. **The headline 3D numbers move.** The size_mid policy is 11 % cheaper
+   (446,286 vs 501,060) at the same certified reliability, and the paper-preset
+   policy is 18 % cheaper (449,972 vs 547,606) with a different shape: two wells
+   carrying ~11-13 m³/d instead of four at 12.5. Every earlier 3D number in this
+   file is superseded, including the ones quoted in the article's first draft.
+2. **The "sample size buys certification" story does not survive in 3D.** Under
+   the corrected geometry M=40 and M=100 find the same policy to 0.1 % and both
+   certify at 0.970. The earlier M=24/M=40 failures were failures *of the
+   transposed geometry*, where cheap policies genuinely under-pumped. The
+   dose-response stands in **2D** (0.912 vs 0.978/0.980 on 400 draws), where the
+   geometry was never in question; in 3D the honest statement is narrower:
+   M_train ≥ 40 sufficed at these geometries, and nothing here shows a
+   certification threshold.
+3. **Policy multiplicity is still real, and now cleaner.** At the paper geometry,
+   two searches with the same seeds and different hardware found *different*
+   designs — wells {2,6} at 10.64+12.79 (449,972, certified) versus wells {1,9} at
+   17.05+8.42 (457,397, in-run 0.984). So the optimum region contains several
+   near-equivalent well subsets; a single search is not evidence of uniqueness.
+
+What survives unchanged: mass balance (~1e-15), KL truncation and reproducibility,
+NumPy/torch parity, the batching and cost conclusions, the movie, and the
+methodology (audit any policy on fresh fields; the in-run test row is not a
+certificate).
+
+## Verification of the transport operator against analytics
+
+The reason the bug above was found is that ``physics/fv3d.py`` was checked
+against solutions that do not depend on our own code. Two of those checks are now
+permanent tests (`tests/test_fv3d_reference.py`):
+
+- **Pulse moments.** A pulse's spatial variance must grow as ``2Dt``. Measured:
+  longitudinal ``D = alpha_l v + v dx/2`` (the upwind term, to 10 %), transverse
+  ``D = alpha_t v`` on both axes (to 25 %, read before the no-flow walls bound the
+  variance), centroid at the pore velocity ``v = K grad / phi``. This is a direct
+  measurement of the dispersion tensor with no inlet involved.
+- **The front against Ogata--Banks.** A mass-flux inlet is not a Dirichlet inlet.
+  The classical formula carries a reflected term
+  ``exp(vx/D) erfc((x+vt)/2 sqrt(Dt))`` that a pure advective inlet has no
+  analogue for, and at ``vx/D`` large the two differ by a shift of ``D/v`` — 5 to
+  10 cells here, which does not shrink with ``dx``. Compared against the correct
+  reference, the swept front ``0.5 C0 erfc((x - vt)/2 sqrt(Dt))``, the interior
+  relative L2 is **1.1e-2 at dx = 1 m** and **4.0e-3 at dx = 0.5 m**
+  (``3.4e-3`` once ``v dx/2`` is added to ``D``), i.e. first order in ``dx`` and
+  inside the G3.1 gate of 1.5e-2. The earlier "0.41 shape error" was the wrong
+  reference, not a bug in the solver; no amplitude fit could have fixed it
+  because the discrepancy is a shift.
+
 ## Presets validated
 
 | preset | grid (nx·ny·nz) | n_kl | scenarios (tr/te) | wells | result |
 |---|---|---|---|---|---|
 | smoke | 12·6·3 = 216 | 164 | 6 / 12 | 4 | degenerate: already compliant, q*=0 |
-| full | 24·12·6 = 1728 | 819 | 24 / 48 | 6 | **q\*=[12.89, 12.7, 11.91, 12.5, 0, 0]**, reliability 0.979 |
-| paper | 32·16·8 = 4096 | 1419 | 64 / 128 | 9 | **q\*=[12.5, 12.5, 12.5, 12.5, 0×5]**, reliability 0.969 |
-| size_mid | 40·20·10 = 8000 | 2062 | 24 / 48 | 6 | **q\*=[3.1, 0, 1.6, 12.5, 12.5, 12.5]**, reliability 0.875 — *fails* the gate; see below |
-| size_mid (GPU, torch) | 40·20·10 = 8000 | 2062 | 100 / 48 | 6 | **q\*=[0, 0, 0, 37.3, 0, 0]**, in-run 0.938 but **certified 0.9675 [0.945, 0.981] on 400 fresh fields — PASS** |
+| full | 24·12·6 = 1728 | 819 | 24 / 48 | 6 | ~~q\*=[12.89, 12.7, 11.91, 12.5, 0, 0]~~ (transposed wells) |
+| paper | 32·16·8 = 4096 | 1419 | 64 / 128 | 9 | **q\*=[0, 10.64, 0, 0, 0, 12.79, 0, 0, 0]** (fixed), J 449,972, **certified 0.9725 [0.951, 0.985]** |
+| paper | 32·16·8 = 4096 | 1419 | 64 / 128 | 9 | ~~q\*=[12.5 ×4, 0×5], reliability 0.969~~ (transposed wells) |
+| size_mid | 40·20·10 = 8000 | 2062 | 24 / 48 | 6 | ~~q\*=[3.1, 0, 1.6, 12.5, 12.5, 12.5], reliability 0.875~~ (transposed wells) |
+| size_mid | 40·20·10 = 8000 | 2062 | 100 / 48 | 6 | **q\*=[0.2, 12.5, 0, 0, 9.77, 0]** (fixed), J 446,286, **certified 0.9700 [0.948, 0.983]** |
+| size_mid | 40·20·10 = 8000 | 2062 | 40 / 48 | 6 | **q\*=[0.05, 12.5, 0, 0, 10.06, 0]** (fixed), J 446,742, **certified 0.9700** |
+| size_mid (GPU, torch) | 40·20·10 = 8000 | 2062 | 100 / 48 | 6 | ~~q\*=[0, 0, 0, 37.3, 0, 0], certified 0.9675~~ (transposed wells) |
 
 ## Paper preset (headline)
 
@@ -220,16 +311,18 @@ Three findings, in decreasing order of importance:
    Note too that the GPU run's *own* test row (0.9375) fails the gate while its
    fresh draw (0.9675) passes: at M=48 the interval is 0.83-0.98, so an in-run
    row can neither certify nor condemn a policy. Only the 400-draw audit does.
-3. **Restarts do not escape the basin, they re-sample it.** The M=40 probe ran
-   two starts: the deterministic `0.5*q_max` start converged to the single well
-   at 34.23 m3/d (f = 490,433 at nit=17, 119 evaluations), and the random start
-   (q0 summing to 150 m3/d, `optim.seed = 7`) descended 866,875 -> 821,250 ->
-   775,625 -> 730,000 -> 684,375 -> 638,750 -> 547,554 before its budget ran out,
-   ending at 3 active wells and 50 m3/d. That is the same picture as the 2D
-   restart experiment: the landscape has one dominant attractor (few wells, one
-   of them carrying ~35 m3/d) and random starts approach it from above without
-   beating it. Neither start escaped, so a single start is not the limitation —
-   the sample size is.
+3. **A higher-pumping start does not beat the empty one.** The M=40 probe ran
+   two starts. The first (q0 = zeros) converged to the single well at 34.23 m3/d
+   (f = 490,433 at nit=17, 119 evaluations). The second (uniform 0.5*q_max, q0
+   summing to 150 m3/d) descended 866,875 -> 821,250 -> 775,625 -> 730,000 ->
+   684,375 -> 638,750 -> 547,554 before its budget ran out, ending at 3 active
+   wells and 50 m3/d. Both of those starts are *deterministic*: this file's start
+   family is `[zeros, uniform 0.5*q_max, then random only if n_starts > 2]`, so
+   the pair says the uniform start loses, not that random starts cannot win.
+   Random-start evidence in three dimensions comes from the paper preset instead
+   (three starts, 4 wells at 12.5 m3/d each, certified 0.969 at M_test = 128), a
+   genuinely different design — so multiplicity across *searches* is real even
+   though within one search the lower-pumping attractor wins.
 4. **The optimum is not unique, and single-well policies are competitive.** The
    GPU search converged on one well at 37.27 m³/d while the NumPy search spread
    42.19 m³/d over five wells; both sit on the constraint (CVaR ≈ +0.02 train)

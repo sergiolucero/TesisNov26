@@ -224,10 +224,21 @@ class Grid3D:
         )
 
     def centres(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Cell-centre coordinates as (X, Y, Z), each shaped like a field.
+
+        Fields are ``(nz, ny, nx)`` -- see :meth:`index` and
+        ``FlowModel3D._build_matrix`` -- so the coordinate arrays must be too.
+        With ``indexing="ij"`` over ``(x, y, z)`` they come back as
+        ``(nx, ny, nz)``, and anything that ``ravel()``s them lands in the wrong
+        cell: gaussian well kernels were placed with x and z transposed, which
+        put every well somewhere other than where it was asked to go.  See
+        ``tests/test_fv3d_torch_colab.py`` for the regression test.
+        """
         x = self.x0 + (np.arange(self.nx) + 0.5) * self.dx
         y = self.y0 + (np.arange(self.ny) + 0.5) * self.dy
         z = self.z0 + (np.arange(self.nz) + 0.5) * self.dz
-        return np.meshgrid(x, y, z, indexing="ij")
+        zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")   # (nz, ny, nx)
+        return xx, yy, zz
 
 
 @dataclass

@@ -125,7 +125,12 @@ class Grid3D:
         x = self.x0 + (np.arange(self.nx) + 0.5) * self.dx
         y = self.y0 + (np.arange(self.ny) + 0.5) * self.dy
         z = self.z0 + (np.arange(self.nz) + 0.5) * self.dz
-        return np.meshgrid(x, y, z, indexing="ij")  # (nx, ny, nz)
+        # Fields are (ny, nx, nz) -- see ``index`` -- so the mesh must be built
+        # in that order.  With indexing="ij" and (x, y, z) the arrays come back
+        # as (nx, ny, nz), which silently mis-assigns every coordinate as soon
+        # as nx != ny.
+        yy, xx, zz = np.meshgrid(y, x, z, indexing="ij")  # (ny, nx, nz)
+        return xx, yy, zz
 
 
 @dataclass
@@ -603,8 +608,21 @@ def transport_run3d(
         C_fields[0] = C
 
     src = np.zeros(n)
-    if source_idx is not None and source_rate != 0.0:
-        src[int(source_idx)] = float(source_rate)
+    if source_idx is not None:
+        # A single cell or a set of cells (a plane inlet, a smeared source).
+        # ``source_rate`` is the total rate, split equally over the cells, unless
+        # it is already one value per cell.
+        sidx = np.atleast_1d(np.asarray(source_idx, dtype=int)).ravel()
+        rate = np.asarray(source_rate, dtype=float)
+        if rate.ndim == 0:
+            rate = np.full(sidx.size, float(rate) / max(sidx.size, 1))
+        else:
+            rate = rate.ravel()
+            if rate.size != sidx.size:
+                raise ValueError(
+                    f"source_rate has {rate.size} values for {sidx.size} cells"
+                )
+        src[sidx] = rate
 
     mass_total = np.zeros(nsteps + 1)
     mass_source = np.zeros(nsteps + 1)

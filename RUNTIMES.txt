@@ -315,7 +315,7 @@ Command:
 Geometry    40x20x10 = 8000 cells (dx=dy=5.0 m, dz=2.0 m), n_kl=2062 (95.0%),
             24 train / 48 test scenarios, nsteps=100, 6 partially penetrating wells
 Cost        calibration 25.333 s per full-archive evaluation (24 scenarios),
-            => 0.775 s per scenario (numpy splu).  Run wall clock 4486 s (74.8 min).
+            => 1.06 s per scenario (25.333 s per 24-scenario evaluation).  Run wall clock 4486 s (74.8 min).
             Scaling vs paper preset (32x16x8, 0.195 s/scenario): 3.4x cost for 2x
             cells, i.e. ~n^1.9 -- sparse 3D LU fill-in.
 Search      90-min budget clamped max_evals 200 -> 107 per start.  13 candidates
@@ -338,7 +338,7 @@ Certificate python3 SCRIPTS/check_tail3d.py --run out3d_colab/plume3d_size_mid \
             violation rate is real and not a draw artifact.
 Reading     Same failure mode as 2D: alpha*M_train = 1.2, so the tail is estimated
             from about one scenario and the search cannot price the violation it
-            buys.  A converged 3D search needs M_train~100 (78 s/eval) => ~6.5 h
+            buys.  A converged 3D search needs M_train~100 (~105 s/eval) => ~9 h
             per start here, 2 starts ~13 h: do it on the GPU backend or overnight.
             NOT a resolution study: 'full' and 'size_mid' use different KL bases
             (819 vs 2062 modes), hence different realisations of K.
@@ -358,7 +358,7 @@ Geometry    identical to the NumPy size_mid run: 40x20x10 = 8000 cells,
             n_kl=2062, nsteps=100, 6 partially penetrating wells.
 Cost        archives (100 train + 48 test) 4.7 s (NumPy: 27.6 s).
             calibration 7.12 s per 100-scenario evaluation = 0.071 s/scenario
-            vs NumPy's 0.775 s/scenario => ~11x.  Search: 161 evaluations in
+            vs NumPy's 1.06 s/scenario => ~15x.  Search: 161 evaluations in
             1003.5 s, converged at nit=23 (step tolerance, not the budget).
             Whole run 1056.7 s.  CPU torch is already faster than NumPy here
             (7.75 s vs 18.5 s per 8-scenario eval): the win is the batched
@@ -384,6 +384,28 @@ CERTIFICATE (fresh fields, seeds 900000+, SCRIPTS/check_tail3d.py)
        cannot separate them; 400 can.  An in-run test row (0.9375 at M=48)
        neither certifies nor condemns.
 
+THE VM LIFETIME IS ~40-50 MIN, NOT THE 2-2.5 h ASSUMED EARLIER
+---------------------------------------------------------------
+Three launches, three reclaims, all inside an hour and none explained by the
+workload: 20261122-100338 died at ~43 min mid-start-2; 20261122-184211 and
+20261122-184242 both died between 22:03 and 23:17 UTC after a 21:41/21:42 launch
+(~40-50 min), and neither was idle -- 184211 had finished its search at 22:00
+(1053.9 s, q* = [0,0,0,37.27,0,0], train J 501060.49 / test 501260.88, zip written
+22:00:25) and was mid-certificate when the VM vanished. Everything the VM had
+written died with it: the zip was never downloaded, so the plotted figures and
+the bundle are gone even though the numbers they came from are not.
+
+Rules that follow, in order of how much they cost when ignored:
+  1. DOWNLOAD THE MOMENT THE ARTIFACT EXISTS. Do not chain a certificate, a
+     second start or a re-zip onto the end of a paid run and then collect. The
+     search finishing is the deadline, not the process exiting.
+  2. Certify on the CPU, locally. A 400-scenario NumPy certificate costs ~12 min
+     on 8 cores; running it on a 2-CPU VM doubles the window for no benefit and
+     spends GPU money on the one stage that needs no GPU.
+  3. Size one VM to one purpose (~20-25 min of work), not 45.
+  4. `colab sessions` after every collection: 'No active sessions' plus a missing
+     artifact means the artifact is gone, not pending.
+
 LAUNCH FOOTGUNS HIT THIS SESSION
   * `colab upload` to a non-existent remote directory fails with 500; create it
     first (`os.makedirs` via a cell).
@@ -396,3 +418,48 @@ LAUNCH FOOTGUNS HIT THIS SESSION
     stayed healthy -- poll with `colab download` of run.log, not `colab exec`.
   * `_make_plots` crashed on the torch path after a successful search (fixed):
     a complete run had metrics+policy+movie but no figures and no zip.
+
+3D CERTIFICATION DOSE-RESPONSE (2026-11-23, out3d_colab/plume3d_s*_m40)
+-----------------------------------------------------------------------
+The question: how many training scenarios does a 3D policy need before its
+reliability claim survives an audit on fields the search never saw? Three
+searches, same geometry (8,000 cells), same wells, same seeds, same cost model,
+differing only in M_train; each policy then evaluated on 400 fresh fields
+(seed base 900000) with SCRIPTS/check_tail3d.py.
+
+    M_train  train J    in-run test rel  400-field rel [95% Wilson]  verdict
+    24       519,263    0.875            0.9075 [0.875, 0.932]       FAIL
+    40       490,433    0.833            0.9050 [0.872, 0.930]       FAIL
+    100      501,360    0.938            0.9675 [0.945, 0.981]       PASS
+
+alpha*M_train = 1.2 / 2.0 / 5.0, so the gate opens between two and five expected
+tail samples. Note the ordering: the CHEAPEST policy (M=40, 2.2% below the
+certified one) is the second-least reliable. Cheaper is not better here; it is
+cheaper because it under-pumps.
+
+The M=40 probe (SCRIPTS/colab3d.py launch --preset size_mid --gpu T4 --dtype
+float64 --m-train 40 --m-test 48 --max-evals 120 --n-starts 2 --seed 7
+--budget 20): 240 evaluations in 631.5 s, 3.04 s/eval at M=40 = 0.076 s/scenario
+(against 0.071 at M=100, so cost is linear in M as it should be), transport
+Krylov 3400 solves at 15.0 iterations/solve, worst residual 9.99e-12, converged,
+stalled=false. Full bundle collected: figures/ (3 PNGs -- the `_make_plots` fix
+verified on real GPU output), movies/ (mp4, gif, contact, fields.npz), zip.
+
+Restart behaviour in the same probe: start 1 (deterministic 0.5*q_max) converged
+to the single well at 34.23 m3/d (f=490,433, nit=17, 119 evals); start 2 (random
+q0 summing to 150 m3/d, optim.seed=7) went 866,875 -> 821,250 -> 775,625 ->
+730,000 -> 684,375 -> 638,750 -> 547,554 and ran out of budget at 3 wells and
+50 m3/d. Same as 2D: one dominant attractor, restarts approach it from above.
+
+CERTIFICATE (400 fresh fields, seeds 900000+):
+    M=40 policy: q*=[0,0,0,34.23,0,0], J 490,076, meanG -0.494, CVaR +0.552,
+                 38/400 violations, reliability 0.9050 [0.872, 0.930] FAIL,
+                 mean tau 346.8 d.  Cost: 798 s for 400 scenarios on 8 cores.
+
+PROTOCOL FIX THAT MADE THIS POSSIBLE
+    The previous launch (20261122-201809) had start 1 converge at 100 evals in
+    11 min with f=501,363 -- 0.0004% above the 161-eval converged value, so the
+    converged budget is ~100 evals/start, not 400 -- and was still on start 2
+    when the VM was reclaimed at ~43 min. Fourth reclaim in four launches. The
+    run that worked was sized to 10.5 min of GPU work and collected the moment
+    the zip line appeared; the certificate ran on the CPU (13 min).

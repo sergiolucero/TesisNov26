@@ -598,3 +598,39 @@ test scenarios, 100 steps, 6 partially penetrating wells.
   LAUNCH NOTE: `colab3d.py launch` gained --nx/--ny/--nz, so a bigger geometry no
   longer needs a PRESETS edit. Both attempts were launched from the -sims worktree
   with the well-placement fix verified in the bundle before the meter started.
+
+RESOLUTION STUDY - one realisation, two grids (2026-11-23)
+----------------------------------------------------------
+The confound in every earlier cross-grid comparison: each run truncated its own KL
+basis, so different resolutions meant different aquifers. Fixed by drawing ONE
+realisation on the fine grid, upscaling by block averaging
+(full3D_colab_run.coarsen_realization / transfer_scenarios, tests in
+TestRealisationTransfer), and evaluating the SAME policies on both grids.
+
+  fine   48x24x12 = 13,824 cells (dx 4.17, dz 1.67)
+  coarse 24x12x6  =  1,728 cells (dx 8.33, dz 3.33), factor 2 per axis
+  16 scenarios, seed base 900000 (no search saw them), the 6 wells of the
+  13,824-cell run at their physical coordinates on both grids.
+  log K: fine mean 2.3046 std 0.4823 | coarse mean 2.3335 std 0.4179
+         (variance kept 0.751; the +0.029 level shift is Jensen from upscaling)
+
+  policy            J_fine     J_coarse    dJ       viol_f  viol_c  flags  r(J)   r(G)
+  no_pump           312,496.6  307,028.3   -1.75%   16/16   16/16   100%   +0.975 +0.927
+  uniform_half      912,500.0  912,500.0    0.00%    0/16    0/16   100%   +0.401 +0.685
+  bigrun_q*         444,846.3  447,131.1   +0.51%    0/16   11/16    31%   +0.573 +0.751
+  second design     443,386.5  443,165.9   -0.05%   16/16   16/16   100%   +0.979 +0.915
+
+  RESULT: the objective transfers (<=1.8% on the mean, identical ranking of the
+  four policies) and the constraint does not. The policy sitting on the
+  constraint - the 13,824-cell incumbent with train cvar_G +0.014 - looks
+  compliant on the fine grid (0/16) and violates 11/16 on the coarse one, with
+  per-scenario flags agreeing only 31% of the time.
+
+  Practical rule: coarse grids give the right cost ordering and the wrong
+  compliance answer for a policy on the constraint. Certify on the grid you will
+  be judged on; screening at coarse resolution is defensible, certifying is not.
+
+  Cost: fine archive 22.9 s, one 16-scenario evaluation 56-59 s; coarse archive
+  0.3 s, one evaluation 1.6-2.1 s. Whole study ~6 min on 8 cores.
+  Caveats: 16 scenarios is screening, not a certificate; the 32,768-cell
+  paperGPU preset is not covered.

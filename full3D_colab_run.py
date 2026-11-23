@@ -354,6 +354,53 @@ def sample_scenarios(grid, kl, seeds, random_source=False, random_gradient=False
 
 
 # ---------------------------------------------------------------------------
+# Realisation transfer between grids (the only honest way to study resolution)
+# ---------------------------------------------------------------------------
+def coarsen_realization(K: np.ndarray, factor: int) -> np.ndarray:
+    """Block-average a conductivity field by ``factor`` per axis.
+
+    A resolution study cannot compare two Karhunen--Loeve draws, because
+    truncating the expansion at a different grid gives a *different* random
+    field: comparing them compares two aquifers and calls the difference
+    "resolution". The defensible construction is to draw once on the fine grid
+    and upscale that same realisation, which is what this does.
+
+    The block average is arithmetic in K and therefore geometric in log K, i.e.
+    the effective conductivity of each coarse cell. This necessarily smooths: the
+    coarse field carries less variance than the fine one (`sigma` shrinks slightly
+    with the scale of averaging), and that smoothing is part of what "a coarser
+    grid" means, not an artifact to be corrected.
+    """
+    K = np.asarray(K, dtype=float)
+    f = int(factor)
+    if f < 1:
+        raise ValueError(f"factor must be >= 1, got {factor}")
+    if f == 1:
+        return K.copy()
+    for ax, name in enumerate("zyx"):
+        if K.shape[ax] % f:
+            raise ValueError(
+                f"axis {name} has {K.shape[ax]} cells, not a multiple of {f}")
+    nz, ny, nx = K.shape
+    return K.reshape(nz // f, f, ny // f, f, nx // f, f).mean(axis=(1, 3, 5))
+
+
+def transfer_scenarios(scen_fine, coarse_grid, factor: int):
+    """Map scenarios sampled on a fine grid onto a coarser one, same realisation."""
+    f = int(factor)
+    if coarse_grid.nz * f != scen_fine.K.shape[0] or \
+       coarse_grid.ny * f != scen_fine.K.shape[1] or \
+       coarse_grid.nx * f != scen_fine.K.shape[2]:
+        raise ValueError(
+            f"coarse grid {coarse_grid.nz}x{coarse_grid.ny}x{coarse_grid.nx} "
+            f"times {f} is not the fine field shape {scen_fine.K.shape}")
+    Kc = coarsen_realization(scen_fine.K, f)
+    return Scenario3D(scen_fine.seed, scen_fine.coeffs, Kc,
+                      scen_fine.clamp_fraction, scen_fine.source_scale,
+                      scen_fine.gradient_scale)
+
+
+# ---------------------------------------------------------------------------
 # Wells (partially penetrating)
 # ---------------------------------------------------------------------------
 def gaussian_well_weights_3d(grid, x, y, z_top, z_bot, eps_cells=1.5,

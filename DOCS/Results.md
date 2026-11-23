@@ -368,6 +368,21 @@ Ogata–Banks formula is the *Dirichlet* inlet solution; against a mass-flux inl
 it is off by a shift of `D/v` that never shrinks with dx, which is what the
 earlier "0.41 shape error" was.
 
+**The 13,824-cell run (BigRunNov23) does not extend the certificate.** A fourth
+search at `48x24x12 = 13,824` cells (`dx = dy = 4.17 m`, `n_KL` 2706, M_train=40,
+13.4 -> 5.78 s per evaluation on a T4, 103 evaluations in 613 s) found
+`q* = [12.7, 0, 0, 0, 0, 9.28]` m3/d at train J 445,090.5 / test J 445,197.3.
+The 400-field audit returns J 445,101.4 — the objective reproduces to 0.02% — but
+20/400 violations, reliability 0.9500 with Wilson [0.9240, 0.9674]:
+**inconclusive**, point estimate above the 0.94 gate, lower bound below it. Its
+in-run test row had already failed the same gate (0.9375), so here the smoke
+detector was right; at the paper geometry it was wrong. The 8,000-cell M=40
+certificate (0.9700) does not transfer to this geometry, and the design cannot
+say why: the grid and the KL realisation change together (`n_KL` 2062 vs 2706), so
+this is **not a resolution study**. Cost per scenario keeps growing with cells —
+0.032 s at 4,096, 0.071 at 8,000, 0.145 at 13,824 — and the run still fits a
+12-minute VM window. Details in `DOCS/3D_results.md`.
+
 What made M_train=100 affordable is the cost lever, not the hardware name: the
 batched torch backend evaluates 100 scenarios in **6.2 s** where NumPy needs
 ~105 s (~15x), because one batched Krylov solve replaces 100 sparse

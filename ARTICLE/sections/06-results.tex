@@ -323,6 +323,7 @@ $8{,}000$ & torch T4, $M{=}40$  & $[0.05,12.5,0,0,10.06,0]$ & $446{,}742$ & $0.9
 $8{,}000$ & torch T4, $M{=}100$ & $[0.2,12.5,0,0,9.77,0]$ & $446{,}286$ & $0.979$ & $0.9700$;\;[0.948, 0.983] \\
 $4{,}096$ & torch T4, $M{=}64$  & $[0,10.64,0,0,0,12.79,0,0,0]$ & $449{,}972$ & $0.953$ & $0.9725$;\;[0.951, 0.985] \\
 $4{,}096$ & NumPy, 3 starts    & $[17.05,0,0,0,0,0,0,0,8.42]$ & $457{,}397$ & $0.984$ & $0.9475$;\;[0.921, 0.965] \\
+$13{,}824$ & torch T4, $M{=}40$ & $[12.7,0,0,0,0,9.28]$ & $445{,}090$ & $0.938$ & $0.9500$;\;[0.924, 0.967] \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -356,6 +357,22 @@ $400$-field audit lands at $0.9475$, inconclusive, with a point estimate under t
 gate. Had we stopped at the run's own row we would have certified the wrong
 policy; the audit reversed the ranking relative to the in-run numbers
 ($0.984$ versus $0.953$ in-run, $0.9475$ versus $0.9725$ audited).
+
+A larger geometry does not extend either conclusion. At $13{,}824$ cells ($\Delta x=\Delta y=4.17$\,m, $n_{KL}=2706$,
+$M_{\text{train}}=40$, $5.8$\,s per evaluation on the same T4, $103$ evaluations in
+$613$\,s), extends neither conclusion. It found
+$q^\star=[12.7,0,0,0,0,9.28]$\,m$^3$/d at $J=445{,}090$, and the audit returns
+$J=445{,}101$ --- the objective reproduces across draws to $0.02\%$ --- with
+$20/400$ violations, reliability $0.9500$ and Wilson $[0.924,0.967]$:
+inconclusive, point estimate above the gate and lower bound below it. Its in-run
+row had already failed ($0.9375$), so on this geometry the smoke detector was
+right, which is the reverse of the paper geometry and is exactly why it is only a
+smoke detector. What the run does \emph{not} do is transfer the $8{,}000$-cell
+certificate ($0.9700$): the grid and the KL realisation change together
+($n_{KL}$ 2062 versus 2706), so this is not a resolution study and we do not read
+it as one. Cost per scenario keeps growing with cell count --- $0.032$\,s at
+$4{,}096$, $0.071$ at $8{,}000$, $0.145$ at $13{,}824$ --- and the run still fits
+a twelve-minute VM window.
 
 What made the $100$-scenario search affordable is exactly the lever of
 Section~\ref{sec:rescost}: the batched backend evaluates $100$ scenarios in

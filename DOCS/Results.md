@@ -296,12 +296,16 @@ pumping cost 821,250).
 > [0.948, 0.983]) instead of J 501,060 with one well at 37.27; `paper` J 449,972
 > with 2 wells at 23.44 m3/d (certified 0.9725 [0.951, 0.985]) instead of 50
 > m3/d over 4 wells at J 547,606. Full before/after table in
-> `DOCS/3D_results.md`. The M_train dose-response below does **not** survive the
-> fix (at the corrected geometry M=40 and M=100 find the same policy to 0.1% and
-> certify identically); the 2D version of it does, and is unaffected. The
-> text below is kept because the *reasoning* it records — audit on fresh fields,
-> and the in-run test row is not a certificate — is what surfaced the problem's
-> consequence rather than its cause.
+> `DOCS/3D_results.md`. The M_train dose-response below survives in weaker form:
+> at the corrected geometry M=40 and M=100 find the same policy to 0.1% and both
+> certify at 0.9700, so the *M=40 failure* was an artefact — but M=24 is
+> inconclusive (0.9375 at `alpha*M_train` = 1.2) and is still the cheapest
+> policy, so the boundary sits between 1.2 and 2.0 expected tail samples rather
+> than at 5 as 2D suggested. The 2D version of the rule is unaffected. And the
+> audit reversed the ranking once: the paper-geometry NumPy policy with the best
+> in-run number of any 3D run (0.984) audits at 0.9475, inconclusive. The text
+> below is kept because the reasoning it records — audit on fresh fields, the
+> in-run row is not a certificate — is what surfaced the consequence.
 
 The 3D runner has two geometries worth quoting. The **paper preset**
 (`32x16x8` = 4,096 cells, `n_KL` 1419, 64/128 scenarios, 9 wells) gives

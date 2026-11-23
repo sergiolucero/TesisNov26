@@ -310,51 +310,52 @@ seen.
 \centering
 \footnotesize
 \caption{Corrected 3D results. Every row is a different search, and each was
-audited out of sample. The $M_{\text{train}}=40$ row matters: at the fixed
-geometry it finds the $M_{\text{train}}=100$ policy to $0.1\%$ and certifies
-identically, so in three dimensions the sample size was not the binding
-constraint --- unlike the two-dimensional dose-response of
-Section~\ref{sec:res3dcert2d}.}
+audited on 400 fresh fields. The two $0.97$ rows are certified; the $M_{\text{train}}
+=24$ row is the cheapest and inconclusive, and the NumPy row has the best in-run
+number of any 3D run and still does not certify.}
 \label{tab:3dcert}
 \begin{tabular}{llrrrr}
 \toprule
 geometry & search & $q^\star$ (m$^3$/d) & train $J$ & in-run & 400-field rel.\;[CI] \\
 \midrule
-$8{,}000$ & torch T4, $M{=}100$ & $[0.2,12.5,0,0,9.77,0]$ & $446{,}286$ & $0.979$ & $0.9700$;\;[0.948, 0.983] \\
+$8{,}000$ & torch T4, $M{=}24$  & $[0,0,12.5,0,0,8.59]$ & $441{,}298$ & $0.958$ & $0.9375$;\;[0.909, 0.957] \\
 $8{,}000$ & torch T4, $M{=}40$  & $[0.05,12.5,0,0,10.06,0]$ & $446{,}742$ & $0.979$ & $0.9700$;\;[0.948, 0.983] \\
+$8{,}000$ & torch T4, $M{=}100$ & $[0.2,12.5,0,0,9.77,0]$ & $446{,}286$ & $0.979$ & $0.9700$;\;[0.948, 0.983] \\
 $4{,}096$ & torch T4, $M{=}64$  & $[0,10.64,0,0,0,12.79,0,0,0]$ & $449{,}972$ & $0.953$ & $0.9725$;\;[0.951, 0.985] \\
-$4{,}096$ & NumPy, 3 starts    & $[17.05,0,0,0,0,0,0,0,8.42]$ & $457{,}397$ & $0.984$ & not run \\
+$4{,}096$ & NumPy, 3 starts    & $[17.05,0,0,0,0,0,0,0,8.42]$ & $457{,}397$ & $0.984$ & $0.9475$;\;[0.921, 0.965] \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Three things follow, and the first is a negative result about our own earlier
-claim. \emph{Certification was not bought by scenario count in three
-dimensions.} Before the fix, the $M_{\text{train}}=40$ search found a cheaper
-policy that failed the audit at $0.9050$, which looked like the
-two-dimensional story repeating: price the tail from two scenarios and the search
-under-pumps. At the corrected geometry the same $40$-scenario search finds the
-same policy as the $100$-scenario one and both certify at $0.970$. The earlier
-contrast was a property of the transposed wells, where ``cheap'' policies really
-were under-pumping, and it does not survive. What survives, and is what the
-protocol is for, is that both policies are certified at all: twelve violations
-in four hundred fresh fields, with a lower bound of $0.948$ against the $0.94$
-gate.
+Three things follow, and the first corrects an earlier draft of this section.
+\emph{The $M_{\text{train}}=40$ failure was an artefact of the transposed wells.}
+Before the fix, that search found a cheaper policy which audited at $0.9050$ and
+looked like the two-dimensional story repeating. At the corrected geometry the
+same search finds the $M_{\text{train}}=100$ policy to $0.1\%$ and both certify
+at $0.970$; the reading of the earlier failure is withdrawn. A weaker boundary
+does remain: $M_{\text{train}}=24$ ($\alpha M_{\text{train}}=1.2$) is the cheapest
+policy in the table, $21.09$\,m$^3$/d at $J=441{,}298$, and it audits at
+$0.9375$ with a point estimate under the gate, while $\alpha M_{\text{train}}=2.0$
+passes. So cost and reliability are anti-correlated across these policies ---
+$1.1\%$ cheaper, $0.037$ lower on the audit --- but the crossover sits between
+one and two expected tail samples, lower than the two-dimensional rule of five.
+We report the boundary we measured rather than the one we expected.
 
 Second, \emph{policy multiplicity is real and is not a search artifact}. At the
 paper geometry two searches with the same seeds and different hardware settled on
 different designs: wells $\{2,6\}$ at $10.64$ and $12.79$\,m$^3$/d ($J=449{,}972$,
-certified), and wells $\{1,9\}$ at $17.05$ and $8.42$\,m$^3$/d
-($J=457{,}397$, in-run $0.984$). Both are plausible engineering answers and the
-cheaper of the two is $1.6\%$ cheaper, which is inside what we can resolve. A
+audited $0.9725$), and wells $\{1,9\}$ at $17.05$ and $8.42$\,m$^3$/d
+($J=457{,}397$). Both are plausible engineering answers, $1.6\%$ apart in cost. A
 single search is therefore not evidence of a unique optimum, and we do not claim
 one.
 
-Third, \emph{the in-run test row remains not a certificate}, in either direction.
-The policy certified at $0.9725$ scored $0.953$ on its own $128$-scenario test
-set; the policy certified at $0.9700$ scored $0.979$ on its own $48$. The two
-numbers are separately computed on separately drawn fields, and only the
-400-field audit settles anything.
+Third, \emph{the in-run test row is not a certificate}, and the paper geometry
+makes that unambiguous. The second design above has the \emph{best} in-run
+reliability of any 3D run here --- $0.984$, comfortably above the gate --- and its
+$400$-field audit lands at $0.9475$, inconclusive, with a point estimate under the
+gate. Had we stopped at the run's own row we would have certified the wrong
+policy; the audit reversed the ranking relative to the in-run numbers
+($0.984$ versus $0.953$ in-run, $0.9475$ versus $0.9725$ audited).
 
 What made the $100$-scenario search affordable is exactly the lever of
 Section~\ref{sec:rescost}: the batched backend evaluates $100$ scenarios in

@@ -427,6 +427,65 @@ run the pull was confirmed working from sweep 3 onwards (`nit 3, evals 22,
 best 456,096`), and the final checkpoint (nit 14, best 445,285.6) matches the
 metrics.
 
+## Resolution, measured properly: the objective transfers, the constraint does not
+
+Every 3D number elsewhere in this file comes from a run whose KL basis was
+truncated at that run's own grid, so two runs at different resolutions are two
+different aquifers. That is why no pair of them is a resolution study. The
+confound can be removed one way: draw **one** realisation on the fine grid,
+upscale it by block-averaging, and evaluate the **same policies** on both grids.
+`SCRIPTS/resolution_study.py` does that, and the construction lives in
+`full3D_colab_run.coarsen_realization` / `transfer_scenarios` with tests in
+`tests/test_fv3d_torch_colab.py` (`TestRealisationTransfer`).
+
+Setup: fine `48x24x12 = 13,824` cells (`dx = 4.17 m`, `dz = 1.67 m`) and coarse
+`24x12x6 = 1,728` cells (`dx = 8.33 m`, `dz = 3.33 m`), factor 2 per axis, same
+200x100x20 m domain. 16 scenarios from seed base 900000 — a draw no search saw.
+The six wells of the 13,824-cell run, at their physical coordinates, on both
+grids. Four policies: no pumping, uniform half capacity, that run's own
+`q* = [12.7, 0, 0, 0, 0, 9.28]`, and a second three-well rate design
+(`[0.05, 12.5, 0, 0, 10.06, 0]`) fixed on the same wells.
+
+| policy | $J$ fine | $J$ coarse | $\Delta J$ | violations fine | violations coarse | per-scenario flags agree | $r(J)$ | $r(G)$ |
+|---|---|---|---|---|---|---|---|---|
+| no pumping | 312,496.6 | 307,028.3 | $-1.75\%$ | 16/16 | 16/16 | 100% | +0.975 | +0.927 |
+| uniform half capacity | 912,500.0 | 912,500.0 | $0.00\%$ | 0/16 | 0/16 | 100% | +0.401 | +0.685 |
+| `q*` (13,824-cell) | 444,846.3 | 447,131.1 | $+0.51\%$ | **0/16** | **11/16** | **31%** | +0.573 | +0.751 |
+| second design | 443,386.5 | 443,165.9 | $-0.05\%$ | 16/16 | 16/16 | 100% | +0.979 | +0.915 |
+
+**The objective transfers. The constraint does not.** Mean $J$ agrees to within
+$1.8\%$ across all four policies and to $0.5\%$ or better for the three that are
+not trivial; more usefully, the *ranking* of the four policies by $J$ is
+identical on both grids. But the one policy that sits on the constraint — the
+13,824-cell incumbent, whose training `cvar_G` is $+0.014$ — looks compliant on
+the fine grid ($0/16$) and violates $11/16$ on the coarse one, with per-scenario
+violation flags agreeing only $31\%$ of the time. This is the resolution analogue
+of the earlier finding that the tail does not transport while reliability does:
+here the thing that fails to transport is the *reliability statement*, and the
+cause is not sampling but the grid.
+
+**Why the direction is not mysterious, and is not separable.** Block-averaging
+conserves the arithmetic mean of $K$ exactly but shifts the mean of $\log K$
+*upward* by Jensen (fine 2.3046, coarse 2.3335, i.e. about $3\%$ more conductive
+on average) and keeps $75\%$ of the log-variance. Higher apparent conductivity
+means a faster plume, and a pumping policy tuned to the fine aquifer then captures
+less of it. That shift is part of what "a coarser grid" means here — it is the
+upscaling, not an artifact to be subtracted — which is the honest reason a
+resolution study has to compare like this and state the bias rather than claim a
+clean "resolution effect".
+
+**The practical rule.** A coarse grid gives the right *cost ordering* of candidate
+policies and the wrong *compliance answer* for a policy that sits on the
+constraint. Certify on the grid you will be judged on. Screening at coarse
+resolution is defensible; certifying there is not.
+
+Caveats, stated plainly: 16 scenarios is a screening comparison, not a
+certificate; the four policies include two that are hopeless on this aquifer
+(16/16 violations) precisely because the point is agreement, not quality; and the
+32,768-cell `paperGPU` preset — a further factor 1.33 per axis — has not been
+covered. Numbers in `out3d_colab/resolution_study.json` (`out/` is gitignored, so
+they are reproduced here and in `RUNTIMES.txt`).
+
 ## Plume movie
 
 Every `full3D_colab_run.py` run now writes `<run>/movies/` with

@@ -156,3 +156,80 @@ class TestGridAxesAndWellPlacement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRealisationTransfer(unittest.TestCase):
+    """Realisation transfer is the only defensible basis for a resolution study.
+
+    Two KL draws on two grids are two different aquifers, so comparing them and
+    calling the difference "resolution" is the same class of error as comparing
+    two transposed grids. These tests pin the construction that avoids it:
+    draw once on the fine grid, block-average, and be explicit that the coarse
+    field has less variance.
+    """
+
+    def test_constant_field_is_preserved(self):
+        K = np.full((12, 24, 48), 7.5)
+        C = colab.coarsen_realization(K, 2)
+        self.assertEqual(C.shape, (6, 12, 24))
+        self.assertTrue(np.allclose(C, 7.5))
+
+    def test_block_average_matches_the_manual_mean(self):
+        rng = np.random.default_rng(3)
+        K = np.exp(rng.normal(0.0, 0.5, (8, 4, 6)))
+        C = colab.coarsen_realization(K, 2)
+        for k, j, i in ((0, 0, 0), (3, 1, 2)):
+            manual = K[2 * k:2 * k + 2, 2 * j:2 * j + 2, 2 * i:2 * i + 2].mean()
+            self.assertAlmostEqual(float(C[k, j, i]), float(manual), places=14)
+
+    def test_factor_one_returns_a_copy_not_the_same_object(self):
+        K = np.ones((2, 2, 2))
+        C = colab.coarsen_realization(K, 1)
+        self.assertTrue(np.array_equal(C, K))
+        self.assertIsNot(C, K)
+        C[0, 0, 0] = 5.0
+        self.assertEqual(float(K[0, 0, 0]), 1.0)
+
+    def test_non_multiple_shape_raises_and_names_the_axis(self):
+        with self.assertRaises(ValueError) as ctx:
+            colab.coarsen_realization(np.zeros((9, 24, 48)), 2)
+        self.assertIn("z", str(ctx.exception))
+
+    def test_factor_below_one_raises(self):
+        with self.assertRaises(ValueError):
+            colab.coarsen_realization(np.zeros((4, 4, 4)), 0)
+
+    def test_block_mean_conserves_K_and_shifts_logK_upwards(self):
+        rng = np.random.default_rng(11)
+        K = np.exp(rng.normal(0.0, 0.6, (16, 16, 16)))
+        C = colab.coarsen_realization(K, 2)
+        # Arithmetic block averaging conserves the arithmetic mean of K exactly,
+        # and that is the invariant to test. What it does NOT conserve is the
+        # mean of log K: by Jensen's inequality log of a block mean sits ABOVE the
+        # mean of the logs, so upscaling raises the apparent conductivity level
+        # and lowers the log-variance. That shift is a property of upscaling, not
+        # a bug, and a resolution study has to state it rather than wish it away.
+        self.assertAlmostEqual(float(C.mean()), float(K.mean()), places=12)
+        self.assertGreater(float(np.log(C).mean()), float(np.log(K).mean()))
+        self.assertLess(float(np.log(C).std()), 0.95 * float(np.log(K).std()))
+
+    def test_transfer_scenarios_carries_the_realisation_and_the_metadata(self):
+        grid_f = colab.Grid3D(8, 4, 2, 80.0, 40.0, 20.0)
+        grid_c = colab.Grid3D(4, 2, 1, 80.0, 40.0, 20.0)
+        kl = colab.KL3D(grid_f, sigma=0.5, ell_x=20.0, ell_y=20.0, ell_z=10.0,
+                        n_kl=0, k0=10.0, target_variance=0.95)
+        fine = colab.sample_scenarios(grid_f, kl, [1234])[0]
+        coarse = colab.transfer_scenarios(fine, grid_c, 2)
+        self.assertEqual(coarse.K.shape, (1, 2, 4))
+        self.assertEqual(coarse.seed, fine.seed)
+        self.assertTrue(np.array_equal(coarse.coeffs, fine.coeffs))
+        self.assertTrue(np.allclose(coarse.K, colab.coarsen_realization(fine.K, 2)))
+
+    def test_transfer_rejects_a_grid_that_is_not_the_coarsening(self):
+        grid_f = colab.Grid3D(8, 4, 2, 80.0, 40.0, 20.0)
+        kl = colab.KL3D(grid_f, sigma=0.5, ell_x=20.0, ell_y=20.0, ell_z=10.0,
+                        n_kl=0, k0=10.0, target_variance=0.95)
+        fine = colab.sample_scenarios(grid_f, kl, [7])[0]
+        wrong = colab.Grid3D(4, 2, 2, 80.0, 40.0, 20.0)
+        with self.assertRaises(ValueError):
+            colab.transfer_scenarios(fine, wrong, 2)

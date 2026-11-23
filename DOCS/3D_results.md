@@ -352,6 +352,81 @@ solve silently poisons J): flow CG 217 iterations to 8.6e-12, converged, not
 stalled; transport 100 solves x 100 steps at ~0.07 s per scenario, `converged:
 true`, `stalled: false`. The movie rendered 32 frames at 0.6 s per capture.
 
+## BigRunNov23: the same search at 13,824 cells, and an audit that says "not yet"
+
+The largest 3D geometry attempted so far. `48x24x12 = 13,824` cells over the same
+200x100x20 m domain, so `dx = dy = 4.17 m` (4.8 cells per 20 m correlation length,
+against 2.4 at the paper preset and 4.0 at size_mid), `dz = 1.67 m` over 12 layers,
+and the 30 % screen interval covers about 3.6 layers, so partially penetrating
+wells produce real vertical flow. `n_KL = 2706` at the 0.95 target.
+
+| quantity | value |
+|---|---|
+| grid / cells | 48x24x12 = 13,824, `n_KL` 2706 |
+| scenarios | 40 train / 48 test (seed 1000 / 500000), 100 time steps |
+| backend | torch float64 on a T4 (`Tesla T4`, torch 2.14.1+cu130) |
+| cost | 5.78 s per full-archive evaluation = **0.145 s per scenario** |
+| search | batched pattern search, 1 start, 103 evaluations, 613.4 s wall |
+| $q^\star$ | `[12.7, 0, 0, 0, 0, 9.28]` m3/d = 21.97 m3/d, 2 of 6 wells active |
+| train $J$ | 445,090.5 (reliability 0.975, `cvar_G` +0.014, mean cleanup 91 d) |
+| test $J$ | 445,197.3 (reliability **0.9375**, `cvar_G` +0.271, mean cleanup 228 d) |
+| **400-field audit** (seeds 900000+) | J 445,101.4, 20/400 violations, reliability **0.9500**, Wilson **[0.9240, 0.9674] -> INCONCLUSIVE** |
+| transport Krylov | 1700 solves, 18.7 it/solve (worst 24) at 9.998e-12, converged, not stalled |
+| no-pump baseline | J 314,413.9, reliability 0.0 |
+
+Three things this run establishes, and one it does not.
+
+**The objective is reproducible across scenario draws; the certificate is not.**
+Train 445,090.5, test 445,197.3 and a fresh 400-field draw 445,101.4 agree to
+0.02 %, which is the same pattern as everywhere else in this document: $J$ is
+dominated by deterministic pump and treat cost once the plume is captured, so a
+400-scenario audit cannot confirm a policy *by its objective*. It has to be read
+as a violation count, and the count is 20/400 — a point estimate of 0.950, above
+the 0.94 gate but with a Wilson lower bound of 0.924. **Inconclusive**, not a
+pass.
+
+**The search put the constraint on its boundary and the audit saw it.** The
+incumbent's `cvar_G` is +0.014 on the training draw: it is paying exactly enough
+reliability to sit at the constraint, as every cheap policy in this document has
+done. Its in-run test row (0.9375) failed the gate outright, and the fresh draw
+agrees at 0.950. So here the in-run row *did* predict the audit — the opposite of
+the paper-geometry case, which is the point: it is a smoke detector, sometimes
+right and sometimes wrong.
+
+**It does not transfer the 8,000-cell certificate.** The M=40 recipe that
+certified at 0.9700 on the 8,000-cell geometry gives 0.9500 here. Two things
+differ at once — the grid and the aquifer realisation (`n_KL` 2062 vs 2706, so
+different per-seed fields) — and this design cannot separate them. **This is not
+a resolution study**, for the reason stated above: truncating a KL expansion
+differently at a different grid gives a different random field, so no pair of
+these runs is "the same aquifer seen coarser". A resolution study needs one
+realisation interpolated onto two grids, which is not what these runs are.
+
+**What it does establish about cost:** 13,824 cells at M=40 costs 5.78 s per
+evaluation, i.e. 0.145 s per scenario, against 0.071 s at 8,000 cells and
+0.032 s at 4,096. Cost per scenario is therefore growing with cell count
+(~$n^{1.4}$ per scenario over this range, consistent with the earlier ~$n^{1.9}$
+for full-archive cost divided by a fixed M), and the run still fits a 12-minute
+VM window.
+
+### The VM died twice, so the search now writes a checkpoint
+
+The first attempt at this geometry ran at M=100 (13.4 s/eval, 111 evaluations,
+budget 25 min). It was reclaimed after **15 minutes** — the seventh reclaim in
+seven launches, and the shortest yet — having reached `best = 438,852` at sweep 8,
+which is better than any certified policy in this document. It wrote nothing,
+because artifacts are assembled only at the end. The science was lost with the VM.
+
+`pattern_search_batched3d` and `multi_start_batched3d` now take an `on_iter`
+callback and `run_torch` passes one that writes `<out>/checkpoint.json`
+(`q`, `nit`, `best`, `evals`, `step`, wells, grid, `M_train`) atomically after
+every sweep; exceptions are swallowed on purpose so a checkpoint failure cannot
+kill a paid run. A local poller pulls the file every 60 s while the VM is alive,
+so a reclaim costs one sweep instead of everything. On the successful 12-minute
+run the pull was confirmed working from sweep 3 onwards (`nit 3, evals 22,
+best 456,096`), and the final checkpoint (nit 14, best 445,285.6) matches the
+metrics.
+
 ## Plume movie
 
 Every `full3D_colab_run.py` run now writes `<run>/movies/` with

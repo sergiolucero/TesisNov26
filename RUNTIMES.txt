@@ -551,3 +551,50 @@ LAUNCH DISCIPLINE (two paid mistakes this session, both the same shape)
      failure is a one-line Errno 2 while the VM keeps billing.
   Rule: after every launch, unzip the bundle and grep for the fix before trusting
   the run; and always verify 'colab sessions' is empty afterwards.
+
+BIGRUNNOV23 - 13,824-cell 3D search on a T4 (2026-11-23)
+--------------------------------------------------------
+The largest 3D geometry yet: 48x24x12 = 13,824 cells over 200x100x20 m
+(dx = dy = 4.17 m, dz = 1.67 m, n_KL 2706 at the 0.95 target), 40 train / 48
+test scenarios, 100 steps, 6 partially penetrating wells.
+
+  attempt 1: M_train=100, budget 25 min, T4 float64
+    13.449 s per full-archive evaluation (0.134 s/scenario), max_evals clamped
+    120 -> 111. Reached best 438,852 at sweep 8 (58 evals) in 15 min, then the
+    VM was RECLAIMED -- 7th reclaim in 7 launches, and the shortest yet.
+    Nothing was written, because artifacts are only assembled at the end.
+
+  attempt 2: M_train=40, budget 10 min, T4 float64, run 20261123-063033
+    5.78 s per evaluation (0.145 s/scenario), 103 evals, 613.4 s wall,
+    12 min total VM time, collected, VM stopped.
+    q* = [12.7, 0, 0, 0, 0, 9.28] m3/d (21.97 total, 2 of 6 active)
+    train J 445,090.5 rel 0.975 cvar_G +0.014 mean_tau 91 d
+    test  J 445,197.3 rel 0.9375 cvar_G +0.271 mean_tau 228 d
+    no-pump J 314,413.9 rel 0.0
+    transport Krylov 1700 solves, 18.7 it/solve (worst 24) at 9.998e-12,
+    converged, not stalled.
+    in-run gate test_reliability>=1-alpha-1% FAILS (0.9375 < 0.94).
+    400-field audit (seeds 900000+): J 445,101.4, mean_G -0.611,
+    CVaR +0.328, 20/400 violations, reliability 0.9500 [0.9240, 0.9674]
+    -> INCONCLUSIVE. 1674 s on 8 local cores.
+    Movie (32 frames): untreated final peak 45.24 mg/L, mean 2.925, 36.7% of
+    cells > 1 mg/L; under q* final peak 11.79, mean 0.391, 10.1%.
+
+  Reading: the objective is reproducible across draws to 0.02% (445,090 train /
+  445,197 test / 445,101 fresh-400) while the certificate is not, so an audit has
+  to be read as a violation count and not as an objective agreement. The 8,000-cell
+  M=40 certificate (0.9700) does NOT transfer to this geometry (0.9500), and this
+  design cannot say why: grid and KL realisation change together (n_KL 2062 vs
+  2706), so it is NOT a resolution study. A resolution study needs ONE realisation
+  on two grids.
+
+  CHECKPOINT (new): pattern_search_batched3d/multi_start_batched3d take an
+  on_iter callback; run_torch writes <out>/checkpoint.json (q, nit, best, evals,
+  step, wells, grid, M_train) atomically after every sweep, exceptions swallowed.
+  Pull it with `colab download` every 60 s while the VM lives. Confirmed working
+  from sweep 3 (nit 3, evals 22, best 456,096); final checkpoint nit 14,
+  best 445,285.6 matches metrics.json.
+
+  LAUNCH NOTE: `colab3d.py launch` gained --nx/--ny/--nz, so a bigger geometry no
+  longer needs a PRESETS edit. Both attempts were launched from the -sims worktree
+  with the well-placement fix verified in the bundle before the meter started.

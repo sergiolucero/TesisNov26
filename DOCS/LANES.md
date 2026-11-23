@@ -37,6 +37,12 @@ restriction on *writing*.
 `DOCS/Actions.md` is append-only on purpose: it is the only file both lanes must
 touch, and a one-row-per-change rule keeps the conflict window to seconds.
 
+When a lane needs something from the other and neither agent is running, the
+request goes in [`HANDOFF.md`](HANDOFF.md): one entry per ask, answered in place in
+the four-field format below. A request that cannot be answered is withdrawn, not
+left open, and the entry is deleted in the same commit that lands the number in
+prose.
+
 ## The three rules
 
 ### 1. No lane-wide git operations

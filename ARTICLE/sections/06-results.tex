@@ -279,39 +279,54 @@ only in how many scenarios the sample average could afford.
 \begin{table}[htbp]
 \centering
 \small
-\caption{The same $8{,}000$-cell problem, twice. The right-hand columns are an
-independent audit on 400 fresh fields (seed base $900{,}000$) that no search
-saw. The cheaper policy fails it; the policy whose search could see the tail
-passes.}
+\caption{The same $8{,}000$-cell problem, three times, differing only in how many
+scenarios the sample average could afford. The right-hand columns are an
+independent audit on 400 fresh fields (seed base $900{,}000$) that no search saw.
+The che\emph{apest} policy is the second-least reliable of the three; only the
+one whose search could see the tail passes.}
 \label{tab:3dcert}
 \begin{tabular}{lrrrrr}
 \toprule
 search & $M_{\text{train}}$ & train $J$ & in-run test rel. & 400-field rel.\;[CI] & verdict \\
 \midrule
-NumPy, $90$\,min budget & $24$  & $519{,}263$ & $0.875$ & $0.9075$;\;[0.875, 0.932] & \textbf{fail} \\
-torch on a T4           & $100$ & $501{,}060$ & $0.938$ & $0.9675$;\;[0.945, 0.981] & \textbf{pass} \\
+torch on a T4, cheapest found & $40$  & $490{,}433$ & $0.833$ & $0.9050$;\;[0.872, 0.930] & \textbf{fail} \\
+NumPy, $90$\,min budget       & $24$  & $519{,}263$ & $0.875$ & $0.9075$;\;[0.875, 0.932] & \textbf{fail} \\
+torch on a T4, certified      & $100$ & $501{,}360$ & $0.938$ & $0.9675$;\;[0.945, 0.981] & \textbf{pass} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Three things follow. First, the failure at $M_{\text{train}}=24$ is statistical,
-not numerical: $\alpha M_{\text{train}}=1.2$, so the tail is priced from about
-one scenario, the search pushes $\mathrm{CVaR}(G)$ onto the constraint
-($+0.036$) and buys a policy that violates $37$ of $400$ fresh fields. The
-same search in two dimensions at $M_{\text{train}}=16$ failed identically, which
-is why the audit is now routine rather than exceptional. Second, the in-run test
+The three rows are a dose-response, and it points the wrong way for the cheap
+policies. The failure at $M_{\text{train}}=24$ is statistical, not numerical:
+$\alpha M_{\text{train}}=1.2$, so the tail is priced from about one scenario, the
+search pushes $\mathrm{CVaR}(G)$ onto the constraint ($+0.036$) and buys a policy
+that violates $37$ of $400$ fresh fields. The same search in two dimensions at
+$M_{\text{train}}=16$ failed identically, which is why the audit is now routine
+rather than exceptional. But the more instructive row is the $M_{\text{train}}=40$
+one: it \emph{found a cheaper policy} --- a single well at $34.23$\,m$^3$/d, train
+$J=490{,}433$, $2.2\%$ below the certified result --- and that policy is
+\emph{less} reliable, not more, at $0.9050$ with an upper bound of $0.930$. It is
+cheaper because it under-pumps. Across these three policies cost and reliability
+are anti-correlated, and a search with a small sample is precisely what cannot
+see that: with $\alpha M_{\text{train}}=1.2$ and $2.0$ the constraint is priced
+from one or two scenarios, and with $5.0$ it holds. The gate opens between two
+and five expected tail samples, which is the quantitative form of the rule stated
+in Section~\ref{sec:res2d}. Second, the in-run test
 row is not a certificate in either direction: the passing policy's own test row
 ($0.9375$ at $M=48$) would have failed the gate that its $400$-field audit
 passes, and an intermediate $128$-field draw could not separate the two policies
-at all ($0.961$ versus $0.930$, both inconclusive). Third, the two optima are
-different designs, not two noisy readings of one: $42.19$\,m$^3$/d spread over
+at all ($0.961$ versus $0.930$, both inconclusive). Third, the optima are
+different designs, not noisy readings of one: $42.19$\,m$^3$/d spread over
 five wells versus $37.27$\,m$^3$/d from a single well, with the single well
 yielding the tighter plume (final peak $3.7$ versus $6.0$\,mg/L; $3.9\%$ versus
-$6.3\%$ of cells above the limit).
+$6.3\%$ of cells above the limit). A random restart, added to the $M_{\text{train}}
+=40$ probe, descended from $866{,}875$ to $547{,}554$ and ran out of budget at
+three wells and $50$\,m$^3$/d: restarts approach the same attractor from above
+without beating it, so the number of starts is not what limits this search.
 
 What made $M_{\text{train}}=100$ affordable is exactly the lever of
 Section~\ref{sec:rescost}: the batched backend evaluates $100$ scenarios in
-$6.2$\,s where the NumPy reference needs about $78$\,s, an $11\times$ gain that
+$6.2$\,s where the NumPy reference needs about $105$\,s, a $15\times$ gain that
 comes from replacing $100$ sparse factorisations with one batched Krylov solve.
 It is not a property of the card -- CPU torch is already $2.4\times$ faster than
 NumPy on this geometry ($7.75$\,s versus $18.5$\,s per eight-scenario

@@ -301,10 +301,17 @@ search saw:
 
 | search | M_train | train J | in-run test rel. | 400-field reliability [95% Wilson] | verdict |
 |---|---|---|---|---|---|
+| T4, cheapest found | 40 | **490,433** | 0.833 | 0.9050 [0.872, 0.930] | **FAIL** |
 | NumPy, 90-min budget | 24 | 519,263 | 0.875 | 0.9075 [0.875, 0.932] | **FAIL** |
-| torch on a T4 | 100 | 501,060 | 0.938 | **0.9675 [0.945, 0.981]** | **PASS** |
-| | | | | fresh J: 519,433 vs 501,050 | |
+| T4, certified | 100 | 501,360 | 0.938 | **0.9675 [0.945, 0.981]** | **PASS** |
+| | | | | fresh J: 490,076 / 519,433 / 501,050 | |
 
+- **Certification is a dose-response, and cheaper is not better.** The cheapest
+  policy found (M_train=40, train J 490,433 — 2.2% below the certified one, a
+  single well at 34.23 m3/d) is the *second-least* reliable at 0.9050
+  [0.872, 0.930]: it is cheaper because it under-pumps. `alpha*M_train` is 1.2,
+  2.0 and 5.0 across the three searches, so the gate opens between two and five
+  expected tail samples.
 - **The M_train=24 policy is rejected**, not merely unproven: its interval's
   upper bound (0.932) is below the 0.94 gate. `alpha*M_train = 1.2`, so the tail
   was priced from about one scenario, the search pushed CVaR(G) onto the
@@ -317,13 +324,17 @@ search saw:
   interval is [0.83, 0.98]. A 128-field draw still cannot separate the policies
   (0.961 [0.912, 0.983] vs 0.930 [0.872, 0.963], both INCONCLUSIVE) although the
   ordering is right. 400 fields decide it.
-- **The two optima are different designs**: 42.19 m3/d over five wells versus
+- **The optima are different designs**: 42.19 m3/d over five wells versus
   37.27 m3/d from a single well, and the single well gives the tighter plume
   (final peak 3.7 vs 6.0 mg/L; 3.9% vs 6.3% of cells above 1 mg/L).
+- **Restarts re-sample the basin rather than escaping it.** A random start
+  (optim.seed=7, q0 summing to 150 m3/d) descended 866,875 -> 547,554 and ran
+  out of budget at three wells and 50 m3/d, while the deterministic start
+  reached the single well at 34.23 m3/d and won.
 
 What made M_train=100 affordable is the cost lever, not the hardware name: the
 batched torch backend evaluates 100 scenarios in **6.2 s** where NumPy needs
-~78 s (~11x), because one batched Krylov solve replaces 100 sparse
+~105 s (~15x), because one batched Krylov solve replaces 100 sparse
 factorisations. CPU torch is already 2.4x faster than NumPy at this geometry
 (7.75 s vs 18.5 s per 8-scenario evaluation), so the honest statement is that
 the *backend* bought the scenario count and the GPU bought the wall clock

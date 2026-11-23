@@ -127,6 +127,22 @@ the trusted 1D result before adding vertical physics.
 **Gate G3.1:** interior rel-L2 `≤ 1.5e-2`; `‖∂u/∂η‖` and `‖∂u/∂ζ‖`
 `≤ 1e-3`; full-grid error no worse than 1D by more than 20%.
 
+**Status of the finite-volume half (2026-11-23): PASSED**, with one caveat about
+which analytic solution applies. A mass-flux inlet is not a Dirichlet inlet, so
+the classical Ogata--Banks formula -- which carries the reflected
+`exp(vx/D) erfc(b)` term -- is the wrong reference: at the parameters used it
+differs by a *shift* of `D/v` (5--10 cells) that never shrinks with `dx`. Against
+the swept front `0.5 C0 erfc((x - vt)/2 sqrt(Dt))` the interior relative L2 is
+`1.1e-2` at `dx = 1 m` and `4.0e-3` at `dx = 0.5 m` (first order in `dx`; `3.4e-3`
+once the upwind term `v dx/2` is added to `D`). The transverse requirements are
+satisfied at machine precision on an extruded column, and the dispersion tensor
+itself is verified by pulse moments (`alpha_L v + v dx/2` longitudinally,
+`alpha_T v` transversely, centroid at the pore velocity). Tests:
+`tests/test_fv3d_reference.py`. This is the reference solver
+(`physics/fv3d.py`); the production 3D pipeline is `full3D_colab_run.py`, whose
+own verification is mass balance plus NumPy/torch parity plus the same moment
+test.
+
 ### Stage 3.2 — 3D point-source Green's function
 
 **Physics:** uniform flow, continuous point source in an infinite domain,
@@ -372,6 +388,7 @@ Use the same metrics as in 2D, plus 3D-specific checks:
 |---|---|---|
 | G3.1 | extruded 1D/2D, interior rel-L2 | `≤ 1.5e-2` |
 | G3.1 | `∂u/∂η`, `∂u/∂ζ` | `≤ 1e-3` |
+| G3.1 | **FV status** | **PASS** (rel-L2 4.0e-3 at dx = 0.5 m; see Stage 3.1) |
 | G3.2 | 3D Green's function plume core | `≤ 5%` |
 | G3.2 | mass balance | `≤ 1%` |
 | G3.3 | 3D vs axisymmetric head / velocity | `≤ 2%` / `≤ 5%` |

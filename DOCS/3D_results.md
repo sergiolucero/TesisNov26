@@ -194,17 +194,25 @@ Three findings, in decreasing order of importance:
    headline. Both policies were re-evaluated on the same 400 fresh fields
    (seeds 900000+, `SCRIPTS/check_tail3d.py --m-scen 400`):
 
-   | policy | violations | reliability | 95% Wilson | verdict | fresh J |
-   |---|---|---|---|---|---|
-   | GPU, M_train=100 | 13/400 | **0.9675** | [0.945, 0.981] | **PASS** | 501,050 |
-   | NumPy, M_train=24 | 37/400 | 0.9075 | [0.875, 0.932] | **FAIL** | 519,433 |
+   | policy | M_train | train J | violations | reliability | 95% Wilson | verdict |
+   |---|---|---|---|---|---|---|
+   | GPU, cheapest found | 40 | **490,433** | 38/400 | 0.9050 | [0.872, 0.930] | **FAIL** |
+   | NumPy, 90-min budget | 24 | 519,263 | 37/400 | 0.9075 | [0.875, 0.932] | **FAIL** |
+   | GPU, certified | 100 | 501,360 | 13/400 | **0.9675** | [0.945, 0.981] | **PASS** |
 
-   The GPU policy is the first *certified* 3D policy at this geometry: its
-   interval's lower bound clears the 0.94 gate. The NumPy policy is *rejected* —
-   the upper bound is 0.932 — which is the honest reading of a search that
-   estimated the tail from `alpha*M_train = 1.2` scenarios. It is also 3.5%
-   cheaper (501,050 vs 519,433) and much cleaner on the plume (final peak 3.71 vs
-   5.95 mg/L, 3.9% vs 6.3% of cells above the limit).
+   The three rows are a dose-response, and it points the wrong way for the cheap
+   policies. The M=40 search (240 evaluations, 631 s, `--m-train 40`) found a
+   *cheaper* policy than the certified one — a single well at 34.23 m3/d, train J
+   490,433, i.e. 2.2% below the M=100 result — and it is **less reliable**, not
+   more: 38/400 violations, 0.9050, upper bound 0.930, rejected. So the ordering
+   by cost runs 519k, 490k, 501k and the ordering by reliability runs 0.9075,
+   0.9050, 0.9675: the cheapest policy is the second-least reliable, and only the
+   most expensive one passes. `alpha*M_train` is 1.2, 2.0 and 5.0 respectively —
+   the gate opens somewhere between two and five expected tail samples, which is
+   the quantitative version of the 2D rule "require `alpha*M_train >= 5`".
+
+   The certified policy is also much cleaner on the plume than the two rejected
+   ones (final peak 3.71 vs 5.95 mg/L, 3.9% vs 6.3% of cells above the limit).
 
    Sample size is what decides this, and 128 was not enough: on a 128-field draw
    the same two policies give 5/128 = 0.961 [0.912, 0.983] and 9/128 = 0.930
@@ -212,7 +220,17 @@ Three findings, in decreasing order of importance:
    Note too that the GPU run's *own* test row (0.9375) fails the gate while its
    fresh draw (0.9675) passes: at M=48 the interval is 0.83-0.98, so an in-run
    row can neither certify nor condemn a policy. Only the 400-draw audit does.
-3. **The optimum is not unique, and single-well policies are competitive.** The
+3. **Restarts do not escape the basin, they re-sample it.** The M=40 probe ran
+   two starts: the deterministic `0.5*q_max` start converged to the single well
+   at 34.23 m3/d (f = 490,433 at nit=17, 119 evaluations), and the random start
+   (q0 summing to 150 m3/d, `optim.seed = 7`) descended 866,875 -> 821,250 ->
+   775,625 -> 730,000 -> 684,375 -> 638,750 -> 547,554 before its budget ran out,
+   ending at 3 active wells and 50 m3/d. That is the same picture as the 2D
+   restart experiment: the landscape has one dominant attractor (few wells, one
+   of them carrying ~35 m3/d) and random starts approach it from above without
+   beating it. Neither start escaped, so a single start is not the limitation —
+   the sample size is.
+4. **The optimum is not unique, and single-well policies are competitive.** The
    GPU search converged on one well at 37.27 m³/d while the NumPy search spread
    42.19 m³/d over five wells; both sit on the constraint (CVaR ≈ +0.02 train)
    and both are ~0.96-0.98 reliable. A policy-multiplicity statement needs the

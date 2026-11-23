@@ -418,3 +418,48 @@ LAUNCH FOOTGUNS HIT THIS SESSION
     stayed healthy -- poll with `colab download` of run.log, not `colab exec`.
   * `_make_plots` crashed on the torch path after a successful search (fixed):
     a complete run had metrics+policy+movie but no figures and no zip.
+
+3D CERTIFICATION DOSE-RESPONSE (2026-11-23, out3d_colab/plume3d_s*_m40)
+-----------------------------------------------------------------------
+The question: how many training scenarios does a 3D policy need before its
+reliability claim survives an audit on fields the search never saw? Three
+searches, same geometry (8,000 cells), same wells, same seeds, same cost model,
+differing only in M_train; each policy then evaluated on 400 fresh fields
+(seed base 900000) with SCRIPTS/check_tail3d.py.
+
+    M_train  train J    in-run test rel  400-field rel [95% Wilson]  verdict
+    24       519,263    0.875            0.9075 [0.875, 0.932]       FAIL
+    40       490,433    0.833            0.9050 [0.872, 0.930]       FAIL
+    100      501,360    0.938            0.9675 [0.945, 0.981]       PASS
+
+alpha*M_train = 1.2 / 2.0 / 5.0, so the gate opens between two and five expected
+tail samples. Note the ordering: the CHEAPEST policy (M=40, 2.2% below the
+certified one) is the second-least reliable. Cheaper is not better here; it is
+cheaper because it under-pumps.
+
+The M=40 probe (SCRIPTS/colab3d.py launch --preset size_mid --gpu T4 --dtype
+float64 --m-train 40 --m-test 48 --max-evals 120 --n-starts 2 --seed 7
+--budget 20): 240 evaluations in 631.5 s, 3.04 s/eval at M=40 = 0.076 s/scenario
+(against 0.071 at M=100, so cost is linear in M as it should be), transport
+Krylov 3400 solves at 15.0 iterations/solve, worst residual 9.99e-12, converged,
+stalled=false. Full bundle collected: figures/ (3 PNGs -- the `_make_plots` fix
+verified on real GPU output), movies/ (mp4, gif, contact, fields.npz), zip.
+
+Restart behaviour in the same probe: start 1 (deterministic 0.5*q_max) converged
+to the single well at 34.23 m3/d (f=490,433, nit=17, 119 evals); start 2 (random
+q0 summing to 150 m3/d, optim.seed=7) went 866,875 -> 821,250 -> 775,625 ->
+730,000 -> 684,375 -> 638,750 -> 547,554 and ran out of budget at 3 wells and
+50 m3/d. Same as 2D: one dominant attractor, restarts approach it from above.
+
+CERTIFICATE (400 fresh fields, seeds 900000+):
+    M=40 policy: q*=[0,0,0,34.23,0,0], J 490,076, meanG -0.494, CVaR +0.552,
+                 38/400 violations, reliability 0.9050 [0.872, 0.930] FAIL,
+                 mean tau 346.8 d.  Cost: 798 s for 400 scenarios on 8 cores.
+
+PROTOCOL FIX THAT MADE THIS POSSIBLE
+    The previous launch (20261122-201809) had start 1 converge at 100 evals in
+    11 min with f=501,363 -- 0.0004% above the 161-eval converged value, so the
+    converged budget is ~100 evals/start, not 400 -- and was still on start 2
+    when the VM was reclaimed at ~43 min. Fourth reclaim in four launches. The
+    run that worked was sized to 10.5 min of GPU work and collected the moment
+    the zip line appeared; the certificate ran on the CPU (13 min).

@@ -361,6 +361,55 @@ reason in Section~\ref{sec:3d-not}: truncating the expansion differently gives a
 different random field, and a resolution claim needs \emph{one} realisation
 represented on two grids.
 
+\subsection{Resolution, measured properly}
+\label{sec:3d-resolution}
+
+Every cross-grid comparison in this chapter so far has a confound that has to be
+named: each run truncates its own Karhunen--Lo\`eve basis, so a finer grid is also
+a \emph{different} aquifer, and no pair of runs is a resolution study. The
+confound can be removed one way, and it was: draw one realisation on the fine
+grid, upscale it by block-averaging --- which conserves the arithmetic mean of $K$
+and shifts the mean of $\log K$ upward by Jensen, so the coarse grid is genuinely
+a slightly more conductive aquifer and that is part of what coarsening means ---
+and then evaluate the \emph{same} policies on both grids.
+
+The pair is $48\times24\times12=13\,824$ cells against $24\times12\times6=1\,728$
+(factor two per axis, same domain), sixteen scenarios from a draw no search saw,
+and the same six wells at their physical coordinates on both grids
+(Table~\ref{tab:3d-resolution}).
+
+\begin{table}[t]
+  \centering
+  \caption{One realisation, two grids, four fixed policies. The objective agrees
+  to $1.8\%$ and ranks the four policies identically; the compliance verdict of
+  the policy that sits \emph{on} the constraint does not agree at all.}
+  \label{tab:3d-resolution}
+  \begin{tabular}{@{}lrrrrr@{}}
+    \toprule
+    policy & $J$, $13\,824$ & $J$, $1\,728$ & $\Delta J$ & violations $13\,824\to1\,728$ & flags agree \\
+    \midrule
+    no pumping & $312\,497$ & $307\,028$ & $-1.75\%$ & $16/16\to16/16$ & $100\%$ \\
+    uniform half & $912\,500$ & $912\,500$ & $0.00\%$ & $0/16\to0/16$ & $100\%$ \\
+    $\mathbf{q}^\star_{13\,824}$ & $444\,846$ & $447\,131$ & $+0.51\%$ & $\mathbf{0/16\to11/16}$ & $\mathbf{31\%}$ \\
+    second design & $443\,387$ & $443\,166$ & $-0.05\%$ & $16/16\to16/16$ & $100\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The result is a clean split. \emph{Cost} is a grid-insensitive quantity: the mean
+$J$ moves by at most $1.8\%$, the three non-trivial policies agree to $0.5\%$ or
+better, and the four policies are ranked identically on both grids. \emph{Compliance
+status} is not: the policy whose training tail sits on the constraint --- the
+incumbent of the $13\,824$-cell run, $\mathrm{CVaR}_{5\%}(G)=+0.014$ --- is
+compliant on every fine-grid scenario and violates eleven of sixteen on the coarse
+one, with per-scenario flags agreeing $31\%$ of the time. This is the resolution
+analogue of the sample-size finding: a reliability statement does not transport,
+and a coarse grid gives the right ordering of candidate designs and the wrong
+compliance answer for one that sits on the constraint. The practical rule follows
+directly --- screen at whatever resolution you can afford, certify on the grid you
+will be judged on --- and it is the reason the audits in this chapter are all run
+on the same grid as the search that produced the policy.
+
 \section{What the plume movie shows}
 
 Each 3D run now also writes a movie of the same scenario untreated beside the
@@ -493,10 +542,9 @@ the protocol transfers. Six things are deliberately not claimed.
     the $8{,}000$-cell one is unattributed} ($0.9500$ vs $0.9700$). The grid and
     the realisation change together, so nothing here says whether resolution helps,
     hurts, or does neither.
-  \item \textbf{None of this is a resolution study} (Section~\ref{sec:3d-wall}). A
-    resolution claim needs one realisation represented on two grids ---
-    coarse-graining a fine draw rather than re-truncating the expansion --- and
-    that experiment has not been run.
+  \item \textbf{One realisation on two grids is enough to show that the
+    constraint is resolution-dependent, and the $32{,}768$-cell preset has not
+    been covered} (Section~\ref{sec:3d-resolution}).
   \item \textbf{The physics is deliberately narrower than a site model}: the
     dispersion tensor is diagonal (cross terms omitted), there is no density
     coupling and no NAPL phase, the conductivity is a single log-normal family

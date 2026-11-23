@@ -207,6 +207,8 @@ def cmd_launch(args) -> None:
     for flag, value in (("--m-train", args.m_train), ("--m-test", args.m_test),
                         ("--max-evals", args.max_evals),
                         ("--n-starts", args.n_starts),
+                        ("--nx", args.nx), ("--ny", args.ny),
+                        ("--nz", args.nz),
                         ("--krylov-rtol", args.krylov_rtol),
                         ("--krylov-maxiter", args.krylov_maxiter),
                         ("--seed", args.seed)):
@@ -353,6 +355,10 @@ def main() -> None:
     lp.add_argument("--n-starts", type=int, default=None)
     lp.add_argument("--krylov-rtol", type=float, default=None)
     lp.add_argument("--krylov-maxiter", type=int, default=None)
+    lp.add_argument("--nx", type=int, default=None,
+                    help="grid override; 48x24x12 = 13,824 cells is the 'big' geometry")
+    lp.add_argument("--ny", type=int, default=None)
+    lp.add_argument("--nz", type=int, default=None)
     lp.add_argument("--seed", type=int, default=None,
                     help="optim.seed: with n_starts=1 this alone changes the "
                          "search trajectory (start k=0 is deterministic)")

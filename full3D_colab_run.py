@@ -2164,8 +2164,15 @@ class SAAProblemTorch3D:
 
 
 def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-3,
-                             max_iter=60, max_evals=2000):
-    """Generalized pattern search: one batched compass sweep per iteration."""
+                             max_iter=60, max_evals=2000, on_iter=None):
+    """Generalized pattern search: one batched compass sweep per iteration.
+
+    ``on_iter(q, nit, best, evals, step)`` is called after every sweep. It exists
+    because a Colab VM is reclaimed without warning at 15-45 minutes (seven
+    launches, seven reclaims), and a search that writes nothing until it finishes
+    loses every sweep it completed. The callback lets the caller persist the
+    incumbent, so a dead run still leaves the policy it had found.
+    """
     q = project_capacity(q0, problem.q_max, problem.Q_max)
     best = problem.objective(q)
     step = step0 if step0 is not None else 0.25 * problem.q_max
@@ -2202,11 +2209,13 @@ def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-
         # a healthy 20-minute start look hung.
         log(f"  [opt] it={nit} evals={evals} step={step:.3g} best={best:.6g} "
             f"sum_q={q.sum():.2f} active={int((q > 1e-9).sum())}")
+        if on_iter is not None:
+            on_iter(q, nit, best, evals, step)
     return q, best, nit, hist
 
 
 def multi_start_batched3d(problem: SAAProblemTorch3D, n_starts=2, seed=0,
-                          max_iter=60, max_evals=2000):
+                          max_iter=60, max_evals=2000, on_iter=None):
     q_max, n = problem.q_max, problem.n_wells
     starts = [np.zeros(n), np.full(n, 0.5 * q_max)]
     if n_starts > 2:
@@ -2217,7 +2226,8 @@ def multi_start_batched3d(problem: SAAProblemTorch3D, n_starts=2, seed=0,
         log(f"  multi-start {s + 1}/{min(n_starts, len(starts))} "
             f"(q0 sum={q0.sum():.1f} m3/d)")
         q, f, nit, hist = pattern_search_batched3d(problem, q0, max_iter=max_iter,
-                                                   max_evals=max_evals)
+                                                   max_evals=max_evals,
+                                                   on_iter=on_iter)
         log(f"    -> f={f:.4g} nit={nit} evals={problem.n_eval}")
         if f < best_f - 1e-12:
             best_q, best_f, best_nit, best_hist = q, f, nit, hist
@@ -2627,10 +2637,34 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
         alpha=cfg["alpha"], alpha_h=cfg["alpha_h"],
         rho_g=cfg["rho_g"], rho_h=cfg["rho_h"],
     )
+    # A reclaimed VM must not take the incumbent with it. Colab has now killed
+    # seven launches out of seven, one of them after 15 minutes with the search
+    # at a better objective than any certified policy -- and wrote nothing,
+    # because artifacts are only assembled at the end. So persist the incumbent
+    # after every sweep, atomically, and pull it from outside while the VM lives.
+    ckpt_path = Path(outdir) / "checkpoint.json"
+
+    def _ckpt(q, nit_, best_, evals_, step_):
+        try:
+            rec = {"q": [float(x) for x in np.asarray(q).ravel()],
+                   "nit": int(nit_), "best": float(best_), "evals": int(evals_),
+                   "step": float(step_), "total_pumping": float(np.sum(q)),
+                   "active_wells": int(len(np.nonzero(np.asarray(q).ravel())[0])),
+                   "wells": [[float(x) for x in w] for w in well_specs],
+                   "backend": "torch", "dtype": str(cfg.get("dtype", "float64")),
+                   "grid": [int(cfg["nx"]), int(cfg["ny"]), int(cfg["nz"])],
+                   "m_train": int(cfg["m_train"]), "t": time.strftime("%H:%M:%S")}
+            tmp = str(ckpt_path) + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(rec, fh, indent=1)
+            os.replace(tmp, str(ckpt_path))
+        except Exception as exc:                    # never kill a paid run
+            log(f"  ! checkpoint failed: {exc}")
+
     t_opt = time.time()
     q_star, f_star, nit, hist = multi_start_batched3d(
         problem, n_starts=cfg["n_starts"], seed=cfg["seed"],
-        max_iter=cfg["max_iter"], max_evals=max_evals,
+        max_iter=cfg["max_iter"], max_evals=max_evals, on_iter=_ckpt,
     )
     log(f"optimization done in {time.time() - t_opt:.1f}s "
         f"(f*={f_star:.4g}, {problem.n_eval} evaluations)")

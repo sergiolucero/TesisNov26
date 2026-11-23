@@ -374,6 +374,22 @@ it as one. Cost per scenario keeps growing with cell count --- $0.032$\,s at
 $4{,}096$, $0.071$ at $8{,}000$, $0.145$ at $13{,}824$ --- and the run still fits
 a twelve-minute VM window.
 
+One confound runs through every cross-grid comparison in this section, and it is
+worth removing rather than naming. Each run truncates its Karhunen--Lo\`eve basis
+at its own grid, so a finer grid is also a different aquifer. Drawing \emph{one}
+realisation on the $13{,}824$-cell grid, upscaling it by block-averaging onto
+$1{,}728$ cells, and evaluating the same policies on both splits the question in
+two, and the two halves disagree. Cost is grid-insensitive: mean $J$ agrees to
+$1.8\%$ and the four policies tested are ranked identically on both grids.
+Compliance status is not. The policy whose training tail sits on the constraint is
+compliant on all sixteen fine-grid scenarios and violates eleven of sixteen on the
+coarse one, with per-scenario flags agreeing $31\%$ of the time --- so a coarse
+grid gives the right ordering of candidate designs and the wrong compliance answer
+for a design that sits on the constraint. The rule that follows is not a
+formality: screen at whatever resolution you can afford, certify on the grid you
+will be judged on. The upscaling is not neutral --- block averaging raises mean
+$\log K$ by about $3\%$ --- and the text says so rather than subtracting it.
+
 What made the $100$-scenario search affordable is exactly the lever of
 Section~\ref{sec:rescost}: the batched backend evaluates $100$ scenarios in
 $7.2$\,s where the NumPy reference needs about $105$\,s, a $15\times$ gain from

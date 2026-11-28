@@ -114,6 +114,7 @@ head constraint as the 2D runs.
     full & $24\cdot12\cdot6=1728$ & 819 & 24 / 48 & 6 & $0.979$ (4 active wells) \\
     paper & $32\cdot16\cdot8=4096$ & 1419 & 64 / 128 & 9 & $0.969$ (4 active wells) \\
     size\_mid & $40\cdot20\cdot10=8000$ & 2062 & 24 / 48 & 6 & $0.875$ --- \emph{fails} \\
+    paperGPU & $64\cdot32\cdot16=32\,768$ & 3936 & 64 / 128 & 9 & $0.961$ (1 dominant well) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -267,6 +268,91 @@ resolution study. The two runs use different Karhunen--Lo\`eve bases ($1419$ vs
 $2062$ modes) and therefore different realizations of $K$; comparing their plume
 peaks or their $J$ compares two different aquifers.
 
+\section{The GPU grid, and a second local optimum}
+\label{sec:3d-gpu}
+
+The paperGPU preset keeps the paper preset's scenarios, wells, costs and horizon
+and refines the grid $2\times$ per axis to $64\times32\times16$ ($32\,768$
+cells), where the batched float32 torch backend replaces the sparse LU. On a T4
+it calibrates at $7.9$\,s per full-archive evaluation and, under the one-hour
+budget, returns a \emph{different} optimum:
+\[
+  \mathbf{q}^* = [0,\,0,\,0.59,\,0,\,0,\,0,\,0,\,34.57,\,0]\ \mathrm{m^3/d},
+  \qquad \textstyle\sum_i q^*_i = 35.16\ \mathrm{m^3/d},
+\]
+one dominant well on the southern edge of the domain, plus a $0.59$\,m$^3$/d
+residual that the one-dimensional slice re-score identifies as a step-size
+artifact; the test reliability is $0.961$ with test $J=492\,973$ (train
+$J=492\,896$). The two runs differ in grid and in solver, so the shift cannot be
+attributed to either alone.
+
+\subsection*{Same grid, different solver: the shift is not float32}
+
+Re-running the \emph{paper} preset --- the same $32\times16\times8$ grid, the
+same $1419$ KL modes and the same nine wells, byte for byte --- through the
+float32 torch backend reproduces the southern well, now $25$\,m$^3$/d, with
+train reliability $0.984$ and test reliability $0.914$, below the $0.94$ gate.
+The decisive check scores both policies on the NumPy/SciPy reference, one
+archive, no torch (Table~\ref{tab:3d-rescore}):
+
+\begin{table}[t]
+  \centering
+  \caption{Both candidate policies re-scored on the NumPy/SciPy reference at
+    the paper grid (\texttt{SCRIPTS/rescore\_paper\_candidates.py}). The
+    reference agrees with float32 on the one-well policy to $8\times10^{-6}$,
+    so the shift is not a precision bug.}
+  \label{tab:3d-rescore}
+  \begin{tabular}{@{}lrrrr@{}}
+    \toprule
+    policy & train $f$ & train rel. & test $f$ & test rel. \\
+    \midrule
+    four wells, $50$\,m$^3$/d (NumPy search) & $547\,605.94$ & $1.000$ & $557\,558.83$ & $0.969$ \\
+    one well, $25$\,m$^3$/d (torch search) & $455\,747.06$ & $0.984$ & $639\,489.09$ & $0.914$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The reference reproduces the paper preset's published objective to the cent
+($547\,605.94$ on train, $547\,665.31$ on test), and it agrees with float32 on
+the one-well policy to $8\times10^{-6}$. The shift is therefore not a precision
+bug: at the paper grid there are two \emph{genuine} local minima. The batched
+search minimizes the training objective more aggressively and lands in the lower
+one --- a single southern well that is $\sim$92\,k cheaper on $64$ training
+scenarios and passes $63$ of them, but whose test CVaR jumps from $0.02$ to
+$0.43$ once the unseen tail is priced. The serial search stops in the
+higher-cost basin that happens to generalize. This is the mechanism of
+Section~\ref{sec:3d-wall} with a sharper edge: at $M_{\text{train}}=64$ a $5\%$
+tail averages $3.2$ draws, enough to certify a robust basin, not enough to
+reveal that a cheaper basin is cheap only on its own sample.
+
+The resolution question has a clean answer, because the same southern well is
+what the fine grid returns. At $64\times32\times16$ the NumPy re-score of the
+torch policy (\texttt{SCRIPTS/verify\_papergpu.py}) gives test reliability
+$0.953$ against torch's $0.961$ --- one scenario's sign flip out of $128$ --- so
+the southern well \emph{generalizes} once the grid resolves its capture zone
+near the $y=0$ boundary. The coarse grid does not misjudge the physics globally;
+it misjudges the one well that sits where the discretization is coarsest
+relative to a boundary, and a small SAA sample cannot catch that error.
+
+The one-dimensional slice re-score of the paperGPU policy
+(\texttt{--slices1d}, Figure~\ref{fig:3d-slices}) confirms the structure: the
+returned $\mathbf{q}^*$ is a genuine local minimum along every coordinate
+direction (seven inactive wells sit at zero), and the chance constraint is
+exactly binding --- reliability crosses $0.94$ at $s=0.947$ of the optimum, so
+the policy is priced at the constraint boundary rather than at a rate limit.
+Spreading the same $35$\,m$^3$/d over all nine wells gives reliability $0.33$,
+so it is the concentration of effort, not the total rate, that buys compliance.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.78\linewidth]{figs/slices1d_coordinate.png}
+  \caption{One-dimensional slices of the penalized objective through the
+    paperGPU optimum, each well rate varied in turn with the others held at
+    $\mathbf{q}^*$. Every direction has its minimum at the optimum; the
+    chance-infeasible region (reliability $<0.94$) is shaded.}
+  \label{fig:3d-slices}
+\end{figure}
+
 \section{What the plume movie shows}
 
 Each 3D run now also writes a movie of the same scenario untreated beside the
@@ -406,10 +492,10 @@ claimed.
     measurement.
 \end{enumerate}
 
-The next step the pipeline was built for has not been run either: the
-\texttt{paperGPU} preset keeps the scenario count and the time span and refines
-the grid $2\times$ per axis to $32\,768$ cells, where the batched torch backend
-beats sparse LU. Together with layer-resolved conductivity and the two-stage
-recourse model, that would turn the 3D result from a statement about the
-transferability of a protocol into a statement about a heterogeneous aquifer
-under adaptive management.
+The next step the pipeline was built for has now been run: the
+\texttt{paperGPU} preset of Section~\ref{sec:3d-gpu} refines the grid $2\times$
+per axis to $32\,768$ cells, where the batched torch backend beats sparse LU.
+Two further steps remain unrun --- layer-resolved conductivity and the two-stage
+recourse model at benchmark scale --- and together they would turn the 3D result
+from a statement about the transferability of a protocol into a statement about
+a heterogeneous aquifer under adaptive management.

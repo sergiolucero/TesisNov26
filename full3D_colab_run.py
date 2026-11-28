@@ -80,6 +80,8 @@ Usage
     python full3D_colab_run.py --preset paperGPU --backend torch --dtype float32
     # CPU parity check of the torch path (slow, for verification):
     python full3D_colab_run.py --preset quick --backend torch --device cpu
+    # 1D slices through q* after a torch run (how the 9D optimum is understood):
+    python full3D_colab_run.py --preset paperGPU --backend torch --slices1d
 
 Backends
 --------
@@ -93,8 +95,9 @@ compass sweep per batched call, which is where the GPU wins at ``paperGPU``
 scale.
 
 Outputs (under ``out3d_colab/<run_id>/``): ``metrics.json`` (gates + policy),
-``policy.json``, ``run_config.json``, figures (if matplotlib is present), and
-an optional ``colab3d_results.zip`` with ``--zip``.
+``policy.json``, ``run_config.json``, figures (if matplotlib is present), an
+optional ``colab3d_results.zip`` with ``--zip``, and ``slices1d/`` with
+``--slices1d`` (coordinate / scale / equal-split / active-split slices).
 
 Exit status: 0 on success, 2 on a usage/preflight error.
 """
@@ -2214,6 +2217,207 @@ def multi_start_batched3d(problem: SAAProblemTorch3D, n_starts=2, seed=0,
 
 
 # ---------------------------------------------------------------------------
+# 1D slices through the optimum
+# ---------------------------------------------------------------------------
+# ``q*`` is a point in n_wells dimensions, which is unplottable.  These helpers
+# project it onto one-dimensional lines (one well's rate, the total-pumping
+# scale, an equal split, the share between the two largest wells) and score
+# every point with the same batched archive the optimizer used, so the *shape*
+# of the optimum becomes a 2D curve: penalized f, mean J, cvar_G, reliability.
+def _slice_marker(lo: float, hi: float, n: int, marker: float) -> np.ndarray:
+    """Even grid that always includes ``marker``, so the curve hits q* exactly."""
+    x = np.linspace(lo, hi, n)
+    return np.unique(np.sort(np.concatenate([x, [marker]])))
+
+
+def _slice_coordinate(q, q_max):
+    out = []
+    for i in range(q.size):
+        t = _slice_marker(0.0, q_max, 20, float(q[i]))
+        Q = np.tile(q, (t.size, 1))
+        Q[:, i] = t
+        out.append({"kind": "coordinate", "well": i, "x": t, "Q": Q,
+                    "marker": float(q[i])})
+    return out
+
+
+def _slice_scale(q, s_max=2.0):
+    s = _slice_marker(0.0, s_max, 20, 1.0)
+    Q = s[:, None] * q[None, :]
+    return [{"kind": "scale", "x": s, "Q": Q, "marker": 1.0}]
+
+
+def _slice_equal(q, total_max, n_wells):
+    T = np.linspace(0.0, total_max, 21)
+    Q = (T / n_wells)[:, None] * np.ones((1, n_wells))
+    return [{"kind": "equal", "x": T, "Q": Q, "marker": float(q.sum())}]
+
+
+def _slice_split(q):
+    order = np.argsort(q)[::-1]
+    i, j = int(order[0]), int(order[1])
+    S = float(q[i] + q[j])
+    if S <= 0.0:
+        return []
+    share = float(q[i] / S)
+    alpha = _slice_marker(0.0, 1.0, 20, share)
+    Q = np.tile(q, (alpha.size, 1))
+    Q[:, i] = alpha * S
+    Q[:, j] = (1.0 - alpha) * S
+    return [{"kind": "split", "i": i, "j": j, "x": alpha, "Q": Q,
+             "marker": share}]
+
+
+def _slice_score(archive, cost, Q, cfg):
+    """Score a (K, n) candidate matrix in one batched call; reduce to curves."""
+    ev = archive.evaluate_many(Q, cost)
+    mean_J = ev.mean_J.detach().cpu().numpy()
+    cg = cvar_batch3d(ev.G, cfg["alpha"]).detach().cpu().numpy()
+    ch = cvar_batch3d(-ev.H, cfg["alpha_h"]).detach().cpu().numpy()
+    rel = ev.reliability.detach().cpu().numpy()
+    f = (mean_J
+         + cfg["rho_g"] * np.clip(cg, 0.0, None) ** 2
+         + cfg["rho_h"] * np.clip(ch, 0.0, None) ** 2)
+    return {"mean_J": mean_J, "f": f, "cvar_G": cg, "reliability": rel,
+            "total": np.asarray(Q, dtype=float).sum(axis=1)}
+
+
+def _slice_plot_coordinates(results, q, q_max, outdir, infeas):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    coords = [r for r in results if r["kind"] == "coordinate"]
+    cols = 3
+    rows = int(np.ceil(len(coords) / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(5.2 * cols, 3.4 * rows),
+                             squeeze=False)
+    for r, ax in zip(coords, axes.ravel()):
+        bad = r["reliability"] < infeas
+        if bad.any():
+            ax.fill_between(r["x"], r["f"].min() - 1, r["f"].max() + 1,
+                            where=bad, color="tab:red", alpha=0.08,
+                            label="chance infeasible")
+        ax.plot(r["x"], r["f"], "k-", lw=2, label="penalized f")
+        ax.plot(r["x"], r["mean_J"], "b--", lw=1.4, label="mean J")
+        ax.axvline(r["marker"], color="tab:green", lw=1.5, ls=":")
+        ax.set_title(f"well {r['well']} (q*={q[r['well']]:.2f})")
+        ax.set_xlabel("well rate (m3/d)")
+        ax.set_ylabel("objective")
+        ax.legend(fontsize=7, loc="best")
+    for ax in axes.ravel()[len(coords):]:
+        ax.axis("off")
+    fig.suptitle("coordinate slices through q*")
+    fig.tight_layout()
+    fig.savefig(outdir / "coordinate_slices.png", dpi=150)
+    plt.close(fig)
+
+
+def _slice_plot_total(results, q, outdir, infeas):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    scale = next(r for r in results if r["kind"] == "scale")
+    equal = next(r for r in results if r["kind"] == "equal")
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.plot(scale["total"], scale["f"], "k-", lw=2, label="mix q = s*q*")
+    ax.plot(equal["total"], equal["f"], "tab:gray", lw=1.6, ls="--",
+            label="equal split q = (T/n)*1")
+    ax.axvline(q.sum(), color="tab:green", ls=":", lw=1.5)
+    ax.annotate(f"q* total {q.sum():.1f} m3/d", xy=(q.sum(), scale["f"].min()),
+                xytext=(q.sum() * 1.05, scale["f"].max()),
+                arrowprops=dict(arrowstyle="->", color="tab:green"), fontsize=8)
+    reliab = scale["reliability"]
+    ok = np.nonzero(reliab >= infeas)[0]
+    if ok.size:
+        s_ok = scale["total"][ok[0]]
+        ax.axvline(s_ok, color="tab:red", ls="-.", lw=1.2)
+        ax.annotate(f"reliability >= {infeas:.2f} at {s_ok:.1f} m3/d",
+                    xy=(s_ok, ax.get_ylim()[0]), fontsize=8, color="tab:red",
+                    rotation=90, va="bottom")
+    ax.set_xlabel("total pumping (m3/d)")
+    ax.set_ylabel("penalized objective f")
+    ax.set_title("optimized mix vs equal split, vs total pumping")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(outdir / "total_pumping_slices.png", dpi=150)
+    plt.close(fig)
+
+
+def _slice_plot_split(results, q, outdir, infeas):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    splits = [r for r in results if r["kind"] == "split"]
+    if not splits:
+        return
+    r = splits[0]
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    bad = r["reliability"] < infeas
+    if bad.any():
+        ax.fill_between(r["x"], r["f"].min() - 1, r["f"].max() + 1, where=bad,
+                        color="tab:red", alpha=0.08, label="chance infeasible")
+    ax.plot(r["x"], r["f"], "k-", lw=2, label="penalized f")
+    ax.plot(r["x"], r["mean_J"], "b--", lw=1.4, label="mean J")
+    ax.axvline(r["marker"], color="tab:green", ls=":", lw=1.5)
+    ax.set_xlabel(f"share to well {r['i']}")
+    ax.set_ylabel("objective")
+    ax.set_title(f"split between wells {r['i']} and {r['j']} "
+                 f"(q* share {r['marker']:.2f})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(outdir / "split_slice.png", dpi=150)
+    plt.close(fig)
+
+
+def run_slices1d(archive, cost, q_star, cfg, outdir):
+    """Generate the 1D-slice figures for a finished torch run's q*.
+
+    Reuses ``archive`` (the train archive already on the device) so there is no
+    second build and every slice is one batched ``evaluate_many``.  Returns a
+    small dict for ``metrics["slices1d"]``.
+    """
+    q = np.asarray(q_star, dtype=float).ravel()
+    q_max = float(cfg["q_max"])
+    n = q.size
+    log(f"slices1d: projecting q* onto 1D lines (archive M={archive.M})")
+    slices = (_slice_coordinate(q, q_max)
+              + _slice_scale(q)
+              + _slice_equal(q, max(100.0, 2.0 * float(q.sum())), n)
+              + _slice_split(q))
+    infeas = 1.0 - cfg["alpha"] - 0.01
+    results = []
+    for sl in slices:
+        what = sl["kind"] + (f" well={sl['well']}" if sl["kind"] == "coordinate" else "")
+        log(f"slices1d: scoring {what}")
+        r = _slice_score(archive, cost, sl["Q"], cfg)
+        r.update(sl)
+        results.append(r)
+    out = outdir / "slices1d"
+    out.mkdir(parents=True, exist_ok=True)
+    _slice_plot_coordinates(results, q, q_max, out, infeas)
+    _slice_plot_total(results, q, out, infeas)
+    _slice_plot_split(results, q, out, infeas)
+    payload = []
+    for r in results:
+        payload.append({
+            "kind": r["kind"],
+            **({"well": r["well"]} if r["kind"] == "coordinate" else {}),
+            **({"i": r["i"], "j": r["j"]} if r["kind"] == "split" else {}),
+            "x": np.asarray(r["x"]).tolist(),
+            "total": np.asarray(r["total"]).tolist(),
+            "mean_J": np.asarray(r["mean_J"]).tolist(),
+            "f": np.asarray(r["f"]).tolist(),
+            "cvar_G": np.asarray(r["cvar_G"]).tolist(),
+            "reliability": np.asarray(r["reliability"]).tolist(),
+        })
+    (out / "slices1d.json").write_text(json.dumps(
+        {"q": q.tolist(), "slices": payload}, indent=2))
+    log(f"slices1d: wrote {out}")
+    return {"dir": str(out), "n_slices": len(results),
+            "archive": getattr(archive, "label", "train")}
+
+
+# ---------------------------------------------------------------------------
 # Smart sizing + resource detection
 # ---------------------------------------------------------------------------
 PRESETS = {
@@ -2584,6 +2788,47 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
                        sample_scenarios(grid, kl, [4242])[0].K)
     )
 
+    # ---- slices-only mode: skip optimization, slice a supplied q* --------
+    if cfg.get("slices_only"):
+        q_star = np.asarray(cfg.get("slices_q"), dtype=float).ravel()
+        if q_star.size != train.n_wells:
+            raise RuntimeError(
+                f"--q has {q_star.size} values, expected {train.n_wells}")
+        log(f"slices-only: q* = {np.round(q_star, 2).tolist()} "
+            f"(sum {q_star.sum():.2f} m3/d)")
+        ev_tr = train.evaluate_many(q_star, cost)
+        ev_te = test.evaluate_many(q_star, cost)
+        slices_info = run_slices1d(train, cost, q_star, cfg, outdir)
+        metrics = {
+            "config": cfg,
+            "grid": {"nx": grid.nx, "ny": grid.ny, "nz": grid.nz, "n": grid.n},
+            "resources": {**detect_resources(), "backend": "torch",
+                           "device": str(dev), "dtype": dtype,
+                           "device_name": (torch.cuda.get_device_name(dev)
+                                           if dev.type == "cuda" else "cpu"),
+                           "torch": torch.__version__,
+                           "rtol": (rtol if rtol is not None
+                                    else torch_default_rtol(torch_dtype_of(dtype))),
+                           "maxiter": int(maxiter),
+                           "transport_krylov": train.krylov.as_dict()},
+            "mode": "slices-only",
+            "q_star": q_star.tolist(),
+            "train": ev_tr.summary(),
+            "test": ev_te.summary(),
+            "slices1d": slices_info,
+            "wall_clock_s": time.time() - t0,
+        }
+        (outdir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+        (outdir / "policy.json").write_text(json.dumps({
+            "q": q_star.tolist(), "wells": well_specs.tolist(),
+            "alpha": cfg["alpha"], "chance": "cvar",
+        }, indent=2))
+        (outdir / "run_config.json").write_text(json.dumps(cfg, indent=2))
+        if zip_results:
+            _zip_results(outdir)
+        log(f"slices-only done -> {outdir} ({metrics['wall_clock_s']:.1f}s)")
+        return metrics
+
     # ---- SAA convergence at a fixed uniform q ---------------------------
     q_uniform = np.full(train.n_wells, 0.1 * cfg["q_max"])
     ev_te_uni = test.evaluate_many(q_uniform, cost)
@@ -2630,6 +2875,10 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     s_tr = ev_tr.summary()
     s_te = ev_te.summary()
     s_none = ev_none.summary()
+
+    slices_info = None
+    if cfg.get("slices1d"):
+        slices_info = run_slices1d(train, cost, q_star, cfg, outdir)
 
     # ---- gates -----------------------------------------------------------
     alpha = cfg["alpha"]
@@ -2687,6 +2936,7 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
         "wells": well_specs.tolist(),
         "gates": gates,
         "flow_krylov": train.resp.report.as_dict(),
+        "slices1d": slices_info,
         "wall_clock_s": time.time() - t0,
     }
     metrics["movie"] = _movie_if_enabled(cfg, outdir, grid, test, well_specs,
@@ -3011,6 +3261,15 @@ def main() -> None:
                     help="skip matplotlib figures")
     ap.add_argument("--zip", dest="zip_results", action="store_true",
                     help="write colab3d_results.zip for download")
+    ap.add_argument("--slices1d", action="store_true",
+                    help="after optimization, render 1D slices through q* "
+                         "(torch backend only; reuses the on-device train archive)")
+    ap.add_argument("--slices-only", action="store_true",
+                    help="skip optimization and slice a supplied q* (with --q); "
+                         "torch backend only")
+    ap.add_argument("--q", default=None,
+                    help="comma-separated q* vector for --slices-only, e.g. "
+                         "\"0,0,0.586,0,0,0,0,34.57,0\"")
     args = ap.parse_args()
 
     res = detect_resources()
@@ -3033,6 +3292,19 @@ def main() -> None:
         overrides["max_evals"] = args.max_evals
     if args.seed is not None:
         overrides["seed"] = args.seed
+    if args.slices1d:
+        overrides["slices1d"] = True
+    if args.slices_only:
+        if args.backend != "torch":
+            ap.error("--slices-only requires --backend torch")
+        if not args.q:
+            ap.error("--slices-only requires --q <comma-separated vector>")
+        try:
+            q_vec = [float(x) for x in args.q.split(",") if x.strip() != ""]
+        except ValueError:
+            ap.error("--q must be comma-separated numbers")
+        overrides["slices_only"] = True
+        overrides["slices_q"] = q_vec
     cfg = build_config(args.preset, overrides)
 
     n_cells = cfg["nx"] * cfg["ny"] * cfg["nz"]

@@ -2,7 +2,8 @@
 
 This project is a study of **stochastic optimization in a PDE-constrained
 setting**: designing a pump-and-treat groundwater remediation policy under
-hydraulic-conductivity uncertainty, subject to a CVaR chance constraint on the
+hydraulic-conductivity uncertainty (a log-normal field represented by a
+Karhunen–Loève expansion [8]), subject to a CVaR chance constraint [3] on the
 compliance-point concentration. The immediate object of study is an aquifer, but
 the phenomena uncovered are not specific to aquifers. This note distils the
 effort into transferable lessons for the community that works on optimization
@@ -18,7 +19,8 @@ learned about the *computation* (Section 2), and where the open questions point
 
 ### 1.1 A small SAA sample prices the tail with almost no draws — and the optimizer exploits it
 
-A CVaR constraint at level $\alpha$ is estimated from $\alpha M$ scenarios. In
+A CVaR constraint at level $\alpha$ [3] is estimated from $\alpha M$ scenarios
+in a sample-average approximation (SAA) [4,5]. In
 this work, a `size_mid` run used $M_{\text{train}}=24$, giving **1.2 draws** in
 the 5% tail; even the headline `paper` preset at $M=64$ gives only **3.2
 draws**. The optimizer therefore prices the violation it is buying from
@@ -68,7 +70,7 @@ sample is genuinely too small". We found the latter.
 
 Reliability (fraction of compliant scenarios) moves by $1/M$ per scenario. A
 difference of one scenario out of 128 is a *sign flip*, not a measurement. A
-point estimate of $0.969$ on 128 scenarios has a Wilson interval
+point estimate of $0.969$ on 128 scenarios has a Wilson interval [7]
 $[0.922, 0.988]$, which does **not** clear a $0.94$ gate. The lesson: **chance
 constraints certified from small out-of-sample sets must be reported with
 intervals**, and a gate that only clears as a point estimate should be labelled
@@ -118,14 +120,14 @@ on a reference solver), because those are boundary statistics.
 - **Adaptive / two-stage decisions.** A here-and-now design cannot adapt; a
   two-stage recourse formulation (re-tune rates after observing the plume)
   quantifies the *value of the stochastic solution* (VSS) and the *value of
-  perfect information* (EVPI). This project implemented the two-stage model and
-  its progressive-hedging solver as a verified parity harness; the benchmark-scale
+  perfect information* (EVPI) [6]. This project implemented the two-stage model
+  and its progressive-hedging solver [1,2] as a verified parity harness; the benchmark-scale
   VSS is the natural next experiment, and it is the quantity operators actually
   care about.
 
 - **Larger samples and variance reduction.** Every overfitting failure above
   traces to $\alpha M$ being small. The fix is more scenarios or
-  variance-reduced tail estimators; either is a change to the *estimation*, not
+  variance-reduced tail estimators [5]; either is a change to the *estimation*, not
   the optimizer.
 
 - **Verification gates as a public standard.** The project runs every result
@@ -143,3 +145,28 @@ reference before blaming numerics, quote intervals for reliability, separate
 solve-bound from search-bound regimes, and batch the search rather than the
 solve. Those disciplines are what turned a confusing "the GPU found a different
 answer" into a clean, generalizable result about SAA overfitting.
+
+---
+
+## References
+
+1. R. T. Rockafellar and R. J.-B. Wets. *Scenarios and policy aggregation in
+   optimization under uncertainty.* Mathematics of Operations Research,
+   16(1):119–147, 1991. — Progressive hedging algorithm.
+2. J.-P. Watson and D. L. Woodruff. *Progressive hedging innovations for a class
+   of stochastic mixed-integer resource allocation problems.* Computational
+   Management Science, 8(4):355–370, 2011.
+3. R. T. Rockafellar and S. Uryasev. *Optimization of conditional value-at-risk.*
+   Journal of Risk, 2(3):21–41, 2000. — CVaR (Rockafellar–Uryasev).
+4. A. Shapiro, D. Dentcheva, and A. Ruszczyński. *Lectures on Stochastic
+   Programming: Modeling and Theory.* SIAM, Philadelphia, 2009.
+5. A. J. Kleywegt, A. Shapiro, and T. Homem-de-Mello. *The sample average
+   approximation method for stochastic discrete optimization.* SIAM Journal on
+   Optimization, 12(2):479–502, 2002.
+6. J. R. Birge and F. Louveaux. *Introduction to Stochastic Programming.*
+   Springer, New York, 2nd edition, 2011.
+7. E. B. Wilson. *Probable inference, the law of succession, and statistical
+   inference.* Journal of the American Statistical Association, 22(158):209–212,
+   1927.
+8. R. G. Ghanem and P. D. Spanos. *Stochastic Finite Elements: A Spectral
+   Approach.* Springer-Verlag, New York, 1991.

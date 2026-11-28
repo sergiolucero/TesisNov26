@@ -1422,6 +1422,12 @@ def _tile_stencil7(st: Stencil7, batch: int) -> Stencil7:
                     tile(st.ys), tile(st.zt), tile(st.zb))
 
 
+def _slice_stencil7(st: Stencil7, i0: int, i1: int) -> Stencil7:
+    """Scenario-slice a Stencil7 along its batch dimension."""
+    return Stencil7(st.diag[i0:i1], st.xe[i0:i1], st.xw[i0:i1], st.yn[i0:i1],
+                    st.ys[i0:i1], st.zt[i0:i1], st.zb[i0:i1])
+
+
 def _flat_face3d(t: torch.Tensor, S: int) -> torch.Tensor:
     """Lift ``(M, ...)`` face coefficients to ``(S*M, ...)``."""
     return (t.unsqueeze(0).expand(S, *t.shape)
@@ -1560,27 +1566,47 @@ class FlowResponsesTorch3D:
 
 
 def flow_responses_torch3d(flow: FlowModelTorch3D, well_specs,
-                           eps_cells=1.5) -> FlowResponsesTorch3D:
-    """Background solve plus all unit-rate well responses in one Krylov batch."""
+                           eps_cells=1.5,
+                           flow_chunk: Optional[int] = None) -> FlowResponsesTorch3D:
+    """Background solve plus all unit-rate well responses, batched.
+
+    The ``M * (n_wells + 1)`` systems are solved in scenario chunks of
+    ``flow_chunk`` so a fine grid never needs a whole tiled stencil plus a full
+    Krylov workspace at once (the paperGPU-level grids otherwise exceed a T4's
+    16 GB in float32).
+    """
     grid = flow.grid
     weights = well_weights_torch3d(grid, well_specs, eps_cells,
                                    dtype=flow.dtype, device=flow.device)
     nw = weights.shape[0]
     k = nw + 1
-    rhs = torch.stack(
-        [flow.rhs_const]
-        + [-weights[i].reshape(grid.nz, grid.ny, grid.nx).expand_as(flow.rhs_const)
-           for i in range(nw)],
-        dim=1,
-    )                                                          # (M, k, nz, ny, nx)
-    b = rhs.reshape(flow.M * k, grid.nz, grid.ny, grid.nx)
-    st = flow.stencil(batch=k)
-    sol, report = cg3d(st.apply, b, diag=st.diag, rtol=flow.rtol,
-                       maxiter=flow.maxiter)
-    sol = sol.reshape(flow.M, k, grid.n)
+    M = flow.M
+    chunk = M if not flow_chunk else max(1, int(flow_chunk))
+    well_rhs = -weights.reshape(nw, grid.nz, grid.ny, grid.nx)  # (nw, nz, ny, nx)
+
+    h0_parts, hw_parts, reports = [], [], []
+    for i0 in range(0, M, chunk):
+        i1 = min(i0 + chunk, M)
+        m = i1 - i0
+        rhs = torch.empty(m, k, grid.nz, grid.ny, grid.nx,
+                          dtype=flow.dtype, device=flow.device)
+        rhs[:, 0] = flow.rhs_const[i0:i1]
+        rhs[:, 1:] = well_rhs.unsqueeze(0).expand(m, nw, grid.nz, grid.ny, grid.nx)
+        b = rhs.reshape(m * k, grid.nz, grid.ny, grid.nx)
+        st = _tile_stencil7(_slice_stencil7(flow._stencil, i0, i1), k)
+        sol, rep = cg3d(st.apply, b, diag=st.diag, rtol=flow.rtol,
+                        maxiter=flow.maxiter)
+        sol = sol.reshape(m, k, grid.n)
+        h0_parts.append(sol[:, 0, :])
+        hw_parts.append(sol[:, 1:, :])
+        reports.append(rep)
+        del rhs, b, st, sol
+    report = TorchKrylovReport()
+    for r in reports:
+        report.add(r)
     return FlowResponsesTorch3D(
-        h0=sol[:, 0, :],
-        hw=sol[:, 1:, :],
+        h0=torch.cat(h0_parts, dim=0),
+        hw=torch.cat(hw_parts, dim=0),
         weights=weights.reshape(nw, grid.n),
         well_specs=np.atleast_2d(np.asarray(well_specs, dtype=float)),
         report=report,
@@ -1983,7 +2009,7 @@ class TorchArchive3D:
 
     def __init__(self, grid, aquifer, well_specs, scenarios, fwd: ForwardConfig3D,
                  device="auto", dtype="float64", rtol=None, maxiter=4000,
-                 label="archive"):
+                 flow_chunk: Optional[int] = None, label="archive"):
         self.grid = grid
         self.aquifer = aquifer
         self.well_specs = np.atleast_2d(np.asarray(well_specs, dtype=float))
@@ -2015,7 +2041,8 @@ class TorchArchive3D:
             h_left=h_left, h_right=0.0, dtype=self.dtype, device=self.device,
             rtol=rtol, maxiter=self.maxiter,
         )
-        self.resp = flow_responses_torch3d(self.flow, self.well_specs, fwd.eps_well)
+        self.resp = flow_responses_torch3d(self.flow, self.well_specs, fwd.eps_well,
+                                           flow_chunk=flow_chunk)
         self.source_rate = torch.as_tensor(
             np.array([fwd.source_q * fwd.source_c * s.source_scale
                       for s in self.scenarios], dtype=float),
@@ -2445,11 +2472,12 @@ PRESETS = {
                             m_test=128, max_evals=400, n_starts=3, n_wells=9,
                             batch_chunk=6),
     # 2x per-axis refinement of paperGPU: 128x64x32 = 262,144 cells.  A
-    # chunked sweep (batch_chunk=4 -> B=256) and a raised KL cap (16,384
-    # modes) keep the finer grid inside T4 memory and ~95% log-K variance.
+    # chunked sweep (batch_chunk=2 -> B=128), a chunked flow solve
+    # (flow_chunk=8 -> B=80) and a raised KL cap (16,384 modes) keep the finer
+    # grid inside T4 memory and ~95% log-K variance.
     "paperGPU_level3": dict(nx=128, ny=64, nz=32, nsteps=100, m_train=64,
                             m_test=128, max_evals=400, n_starts=3, n_wells=9,
-                            batch_chunk=4, n_kl_cap=16384),
+                            batch_chunk=2, n_kl_cap=16384, flow_chunk=8),
     # 8,000 cells: 4.6x the "full" preset and 2x "paper" in cell count, at
     # dx = dy = 5 m, dz = 2 m.  Chosen because ell_x = ell_y = 20 m is then
     # resolved by 4 cells (it is 2.4 cells at "full"), and a 30 %-of-thickness
@@ -2767,7 +2795,7 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     design_scen = sample_scenarios(grid, kl, [9000 + k for k in range(5)])
     design = TorchArchive3D(grid, aquifer, dummy_well, design_scen, fwd,
                             device=dev, dtype=dtype, rtol=rtol, maxiter=maxiter,
-                            label="design")
+                            flow_chunk=cfg.get("flow_chunk"), label="design")
     Q0 = torch.zeros(1, 1, dtype=design.dtype, device=design.device)
     C_design = design.transport(Q0, store_fields=True).C_final[0].detach().cpu().numpy()
     Cmean = C_design.mean(axis=0).reshape(grid.nz, grid.ny, grid.nx)
@@ -2795,10 +2823,10 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     t_arch = time.time()
     train = TorchArchive3D(grid, aquifer, well_specs, train_scen, fwd,
                            device=dev, dtype=dtype, rtol=rtol, maxiter=maxiter,
-                           label="train")
+                           flow_chunk=cfg.get("flow_chunk"), label="train")
     test = TorchArchive3D(grid, aquifer, well_specs, test_scen, fwd,
                           device=dev, dtype=dtype, rtol=rtol, maxiter=maxiter,
-                          label="test")
+                          flow_chunk=cfg.get("flow_chunk"), label="test")
     log(f"archives ready: {len(train_scen)} train / {len(test_scen)} test "
         f"scenarios in {time.time() - t_arch:.1f}s")
 
@@ -3239,6 +3267,7 @@ def build_config(preset: str, overrides: dict) -> dict:
         "max_evals": p["max_evals"], "n_starts": p["n_starts"],
         "max_iter": 60,
         "batch_chunk": p.get("batch_chunk", None),
+        "flow_chunk": p.get("flow_chunk", None),
         # plume movie: ON by default, never a per-run decision to forget
         "movie": True, "movie_frames": p.get("movie_frames", 24),
         "movie_stride": 1, "movie_stride_z": 1,

@@ -276,7 +276,7 @@ class KL3D:
     """Log-normal K via a separable 3D KL expansion (Kronecker eigenmodes)."""
 
     def __init__(self, grid, sigma, ell_x, ell_y, ell_z, n_kl=0, k0=10.0,
-                 kv_ratio=1.0, target_variance=0.95):
+                 kv_ratio=1.0, target_variance=0.95, n_kl_cap: int = 4096):
         self.grid = grid
         self.sigma = sigma
         self.k0 = k0
@@ -291,7 +291,7 @@ class KL3D:
         cum = np.cumsum(flat) / total
         if n_kl is None or n_kl <= 0:
             n_kl = int(np.searchsorted(cum, target_variance) + 1)
-        n_kl = int(min(n_kl, flat.size, 4096))
+        n_kl = int(min(n_kl, flat.size, n_kl_cap))
         order = np.argsort(lam.ravel())[::-1][:n_kl]
         ix, iy, iz = np.unravel_index(order, lam.shape)
         self.nu_x, self.phi_x = nu_x, phi_x
@@ -2444,6 +2444,12 @@ PRESETS = {
     "paperGPU_level2": dict(nx=96, ny=48, nz=24, nsteps=100, m_train=64,
                             m_test=128, max_evals=400, n_starts=3, n_wells=9,
                             batch_chunk=6),
+    # 2x per-axis refinement of paperGPU: 128x64x32 = 262,144 cells.  A
+    # chunked sweep (batch_chunk=4 -> B=256) and a raised KL cap (16,384
+    # modes) keep the finer grid inside T4 memory and ~95% log-K variance.
+    "paperGPU_level3": dict(nx=128, ny=64, nz=32, nsteps=100, m_train=64,
+                            m_test=128, max_evals=400, n_starts=3, n_wells=9,
+                            batch_chunk=4, n_kl_cap=16384),
     # 8,000 cells: 4.6x the "full" preset and 2x "paper" in cell count, at
     # dx = dy = 5 m, dz = 2 m.  Chosen because ell_x = ell_y = 20 m is then
     # resolved by 4 cells (it is 2.4 cells at "full"), and a 30 %-of-thickness
@@ -2526,7 +2532,7 @@ def run(cfg: dict, outdir: Path, budget_s: float, plots: bool, zip_results: bool
     )
     kl = KL3D(grid, cfg["sigma"], cfg["ell_x"], cfg["ell_y"], cfg["ell_z"],
               n_kl=cfg["n_kl"], k0=cfg["k0"], kv_ratio=cfg["kv_ratio"],
-              target_variance=cfg["target_variance"])
+              target_variance=cfg["target_variance"], n_kl_cap=cfg["n_kl_cap"])
     log(f"KL: n_kl={kl.n_kl} retained_variance={kl.retained:.3f} "
         f"(sigma={kl.sigma}, ell=({cfg['ell_x']},{cfg['ell_y']},{cfg['ell_z']}))")
 
@@ -2732,7 +2738,7 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     )
     kl = KL3D(grid, cfg["sigma"], cfg["ell_x"], cfg["ell_y"], cfg["ell_z"],
               n_kl=cfg["n_kl"], k0=cfg["k0"], kv_ratio=cfg["kv_ratio"],
-              target_variance=cfg["target_variance"])
+              target_variance=cfg["target_variance"], n_kl_cap=cfg["n_kl_cap"])
     log(f"KL: n_kl={kl.n_kl} retained_variance={kl.retained:.3f} "
         f"(sigma={kl.sigma}, ell=({cfg['ell_x']},{cfg['ell_y']},{cfg['ell_z']}))")
 
@@ -3213,7 +3219,7 @@ def build_config(preset: str, overrides: dict) -> dict:
         "alpha_l": 5.0, "alpha_th": 0.5, "alpha_tv": 0.05, "decay": 0.0,
         # random field
         "sigma": 0.5, "ell_x": 20.0, "ell_y": 20.0, "ell_z": 6.0,
-        "n_kl": 0, "target_variance": 0.95,
+        "n_kl": 0, "target_variance": 0.95, "n_kl_cap": p.get("n_kl_cap", 4096),
         # wells
         "n_wells": p["n_wells"], "q_max": 50.0, "Q_max": 200.0,
         "eps_well": 1.5, "z_screen_frac": 0.3,

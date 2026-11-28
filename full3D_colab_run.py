@@ -2156,7 +2156,7 @@ class SAAProblemTorch3D:
 
 
 def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-3,
-                             max_iter=60, max_evals=2000):
+                             max_iter=60, max_evals=2000, chunk=None):
     """Generalized pattern search: one batched compass sweep per iteration."""
     q = project_capacity(q0, problem.q_max, problem.Q_max)
     best = problem.objective(q)
@@ -2179,12 +2179,19 @@ def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-
             nit += 1
             continue
         budget = max(int(max_evals) - evals, 1)
-        f_batch, _ = problem.batch_objective(np.stack(cands[:budget]))
+        C = cands[:budget]
+        if chunk and chunk > 0 and len(C) > chunk:
+            f_parts = []
+            for j in range(0, len(C), chunk):
+                f_parts.append(problem.batch_objective(np.stack(C[j:j + chunk]))[0])
+            f_batch = np.concatenate(f_parts)
+        else:
+            f_batch = problem.batch_objective(np.stack(C))[0]
         evals += len(f_batch)
         k = int(np.argmin(f_batch))
         improved = bool(f_batch[k] < best - 1e-12)
         if improved:
-            q = cands[k]
+            q = C[k]
             best = float(f_batch[k])
             hist.append({"eval": evals, "f": best, "q": q.tolist()})
         else:
@@ -2198,7 +2205,7 @@ def pattern_search_batched3d(problem: SAAProblemTorch3D, q0, step0=None, tol=1e-
 
 
 def multi_start_batched3d(problem: SAAProblemTorch3D, n_starts=2, seed=0,
-                          max_iter=60, max_evals=2000):
+                          max_iter=60, max_evals=2000, chunk=None):
     q_max, n = problem.q_max, problem.n_wells
     starts = [np.zeros(n), np.full(n, 0.5 * q_max)]
     if n_starts > 2:
@@ -2209,7 +2216,7 @@ def multi_start_batched3d(problem: SAAProblemTorch3D, n_starts=2, seed=0,
         log(f"  multi-start {s + 1}/{min(n_starts, len(starts))} "
             f"(q0 sum={q0.sum():.1f} m3/d)")
         q, f, nit, hist = pattern_search_batched3d(problem, q0, max_iter=max_iter,
-                                                   max_evals=max_evals)
+                                                   max_evals=max_evals, chunk=chunk)
         log(f"    -> f={f:.4g} nit={nit} evals={problem.n_eval}")
         if f < best_f - 1e-12:
             best_q, best_f, best_nit, best_hist = q, f, nit, hist
@@ -2431,6 +2438,12 @@ PRESETS = {
                   max_evals=400, n_starts=3, n_wells=9),
     "paperGPU": dict(nx=64, ny=32, nz=16, nsteps=100, m_train=64, m_test=128,
                      max_evals=400, n_starts=3, n_wells=9),
+    # 1.5x per-axis refinement of paperGPU: 96x48x24 = 110,592 cells.  The
+    # 18-candidate compass sweep at M=64 would need ~20 GB float32, so the
+    # sweep is chunked (batch_chunk=6 -> B=384) to stay inside a T4's 16 GB.
+    "paperGPU_level2": dict(nx=96, ny=48, nz=24, nsteps=100, m_train=64,
+                            m_test=128, max_evals=400, n_starts=3, n_wells=9,
+                            batch_chunk=6),
     # 8,000 cells: 4.6x the "full" preset and 2x "paper" in cell count, at
     # dx = dy = 5 m, dz = 2 m.  Chosen because ell_x = ell_y = 20 m is then
     # resolved by 4 cells (it is 2.4 cells at "full"), and a 30 %-of-thickness
@@ -2865,6 +2878,7 @@ def run_torch(cfg: dict, outdir: Path, budget_s: float, plots: bool,
     q_star, f_star, nit, hist = multi_start_batched3d(
         problem, n_starts=cfg["n_starts"], seed=cfg["seed"],
         max_iter=cfg["max_iter"], max_evals=max_evals,
+        chunk=cfg.get("batch_chunk"),
     )
     log(f"optimization done in {time.time() - t_opt:.1f}s "
         f"(f*={f_star:.4g}, {problem.n_eval} evaluations)")
@@ -3218,6 +3232,7 @@ def build_config(preset: str, overrides: dict) -> dict:
         "rho_g": 1e6, "rho_h": 1e6,
         "max_evals": p["max_evals"], "n_starts": p["n_starts"],
         "max_iter": 60,
+        "batch_chunk": p.get("batch_chunk", None),
         # plume movie: ON by default, never a per-run decision to forget
         "movie": True, "movie_frames": p.get("movie_frames", 24),
         "movie_stride": 1, "movie_stride_z": 1,

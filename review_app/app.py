@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local Flask dashboard for the paperGPU Colab run.
 
-Watches the *live* ``colab run`` log (``out3d_colab/run_paperGPU_slices/``)
+Watches the *live* ``colab run`` log (``out3d_colab/run_paperGPU_level3/``)
 plus the already-validated run (``out3d_colab/run_paperGPU/``) and the NumPy
 ``splu`` verification (``verify_splu.json``), and renders a single self-refreshing
 page: session status, optimization progress, the last log lines, the numpy-vs-torch
@@ -30,7 +30,8 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template_string, send_from_directory
 
 ROOT = Path(__file__).resolve().parent.parent
-CURRENT = ROOT / "out3d_colab" / "run_paperGPU_slices"       # the live run
+CURRENT = ROOT / "out3d_colab" / "run_paperGPU_slices"       # slices / figures content
+LIVE = ROOT / "out3d_colab" / "run_paperGPU_level3"          # the live optimization log
 VALIDATED = ROOT / "out3d_colab" / "run_paperGPU"            # the validated run
 VERIFY = VALIDATED / "verify_splu.json"
 
@@ -87,7 +88,7 @@ def _phase(lines: list[str]) -> str:
 
 
 def _parse_log() -> dict:
-    lines = _tail(CURRENT / "colab_run.log", 200)
+    lines = _tail(LIVE / "colab_run.log", 200)
     last_opt = None
     last_ms = None
     slices_seen: list[str] = []
@@ -128,7 +129,7 @@ def _parse_log() -> dict:
 
     return {
         "phase": _phase(lines),
-        "log_tail": _tail(CURRENT / "colab_run.log", 24),
+        "log_tail": _tail(LIVE / "colab_run.log", 24),
         "opt": last_opt,
         "multistart": last_ms,
         "slices_seen": slices_seen,

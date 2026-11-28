@@ -1,0 +1,322 @@
+{
+  "config": {
+    "nx": 32,
+    "ny": 16,
+    "nz": 8,
+    "lx": 200.0,
+    "ly": 100.0,
+    "lz": 20.0,
+    "k0": 10.0,
+    "kv_ratio": 0.1,
+    "phi": 0.3,
+    "R": 1.0,
+    "grad": 0.001,
+    "alpha_l": 5.0,
+    "alpha_th": 0.5,
+    "alpha_tv": 0.05,
+    "decay": 0.0,
+    "sigma": 0.5,
+    "ell_x": 20.0,
+    "ell_y": 20.0,
+    "ell_z": 6.0,
+    "n_kl": 0,
+    "target_variance": 0.95,
+    "n_wells": 9,
+    "q_max": 50.0,
+    "Q_max": 200.0,
+    "eps_well": 1.5,
+    "z_screen_frac": 0.3,
+    "source_xyz": [
+      30.0,
+      50.0,
+      10.0
+    ],
+    "source_q": 10.0,
+    "source_c": 100.0,
+    "source_days": 365.0,
+    "compliance_xyz": [
+      [
+        185.0,
+        50.0,
+        10.0
+      ]
+    ],
+    "obs_xyz": [
+      [
+        100.0,
+        50.0,
+        10.0
+      ]
+    ],
+    "dt": 36.5,
+    "nsteps": 100,
+    "m_train": 256,
+    "m_test": 128,
+    "alpha": 0.05,
+    "alpha_h": 0.01,
+    "c_e": 1.0,
+    "c_w": 1.0,
+    "c_m": 1.0,
+    "c_tau": 1.0,
+    "c_fail": 10.0,
+    "creg": 1.0,
+    "window_start": 0.8,
+    "h_min": -10.0,
+    "eps_time": 0.05,
+    "rho_g": 1000000.0,
+    "rho_h": 1000000.0,
+    "max_evals": 400,
+    "n_starts": 3,
+    "max_iter": 60,
+    "movie": true,
+    "movie_frames": 24,
+    "movie_stride": 1,
+    "movie_stride_z": 1,
+    "seed": 0,
+    "seed_train": 1000,
+    "seed_test": 500000
+  },
+  "grid": {
+    "nx": 32,
+    "ny": 16,
+    "nz": 8,
+    "n": 4096
+  },
+  "resources": {
+    "cpu": 2,
+    "mem_gb": 12.671405792236328,
+    "colab": true,
+    "backend": "torch",
+    "device": "cuda",
+    "dtype": "float32",
+    "device_name": "Tesla T4",
+    "torch": "2.14.1+cu130",
+    "rtol": 1e-05,
+    "maxiter": 4000,
+    "transport_krylov": {
+      "iterations": 60195,
+      "solves": 8200,
+      "iterations_per_solve": 7.341,
+      "worst_iterations": 11,
+      "worst_residual": 9.997827874030918e-06,
+      "converged": true,
+      "stalled": false
+    }
+  },
+  "kl": {
+    "n_kl": 1419,
+    "retained_variance": 0.9500092322091714
+  },
+  "reproducible": true,
+  "saa_convergence": [
+    {
+      "M": 4,
+      "mean_J": 529250.125,
+      "se_J": 0.14657549560070038
+    },
+    {
+      "M": 8,
+      "mean_J": 529251.4375,
+      "se_J": 1.2523136930764394
+    },
+    {
+      "M": 16,
+      "mean_J": 529994.4375,
+      "se_J": 347.2427978515625
+    },
+    {
+      "M": 32,
+      "mean_J": 530122.875,
+      "se_J": 259.1624685495465
+    },
+    {
+      "M": 128,
+      "mean_J": 530387.0,
+      "se_J": 140.9192301480935
+    }
+  ],
+  "uniform_q": {
+    "M": 128,
+    "mean_J": 530387.0,
+    "se_J": 140.9192301480935,
+    "rel_se_J": 0.0002656913350970018,
+    "mean_G": -0.23396515846252441,
+    "cvar_G": 1.3278610855340958,
+    "reliability": 0.7265625,
+    "violation_prob": 0.2734375,
+    "mean_H": 10.039979934692383,
+    "cvar_H": -10.020707935094833,
+    "mean_tau": 998.046875,
+    "median_tau": 0.0,
+    "p90_tau": 3650.0,
+    "failure_fraction": 0.2734375,
+    "J_pump": 164250.0,
+    "J_treat": 341072.71875,
+    "J_res": 23889.67578125,
+    "J_time": 1174.6046142578125,
+    "max_mass_balance_error": 1.6395548300351948e-05
+  },
+  "opt": {
+    "f_star": 459813.96875,
+    "q_star": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      26.0498046875,
+      0.0
+    ],
+    "total_pumping": 26.0498046875,
+    "active_wells": 1,
+    "n_evaluations": 1056,
+    "nit": 25,
+    "per_eval_s": 2.4473178386688232,
+    "train": {
+      "M": 256,
+      "mean_J": 459490.71875,
+      "se_J": 43.32722854614258,
+      "rel_se_J": 9.429402331348522e-05,
+      "mean_G": -0.697396993637085,
+      "cvar_G": 0.01798324566334485,
+      "reliability": 0.97265625,
+      "violation_prob": 0.02734375,
+      "mean_H": 10.064119338989258,
+      "cvar_H": -10.044647261500359,
+      "mean_tau": 99.376953125,
+      "median_tau": 0.0,
+      "p90_tau": 0.0,
+      "failure_fraction": 0.0234375,
+      "J_pump": 95081.7890625,
+      "J_treat": 357818.25,
+      "J_res": 6436.7373046875,
+      "J_time": 153.95726013183594,
+      "max_mass_balance_error": 1.5156784684222657e-05
+    },
+    "test": {
+      "M": 128,
+      "mean_J": 459588.1875,
+      "se_J": 74.27063966363482,
+      "rel_se_J": 0.00016160258614922478,
+      "mean_G": -0.6669777631759644,
+      "cvar_G": 0.28569633513689036,
+      "reliability": 0.9453125,
+      "violation_prob": 0.0546875,
+      "mean_H": 10.063941955566406,
+      "cvar_H": -10.047366440296173,
+      "mean_tau": 199.609375,
+      "median_tau": 0.0,
+      "p90_tau": 0.0,
+      "failure_fraction": 0.0546875,
+      "J_pump": 95081.7890625,
+      "J_treat": 357511.625,
+      "J_res": 6669.513671875,
+      "J_time": 325.27581787109375,
+      "max_mass_balance_error": 2.5256849767174572e-05
+    },
+    "no_pump_test": {
+      "M": 128,
+      "mean_J": 314330.5,
+      "se_J": 2970.1913310976197,
+      "rel_se_J": 0.009449262260892976,
+      "mean_G": 15.24205493927002,
+      "cvar_G": 23.147908329963684,
+      "reliability": 0.0,
+      "violation_prob": 1.0,
+      "mean_H": 10.096465110778809,
+      "cvar_H": -10.080721974372864,
+      "mean_tau": 3650.0,
+      "median_tau": 3650.0,
+      "p90_tau": 3650.0,
+      "failure_fraction": 1.0,
+      "J_pump": 0.0,
+      "J_treat": 0.0,
+      "J_res": 310670.53125,
+      "J_time": 3660.0,
+      "max_mass_balance_error": 4.2208903323626146e-05
+    },
+    "test_gap_vs_train": 0.00021212343584469843
+  },
+  "wells": [
+    [
+      125.0993816254417,
+      54.494257950530034,
+      13.0,
+      7.0
+    ],
+    [
+      106.2691063516938,
+      87.10925144516935,
+      13.0,
+      7.0
+    ],
+    [
+      143.9296568991896,
+      87.10925144516935,
+      13.0,
+      7.0
+    ],
+    [
+      106.2691063516938,
+      21.879264455890713,
+      13.0,
+      7.0
+    ],
+    [
+      143.9296568991896,
+      21.879264455890713,
+      13.0,
+      7.0
+    ],
+    [
+      87.43883107794588,
+      54.494257950530034,
+      13.0,
+      7.0
+    ],
+    [
+      162.7599321729375,
+      54.494257950530034,
+      13.0,
+      7.0
+    ],
+    [
+      125.0993816254417,
+      3.125,
+      13.0,
+      7.0
+    ],
+    [
+      68.60855580419798,
+      21.879264455890713,
+      13.0,
+      7.0
+    ]
+  ],
+  "gates": {
+    "KL_retained_variance>=0.95": true,
+    "reproducible": true,
+    "mass_balance<=1%": true,
+    "test_reliability>=1-alpha-1%": true,
+    "optimization_improved_vs_no_pump": true,
+    "no_pump_reliability": 0.0
+  },
+  "flow_krylov": {
+    "iterations": 108,
+    "solves": 1,
+    "iterations_per_solve": 108.0,
+    "worst_iterations": 108,
+    "worst_residual": 9.118713933276013e-06,
+    "converged": true,
+    "stalled": false
+  },
+  "slices1d": null,
+  "wall_clock_s": 2753.101179122925,
+  "movie": {
+    "dir": "out3d_colab/run_paper_m256/movies",
+    "error": "import: name '__file__' is not defined",
+    "enabled": true
+  }
+}

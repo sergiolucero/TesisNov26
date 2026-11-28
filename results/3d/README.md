@@ -23,6 +23,7 @@ Run directories:
 | `paper_torch/` | `out3d_colab/run_paper_torch` | torch float32 paper preset (32x16x8): 1 south well / 25 m3/d |
 | `paperGPU/` | `out3d_colab/run_paperGPU` | torch float32 paperGPU preset (64x32x16): ~1 well / 35 m3/d |
 | `paperGPU_slices/` | `out3d_colab/run_paperGPU_slices` | slices-only re-score of the paperGPU `q*` (12 slices) |
+| `paper_m256/` | `out3d_colab/run_paper_m256` | torch float32 paper preset with M_train=256: 1 south well / 26 m3/d, test rel 0.945 |
 
 The PNG figures that accompany `slices1d.json` live in `DOCS/assets/`
 (`slices1d_coordinate.png`, `slices1d_total.png`, `slices1d_split.png`).

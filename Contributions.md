@@ -128,7 +128,11 @@ on a reference solver), because those are boundary statistics.
 - **Larger samples and variance reduction.** Every overfitting failure above
   traces to $\alpha M$ being small. The fix is more scenarios or
   variance-reduced tail estimators [5]; either is a change to the *estimation*, not
-  the optimizer.
+  the optimizer. Our own experiment confirms the direction and its limit: quadrupling
+  $M_{\text{train}}$ from 64 to 256 (αM from 3.2 to 12.8 tail draws) lifts the
+  fragile one-well policy from test reliability 0.914 to 0.945 — past the gate — but
+  does *not* switch the optimizer to the robust 4-well basin (0.969); more data makes
+  a cheap design honest, not robust.
 
 - **Verification gates as a public standard.** The project runs every result
   through explicit gates (mass balance to $10^{-9}$, reproducibility, 2D/3D

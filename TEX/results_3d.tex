@@ -325,6 +325,23 @@ Section~\ref{sec:3d-wall} with a sharper edge: at $M_{\text{train}}=64$ a $5\%$
 tail averages $3.2$ draws, enough to certify a robust basin, not enough to
 reveal that a cheaper basin is cheap only on its own sample.
 
+The remedy the diagnosis suggests is a larger training sample, and it works in
+exactly the limited sense the diagnosis predicts. Re-running the paper preset
+with $M_{\text{train}}=256$ (four times the scenarios; the batched backend
+amortizes this to $2.4$\,s per full-archive evaluation, only $2\times$ the
+$M=64$ cost) returns the same single southern well, now $26.0$\,m$^3$/d, with
+train reliability $0.973$ and test reliability $0.945$ --- the first version of
+this policy that passes the $0.94$ gate. The sample size does not switch the
+optimizer to the four-well basin: the single well is still $\sim$88\,k cheaper
+on the training scenarios ($J=459\,491$ against $547\,606$), so the batched
+search keeps preferring cost over robustness. What the extra data changes is the
+tail estimate. At $\alpha M = 12.8$ draws the $5\%$ tail prices the violation
+correctly and the chosen rate ($26$ against $25$\,m$^3$/d) calibrates to the
+constraint, lifting test reliability from $0.914$ to $0.945$ and cutting test
+CVaR from $0.43$ to $0.29$. The robust four-well design remains more reliable
+($0.969$) than the cheap one-well design; a larger sample makes the cheap
+design \emph{honest}, not \emph{robust}.
+
 The resolution question has a clean answer, because the same southern well is
 what the fine grid returns. At $64\times32\times16$ the NumPy re-score of the
 torch policy (\texttt{SCRIPTS/verify\_papergpu.py}) gives test reliability

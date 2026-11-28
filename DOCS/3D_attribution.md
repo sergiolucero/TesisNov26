@@ -62,6 +62,24 @@ Resolution reconciles the two: at 64x32x16 the *same* south-edge strategy genera
 (test rel 0.961, numpy-verified in `verify_splu.json`), so the fine grid is what makes
 the south well trustworthy.
 
+## Larger training sample (M_train=256)
+
+Re-ran the paper preset with `--m-train 256` (256 train / 128 test, torch float32,
+T4). The batched backend amortizes the 4x scenarios to only ~2x per-eval cost (2.45 s
+vs 1.18 s at M=64).
+
+| M_train | q* | train rel | test rel | test cvar_G | train f |
+|---|---:|---:|---:|---:|---:|
+| 64  | well 7 @ 24.96 | 0.984 | 0.914 (fails) | 0.43 | 455 743 |
+| 256 | well 7 @ 26.05 | 0.973 | **0.945 (passes)** | 0.29 | 459 814 |
+
+More data does **not** switch the optimizer to the robust 4-well basin --- the single
+well is still ~88k cheaper on train. It makes the chosen single-well *honest*: with
+αM = 12.8 tail draws (vs 3.2 at M=64) the violation is priced correctly, the rate
+calibrates up (24.96 -> 26.05), and test reliability clears the gate (0.914 -> 0.945).
+The 4-well design remains more robust (0.969) than the single-well (0.945); a larger
+sample makes the cheap design honest, not robust.
+
 ## 1D slices (paperGPU q*)
 
 Generated on a T4 (`--slices-only --q ...`), retrieved to
